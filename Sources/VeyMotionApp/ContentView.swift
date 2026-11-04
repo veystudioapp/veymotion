@@ -119,7 +119,6 @@ struct ContentView: View {
                 .keyboardShortcut("l")
                 Button { store.exportVideo() } label: { Label("Export", systemImage: "square.and.arrow.up") }
                     .help("Export video (⌘E)")
-                    .disabled(store.exportProgress != nil)
                 Button { withAnimation(.easeOut(duration: 0.2)) { showInspector.toggle() } } label: {
                     Label("Inspector", systemImage: "sidebar.right")
                 }
@@ -132,6 +131,7 @@ struct ContentView: View {
             .compactMap { $0 }.joined(separator: " — "))
         .sheet(isPresented: $showJSON) { JSONEditorSheet() }
         .sheet(isPresented: $showVoice) { VoiceOverSheet() }
+        .sheet(isPresented: Bindable(store).showExport) { ExportSheet() }
     }
 }
 
@@ -399,8 +399,14 @@ struct StatusBar: View {
             }
             Spacer()
             if let p = store.exportProgress {
-                ProgressView(value: p).frame(width: 140).controlSize(.small)
-                Text("Exporting \(Int(p * 100))%")
+                Button { store.exportVideo() } label: {
+                    HStack(spacing: 6) {
+                        ProgressView(value: p).frame(width: 140).controlSize(.small)
+                        Text("Exporting \(Int(p * 100))%").monospacedDigit()
+                    }
+                }
+                .buttonStyle(.plain)
+                .help("Show export progress")
             } else if let m = store.message {
                 Text(m).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
             }

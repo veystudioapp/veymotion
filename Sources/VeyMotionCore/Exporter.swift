@@ -22,7 +22,8 @@ public enum ExportFormat: String, Codable, CaseIterable, Sendable {
         }
     }
 
-    var isAudioOnly: Bool { self == .m4a || self == .wav }
+    public var fileExtension: String { rawValue }
+    public var isAudioOnly: Bool { self == .m4a || self == .wav }
     /// MOV masters and WAV carry PCM; MP4/M4A carry AAC.
     var usesPCMAudio: Bool { self == .mov || self == .wav }
 }
@@ -30,24 +31,86 @@ public enum ExportFormat: String, Codable, CaseIterable, Sendable {
 public enum ExportError: LocalizedError {
     case setup(String)
     case writing(String)
+    case cancelled
 
     public var errorDescription: String? {
         switch self {
         case let .setup(m): return "Export setup failed: \(m)"
         case let .writing(m): return "Export failed: \(m)"
+        case .cancelled: return "Export cancelled"
         }
+    }
+}
+
+/// H.264 bitrate presets (bits per pixel per frame). Ignored for ProRes and audio-only formats.
+public enum ExportQuality: String, Codable, CaseIterable, Sendable {
+    case low, medium, high, max
+
+    var bitsPerPixel: Double {
+        switch self {
+        case .low: return 0.07
+        case .medium: return 0.15
+        case .high: return 0.3
+        case .max: return 0.6
+        }
+    }
+}
+
+public struct ExportOptions: Sendable {
+    /// nil = infer from the file extension.
+    public var format: ExportFormat?
+    /// Output size relative to the scene size (0.5 = half resolution).
+    public var scale: Double = 1
+    public var quality: ExportQuality = .medium
+    /// Time range in scene seconds; nil = whole scene.
+    public var start: Double?
+    public var end: Double?
+
+    public init(format: ExportFormat? = nil, scale: Double = 1, quality: ExportQuality = .medium,
+                start: Double? = nil, end: Double? = nil) {
+        self.format = format
+        self.scale = scale
+        self.quality = quality
+        self.start = start
+        self.end = end
+    }
+
+    /// Clamped frame range `[first, last)` for the scene.
+    public func frameRange(for scene: MotionScene) -> Range<Int> {
+        let fps = Double(scene.fps), total = scene.frameCount
+        let first = min(max(0, Int(((start ?? 0) * fps).rounded())), total - 1)
+        let last = min(total, max(first + 1, end.map { Int(($0 * fps).rounded()) } ?? total))
+        return first..<last
+    }
+
+    /// Even pixel size of the output video.
+    public func pixelSize(for scene: MotionScene) -> (width: Int, height: Int) {
+        let s = scale > 0 ? scale : 1
+        return (max(2, Int((Double(scene.width) * s).rounded()) & ~1),
+                max(2, Int((Double(scene.height) * s).rounded()) & ~1))
     }
 }
 
 public enum VideoExporter {
     /// Renders every frame with `FrameRenderer`, mixes audio with `AudioMixer`, and encodes both.
-    /// Blocking; call off the main thread.
+    /// Blocking; call off the main thread. `isCancelled` is polled between frames/samples;
+    /// a cancelled export deletes the partial file and throws `ExportError.cancelled`.
     public static func export(_ scene: MotionScene, to url: URL, format: ExportFormat? = nil,
                               progress: ((Double) -> Void)? = nil) throws {
-        let fmt = format ?? ExportFormat.infer(from: url)
+        try export(scene, to: url, options: ExportOptions(format: format), progress: progress)
+    }
+
+    public static func export(_ scene: MotionScene, to url: URL, options: ExportOptions,
+                              isCancelled: (@Sendable () -> Bool)? = nil,
+                              progress: ((Double) -> Void)? = nil) throws {
+        let fmt = options.format ?? ExportFormat.infer(from: url)
         let wantsVideo = !fmt.isAudioOnly
         let hasAudio = AudioMixer.hasAudio(scene)
         if !wantsVideo && !hasAudio { throw ExportError.setup("the scene has no audio layers") }
+        let range = options.frameRange(for: scene)
+        let fps = Double(scene.fps)
+        let t0 = Double(range.lowerBound) / fps, t1 = Double(range.upperBound) / fps
+        let cancelled = { isCancelled?() ?? false }
 
         try? FileManager.default.removeItem(at: url)
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -60,7 +123,7 @@ public enum VideoExporter {
         case .mp4: fileType = .mp4
         }
         let writer = try AVAssetWriter(outputURL: url, fileType: fileType)
-        let w = scene.width & ~1, h = scene.height & ~1 // encoders want even sizes
+        let (w, h) = options.pixelSize(for: scene) // encoders want even sizes
 
         // Video input
         var videoInput: AVAssetWriterInput?
@@ -73,7 +136,7 @@ public enum VideoExporter {
             ]
             if fmt == .mp4 {
                 settings[AVVideoCompressionPropertiesKey] = [
-                    AVVideoAverageBitRateKey: Int(Double(w * h * scene.fps) * 0.15),
+                    AVVideoAverageBitRateKey: Int(Double(w * h * scene.fps) * options.quality.bitsPerPixel),
                     AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel,
                 ]
             }
@@ -91,7 +154,7 @@ public enum VideoExporter {
         var audioInput: AVAssetWriterInput?
         var audioSource: PCMSampleSource?
         if hasAudio {
-            let source = try PCMSampleSource(AudioMixer.render(scene))
+            let source = try PCMSampleSource(AudioMixer.render(scene, from: t0, to: t1))
             audioSource = source
             let settings: [String: Any] = fmt.usesPCMAudio
                 ? [
@@ -128,12 +191,12 @@ public enum VideoExporter {
         // Both inputs are fed concurrently; the writer interleaves them.
         let group = DispatchGroup()
         let failure = ErrorBox()
-        let total = scene.frameCount
+        let total = range.count
 
         if let videoInput, let adaptor {
             group.enter()
             let renderer = FrameRenderer()
-            var frame = 0
+            var frame = 0 // output frame index; scene frame = range.lowerBound + frame
             var finished = false
             videoInput.requestMediaDataWhenReady(on: DispatchQueue(label: "veymotion.export.video")) {
                 guard !finished else { return }
@@ -144,6 +207,7 @@ public enum VideoExporter {
                     group.leave()
                 }
                 while videoInput.isReadyForMoreMediaData {
+                    if cancelled() { failure.set(Self.cancelMarker) }
                     if frame >= total || failure.isSet { return finish() }
                     var pb: CVPixelBuffer?
                     CVPixelBufferCreate(kCFAllocatorDefault, w, h, kCVPixelFormatType_32BGRA,
@@ -158,7 +222,7 @@ public enum VideoExporter {
                         CVPixelBufferUnlockBaseAddress(buffer, [])
                         return finish("cannot create bitmap context")
                     }
-                    renderer.draw(scene, at: Double(frame) / Double(scene.fps), in: ctx, pixelWidth: w, pixelHeight: h)
+                    renderer.draw(scene, at: Double(range.lowerBound + frame) / fps, in: ctx, pixelWidth: w, pixelHeight: h)
                     CVPixelBufferUnlockBaseAddress(buffer, [])
                     let time = CMTime(value: CMTimeValue(frame), timescale: CMTimeScale(scene.fps))
                     guard adaptor.append(buffer, withPresentationTime: time) else {
@@ -182,6 +246,7 @@ public enum VideoExporter {
                     group.leave()
                 }
                 while audioInput.isReadyForMoreMediaData {
+                    if cancelled() { failure.set(Self.cancelMarker) }
                     if failure.isSet { return finish() }
                     let sample: CMSampleBuffer?
                     do { sample = try audioSource.next() } catch { return finish(error.localizedDescription) }
@@ -200,7 +265,8 @@ public enum VideoExporter {
         group.wait()
         if let msg = failure.message {
             writer.cancelWriting()
-            throw ExportError.writing(msg)
+            try? FileManager.default.removeItem(at: url)
+            throw msg == Self.cancelMarker ? ExportError.cancelled : ExportError.writing(msg)
         }
         writer.endSession(atSourceTime: CMTime(value: CMTimeValue(total), timescale: CMTimeScale(scene.fps)))
         let done = DispatchSemaphore(value: 0)
@@ -210,6 +276,8 @@ public enum VideoExporter {
             throw ExportError.writing(writer.error?.localizedDescription ?? "status \(writer.status.rawValue)")
         }
     }
+
+    private static let cancelMarker = "\u{0}cancelled"
 
 }
 
@@ -268,6 +336,15 @@ final class PCMSampleSource {
         position += n
         return sample
     }
+}
+
+/// Thread-safe one-way flag, e.g. to cancel an export from the UI.
+public final class CancelFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+    public init() {}
+    public func set() { lock.lock(); value = true; lock.unlock() }
+    public var isSet: Bool { lock.lock(); defer { lock.unlock() }; return value }
 }
 
 private final class ErrorBox: @unchecked Sendable {

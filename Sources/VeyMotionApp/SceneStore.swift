@@ -23,7 +23,14 @@ final class SceneStore: SceneHost {
     var showProjects = true
     var isDirty = false
     var mcpStatus = "Starting…"
+    /// The Export sheet (options, then live progress).
+    var showExport = false
+    /// Non-nil while an export is running (0…1).
     var exportProgress: Double?
+    private(set) var exportStartedAt: Date?
+    /// Result of the last export, shown in the Export sheet until the next one starts.
+    private(set) var exportResult: ExportResult?
+    @ObservationIgnored private var exportCancel: CancelFlag?
     var message: String?
     var lastAgentAction: String?
 
@@ -759,33 +766,68 @@ final class SceneStore: SceneHost {
             .filter(ProjectStore.isProject)
     }
 
+    enum ExportResult {
+        case done(URL, seconds: Double)
+        case failed(String)
+        case cancelled
+    }
+
+    /// Opens the Export sheet (options, or progress if an export is already running).
     func exportVideo() {
+        if exportProgress == nil { exportResult = nil }
+        showExport = true
+    }
+
+    var defaultExportName: String {
+        project?.lastPathComponent ?? fileURL?.deletingPathExtension().lastPathComponent ?? "VeyMotion"
+    }
+
+    /// Asks for a destination, then exports in the background; progress is published on `exportProgress`.
+    func startExport(options: ExportOptions) {
+        guard exportProgress == nil else { return }
+        let fmt = options.format ?? .mp4
         let panel = NSSavePanel()
-        panel.allowedContentTypes = [.mpeg4Movie, .quickTimeMovie]
-        panel.nameFieldStringValue = (project?.lastPathComponent ?? fileURL?.deletingPathExtension().lastPathComponent
-                                      ?? "VeyMotion") + ".mp4"
+        panel.allowedContentTypes = [UTType(filenameExtension: fmt.fileExtension) ?? .movie]
+        panel.nameFieldStringValue = defaultExportName + "." + fmt.fileExtension
         if let project { panel.directoryURL = project }
         guard panel.runModal() == .OK, let url = panel.url else { return }
+
         let snapshot = scene
+        let cancel = CancelFlag()
+        exportCancel = cancel
+        exportResult = nil
         exportProgress = 0
+        exportStartedAt = Date()
         DispatchQueue.global(qos: .userInitiated).async {
+            let started = Date()
+            let result: ExportResult
             do {
-                try VideoExporter.export(snapshot, to: url) { p in
-                    DispatchQueue.main.async { self.exportProgress = p }
+                try VideoExporter.export(snapshot, to: url, options: options, isCancelled: { cancel.isSet }) { p in
+                    DispatchQueue.main.async { if self.exportProgress != nil { self.exportProgress = p } }
                 }
-                DispatchQueue.main.async {
-                    self.exportProgress = nil
-                    self.message = "Exported \(url.lastPathComponent)"
-                    NSWorkspace.shared.activateFileViewerSelecting([url])
-                }
+                result = .done(url, seconds: Date().timeIntervalSince(started))
+            } catch ExportError.cancelled {
+                result = .cancelled
             } catch {
-                DispatchQueue.main.async {
-                    self.exportProgress = nil
-                    self.message = error.localizedDescription
+                result = .failed(error.localizedDescription)
+            }
+            DispatchQueue.main.async {
+                self.exportProgress = nil
+                self.exportStartedAt = nil
+                self.exportCancel = nil
+                self.exportResult = result
+                switch result {
+                case let .done(url, _): self.message = "Exported \(url.lastPathComponent)"
+                case let .failed(msg): self.message = msg
+                case .cancelled: self.message = "Export cancelled"
                 }
+                // Surface failures even if the sheet was closed while exporting.
+                if case .failed = result { self.showExport = true }
             }
         }
     }
+
+    func cancelExport() { exportCancel?.set() }
 
     // MARK: - MCP
 
