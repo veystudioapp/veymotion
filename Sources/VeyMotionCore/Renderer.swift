@@ -16,6 +16,12 @@ public final class FrameRenderer {
 
     public init() {}
 
+    /// Drops every cached image and open video decoder (e.g. when another project is opened).
+    public func clearCaches() {
+        imageCache.removeAll()
+        videoCache.removeAll()
+    }
+
     /// Device pixels per scene pixel for the frame being drawn (shadow and blur sizes are in device pixels).
     private var pixelScale: Double = 1
     private var pixelSize = (w: 0, h: 0)

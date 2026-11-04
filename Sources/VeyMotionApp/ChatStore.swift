@@ -6,8 +6,13 @@ import VeyMotionMCP
 
 /// State of the embedded Claude Code chat. Claude edits the scene through the `vmotion` CLI,
 /// which reaches `SceneStore` over the control socket, so every agent change is live and undoable.
+///
+/// Each project has its own conversation (transcript and Claude session), saved in the project folder
+/// (`ProjectStore.chatURL`). Loose scenes share one in-memory conversation.
 @Observable
 final class ChatStore {
+    static let shared = ChatStore(scene: .shared)
+
     struct ToolCall {
         var id: String
         var title: String
@@ -100,8 +105,31 @@ final class ChatStore {
     @ObservationIgnored private var needsRestart = false
     @ObservationIgnored private var retriedFresh = false
 
-    init(scene: SceneStore) {
+    /// One project's conversation while another project is open.
+    private struct Conversation {
+        var items: [Item] = []
+        var input = ""
+        var attachments: [Attachment] = []
+        var sessionId: String?
+        var forkSession = false
+    }
+
+    /// The project the shown conversation belongs to (nil = loose scene).
+    @ObservationIgnored private var project: URL?
+    /// Conversations of the projects opened earlier in this run, by project path ("" = loose scene).
+    @ObservationIgnored private var parked: [String: Conversation] = [:]
+    /// Session the next agent resumes (the conversation's Claude session, when no process is running).
+    @ObservationIgnored private var resumeSessionId: String?
+    /// The conversation came from a copy of another project: its first resume forks the session.
+    @ObservationIgnored private var forkNextSession = false
+
+    private init(scene: SceneStore) {
         self.scene = scene
+        project = scene.project
+        restoreConversation()
+        scene.onProjectChange = { [weak self] change in self?.projectChanged(change) }
+        NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil,
+                                               queue: .main) { [weak self] _ in self?.saveConversation() }
         DispatchQueue.global(qos: .utility).async {
             let path = ClaudeCodeAgent.locateClaude()
             DispatchQueue.main.async { self.claudePath = path; self.checkSetup() }
@@ -136,7 +164,7 @@ final class ChatStore {
         }
     }
 
-    private func makeAgent() -> ClaudeCodeAgent? {
+    private func makeAgent(resume: String?) -> ClaudeCodeAgent? {
         checkSetup()
         guard let claudePath, let dir = vmotionDirectory else { return nil }
         let work = ClaudeCodeAgent.Config.defaultWorkingDirectory
@@ -152,8 +180,15 @@ final class ChatStore {
         var cfg = config
         cfg.effort = effort
         cfg.extraReadDirectories = readDirectories
-        let a = ClaudeCodeAgent(config: cfg)
-        a.onEvent = { [weak self] ev in DispatchQueue.main.async { self?.handle(ev) } }
+        cfg.forkSession = forkNextSession
+        let a = ClaudeCodeAgent(config: cfg, resumeSessionId: resume)
+        // Events still queued from a replaced agent (another project's) must not reach this conversation.
+        a.onEvent = { [weak self, weak a] ev in
+            DispatchQueue.main.async {
+                guard let self, let a, self.agent === a else { return }
+                self.handle(ev)
+            }
+        }
         return a
     }
 
@@ -167,7 +202,7 @@ final class ChatStore {
         var text = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard canSend else { return }
         if needsRestart { restartAgent() }
-        if agent == nil { agent = makeAgent() }
+        if agent == nil { agent = makeAgent(resume: resumeSessionId) }
         guard let agent else {
             append(.notice(setupProblem ?? "Claude Code is not available.", isError: true))
             return
@@ -239,14 +274,10 @@ final class ChatStore {
     private func restartAgent() {
         needsRestart = false
         guard let old = agent else { return }
-        let session = old.sessionId
+        let session = old.sessionId ?? resumeSessionId
         old.onEvent = nil
         old.stop()
-        agent = makeAgent()
-        if let session, let fresh = agent {
-            agent = ClaudeCodeAgent(config: fresh.config, resumeSessionId: session)
-            agent?.onEvent = fresh.onEvent
-        }
+        agent = makeAgent(resume: session)
     }
 
     private static func mediaType(of data: Data) -> String? {
@@ -285,11 +316,141 @@ final class ChatStore {
         stoppedByUser = true
         agent?.reset()
         agent = nil
+        resumeSessionId = nil
+        forkNextSession = false
         items = []
         attachments = []
         isBusy = false
         activity = nil
+        saveConversation()
         bump()
+    }
+
+    // MARK: - Per-project conversations
+
+    private func projectChanged(_ change: SceneStore.ProjectChange) {
+        switch change {
+        case let .opened(url):
+            guard url?.path != project?.path else { return }
+            parkConversation()
+            project = url
+            restoreConversation()
+        case let .moved(_, to):
+            // Same conversation, new place; Read's folders changed with it.
+            project = to
+            saveConversation()
+            if isBusy { needsRestart = true } else { restartAgent() }
+        case let .adopted(url):
+            // The loose scene's conversation becomes the new project's.
+            parked[""] = nil
+            project = url
+            saveConversation()
+            if isBusy { needsRestart = true } else { restartAgent() }
+        }
+    }
+
+    private static func key(_ project: URL?) -> String { project?.path ?? "" }
+
+    /// Stops the agent (its `vmotion` calls would otherwise edit the next project's scene) and stores the
+    /// conversation, in memory and in the project folder. The session resumes when the project is reopened.
+    private func parkConversation() {
+        let session = agent?.sessionId ?? resumeSessionId
+        if let a = agent {
+            a.onEvent = nil
+            a.stop()
+        }
+        agent = nil
+        if isBusy {
+            append(.notice("Stopped because you switched projects. Your next message here continues the conversation.",
+                           isError: false))
+        }
+        isBusy = false
+        activity = nil
+        pendingRenderTime = nil
+        needsRestart = false
+        resumeSessionId = session
+        saveConversation()
+        parked[Self.key(project)] = Conversation(items: items, input: input, attachments: attachments,
+                                                 sessionId: session, forkSession: forkNextSession)
+    }
+
+    /// Shows the open project's conversation: from this run if it was open before, else from its folder.
+    private func restoreConversation() {
+        let c = parked.removeValue(forKey: Self.key(project)) ?? project.flatMap(Self.loadConversation) ?? Conversation()
+        items = c.items
+        input = c.input
+        attachments = c.attachments
+        resumeSessionId = c.sessionId
+        forkNextSession = c.forkSession
+        stderrTail = ""
+        bump()
+    }
+
+    /// On disk: text only (images are dropped), long tool outputs shortened.
+    private struct SavedChat: Codable {
+        /// Where it was saved. Read from another folder that is a project too, it is a copy (duplicated, or
+        /// Save As), so that copy's conversation forks the session instead of continuing the original's.
+        var project: String
+        var sessionId: String?
+        var forkSession: Bool?
+        var items: [SavedItem]
+    }
+
+    private struct SavedItem: Codable {
+        var kind: String
+        var text: String
+        var detail: String?
+        var output: String?
+        var isError: Bool?
+    }
+
+    /// Writes the open project's conversation to its folder (nothing for loose scenes).
+    private func saveConversation() {
+        guard let project else { return }
+        let url = ProjectStore.chatURL(project)
+        let session = agent?.sessionId ?? resumeSessionId
+        guard !items.isEmpty || session != nil else {
+            try? FileManager.default.removeItem(at: url)
+            return
+        }
+        let saved = items.suffix(500).compactMap { item -> SavedItem? in
+            switch item.kind {
+            case let .user(text, _): return SavedItem(kind: "user", text: text)
+            case let .assistant(text, _): return SavedItem(kind: "assistant", text: text)
+            case let .tool(c):
+                return SavedItem(kind: "tool", text: c.title, detail: c.detail, output: String(c.output.prefix(4000)),
+                                 isError: c.isError)
+            case .image: return nil
+            case let .notice(text, isError): return SavedItem(kind: "notice", text: text, isError: isError)
+            case let .summary(text): return SavedItem(kind: "summary", text: text)
+            }
+        }
+        let chat = SavedChat(project: project.path, sessionId: session,
+                             forkSession: forkNextSession ? true : nil, items: saved)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        guard let data = try? encoder.encode(chat) else { return }
+        try? data.write(to: url, options: .atomic)
+    }
+
+    private static func loadConversation(_ project: URL) -> Conversation? {
+        guard let data = try? Data(contentsOf: ProjectStore.chatURL(project)),
+              let chat = try? JSONDecoder().decode(SavedChat.self, from: data) else { return nil }
+        let items = chat.items.enumerated().compactMap { i, s -> Item? in
+            switch s.kind {
+            case "user": return Item(kind: .user(s.text, images: []))
+            case "assistant": return Item(kind: .assistant(s.text, messageId: "saved-\(i)"))
+            case "tool":
+                return Item(kind: .tool(ToolCall(id: "saved-\(i)", title: s.text, detail: s.detail ?? "", isDone: true,
+                                                 isError: s.isError ?? false, output: s.output ?? "")))
+            case "notice": return Item(kind: .notice(s.text, isError: s.isError ?? false))
+            case "summary": return Item(kind: .summary(s.text))
+            default: return nil
+            }
+        }
+        let copied = chat.project != project.path && ProjectStore.isProject(URL(fileURLWithPath: chat.project))
+        return Conversation(items: items, sessionId: chat.sessionId,
+                            forkSession: chat.sessionId != nil && (copied || chat.forkSession == true))
     }
 
     /// Prefixed to every message so "this"/"here"/"now" resolve against the editor state.
@@ -312,8 +473,10 @@ final class ChatStore {
 
     private func handle(_ ev: AgentEvent) {
         switch ev {
-        case .started:
-            break
+        case let .started(sessionId, _):
+            // A copied project's conversation has forked by now: later restarts resume the new session.
+            forkNextSession = false
+            if !sessionId.isEmpty { resumeSessionId = sessionId }
 
         case .thinking:
             if isBusy && activity != "Thinking…" { setActivity("Thinking…") }
@@ -371,6 +534,7 @@ final class ChatStore {
             if let ms { parts.append(String(format: "%.1fs", Double(ms) / 1000)) }
             if let cost, cost > 0 { parts.append(String(format: "$%.3f", cost)) }
             if !parts.isEmpty { append(.summary(parts.joined(separator: " · "))) }
+            saveConversation()
 
         case let .stderr(s):
             stderrTail = String((stderrTail + s).suffix(2000))
@@ -383,6 +547,8 @@ final class ChatStore {
             if !stoppedByUser, stderrTail.contains("No conversation found"), let text = lastSentText, !retriedFresh {
                 retriedFresh = true
                 agent?.reset()
+                resumeSessionId = nil
+                forkNextSession = false
                 append(.notice("Couldn't resume the previous conversation, so a new one was started.", isError: false))
                 isBusy = true
                 setActivity("Thinking…")

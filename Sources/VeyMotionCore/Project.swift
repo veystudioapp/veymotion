@@ -24,7 +24,12 @@ public enum ProjectStore {
             .appendingPathComponent("Documents/VeyMotion Projects", isDirectory: true)
     }
 
+    /// The project's Claude conversation (transcript + session id), kept with the project so it follows
+    /// renames and moves.
+    public static let chatFileName = ".chat.json"
+
     public static func sceneURL(_ project: URL) -> URL { project.appendingPathComponent(sceneFileName) }
+    public static func chatURL(_ project: URL) -> URL { project.appendingPathComponent(chatFileName) }
     public static func assetsURL(_ project: URL) -> URL {
         project.appendingPathComponent(assetsFolderName, isDirectory: true)
     }

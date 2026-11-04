@@ -179,6 +179,11 @@ final class PreviewRenderer {
         renderNext()
     }
 
+    /// Frees the previous document's images and video decoders. Call on the main thread.
+    func clearCaches() {
+        queue.async { [renderer] in renderer.clearCaches() }
+    }
+
     private func renderNext() {
         guard !busy, let job = pending else { return }
         pending = nil
@@ -232,6 +237,8 @@ struct CanvasView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // Before the new document's first frame (declared first, so it runs first; the queue is serial).
+            .onChange(of: store.documentRevision) { preview.clearCaches() }
             .onChange(of: key, initial: true) { _, k in preview.request(store.scene, at: k.time, scale: k.scale) }
             // An image file overwritten in place (e.g. by write_asset) leaves the scene unchanged.
             .onChange(of: AssetLibrary.shared.assets) { preview.request(store.scene, at: key.time, scale: key.scale) }

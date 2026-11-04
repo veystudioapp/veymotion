@@ -242,7 +242,13 @@ struct AssetsPanel: View {
         }
         .onChange(of: lib.folders) { leaveMissingFolder() }
         .onChange(of: readOnly) { selection = nil; lib.refresh(); leaveMissingFolder() }
-        .onChange(of: store.project) { selection = nil; leaveMissingFolder() }
+        // Another project's library: start at its top level.
+        .onChange(of: store.project) {
+            selection = nil
+            renaming = nil
+            confirmTrash = nil
+            projectFolder = ""
+        }
         .sheet(isPresented: $showStock) { StockBrowserSheet() }
         .alert(renameTitle, isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
             TextField("Name", text: $newName)

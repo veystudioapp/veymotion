@@ -36,6 +36,9 @@ public final class ClaudeCodeAgent {
         public var unixSockets: [String]
         /// More folders Read may open (e.g. folders of files dragged into the chat).
         public var extraReadDirectories: [String] = []
+        /// Resume into a new session id instead of continuing the original (`--fork-session`), e.g. for a copied
+        /// project whose conversation must not keep growing the original's session. Cleared once forked.
+        public var forkSession = false
 
         public init(claudePath: String, vmotionDirectory: String, workingDirectory: URL, model: String? = nil,
                     extraEnvironment: [String: String] = [:], systemPrompt: String = AgentPrompt.systemPrompt,
@@ -104,7 +107,10 @@ public final class ClaudeCodeAgent {
         }
         if let model = config.model, !model.isEmpty { args += ["--model", model] }
         if let effort = config.effort, !effort.isEmpty { args += ["--effort", effort] }
-        if let sessionId { args += ["--resume", sessionId] }
+        if let sessionId {
+            args += ["--resume", sessionId]
+            if config.forkSession { args.append("--fork-session") }
+        }
         return args
     }
 
@@ -213,7 +219,10 @@ public final class ClaudeCodeAgent {
         case "system":
             if obj["subtype"] as? String == "init" {
                 let sid = obj["session_id"] as? String ?? ""
-                if !sid.isEmpty { sessionId = sid }
+                if !sid.isEmpty {
+                    sessionId = sid
+                    config.forkSession = false // forked now; a restart resumes this new session
+                }
                 onEvent?(.started(sessionId: sid, model: obj["model"] as? String ?? ""))
             }
 

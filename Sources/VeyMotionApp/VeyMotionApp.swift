@@ -5,7 +5,7 @@ import SwiftUI
 struct VeyMotionApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @State private var store = SceneStore.shared
-    @State private var chat = ChatStore(scene: SceneStore.shared)
+    @State private var chat = ChatStore.shared
 
     var body: some Scene {
         WindowGroup("VeyMotion") {

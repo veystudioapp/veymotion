@@ -28,8 +28,15 @@ final class SceneStore: SceneHost {
     private(set) var project: URL?
     private(set) var recentProjects: [URL] = SceneStore.loadRecentProjects()
     var showNewProject = false
-    /// The Projects screen; shown when the app starts.
-    var showProjects = true
+    /// The Projects screen; shown when the app starts. Playback stops while it covers the editor.
+    var showProjects = true {
+        didSet { if showProjects { pause() } }
+    }
+    /// Bumped whenever another scene replaces the open one (project switch, open, new), so views can drop
+    /// state that belonged to the old document (timeline zoom, render caches…).
+    private(set) var documentRevision = 0
+    /// Called (on the main thread) when the open project changes; the chat keeps one conversation per project.
+    @ObservationIgnored var onProjectChange: ((ProjectChange) -> Void)?
     var isDirty = false
     var mcpStatus = "Starting…"
     /// The Export sheet (options, then live progress).
@@ -553,11 +560,32 @@ final class SceneStore: SceneHost {
     // MARK: - Files
 
     func newScene() {
+        let wasProject = project != nil
         leaveProject()
-        apply("New Scene") { $0 = MotionScene() }
-        fileURL = nil
+        // Between loose scenes New is undoable; leaving a project starts a clean history.
+        replaceDocument(with: MotionScene(), fileURL: nil, undoLabel: wasProject ? nil : "New Scene")
+    }
+
+    /// Replaces the open document: stops playback and any drag, cancels a pending autosave and resets what
+    /// belonged to the old one (selection, playhead). With `undoLabel` the switch is an undo step (loose scenes
+    /// only); otherwise the history is cleared, so undo can never bring another project's scene back.
+    private func replaceDocument(with s: MotionScene, fileURL url: URL?, undoLabel: String? = nil) {
+        pause()
+        interactiveBase = nil
+        autosaveWork?.cancel()
+        autosaveWork = nil
+        if let undoLabel {
+            apply(undoLabel) { $0 = s }
+        } else {
+            scene = s
+            clearHistory()
+        }
+        fileURL = url
+        isDirty = false
         selection = nil
         time = 0
+        lastAgentAction = nil
+        documentRevision &+= 1
     }
 
     func open() {
@@ -570,22 +598,19 @@ final class SceneStore: SceneHost {
         do {
             var s = try SceneJSON.decode(MotionScene.self, from: Data(contentsOf: url))
             s.resolvePaths(relativeTo: url.deletingLastPathComponent())
+            let wasProject = project != nil
             leaveProject()
-            load(s, from: url)
+            load(s, from: url, undoable: !wasProject)
         } catch {
             message = "Cannot open: \(error.localizedDescription)"
         }
     }
 
-    private func load(_ loaded: MotionScene, from url: URL) {
+    private func load(_ loaded: MotionScene, from url: URL, undoable: Bool) {
         var s = loaded
         let problems = s.refreshMediaInfo()
+        replaceDocument(with: s, fileURL: url, undoLabel: undoable ? "Open" : nil)
         if !problems.isEmpty { message = problems.joined(separator: "; ") }
-        apply("Open") { $0 = s }
-        fileURL = url
-        isDirty = false
-        selection = nil
-        time = 0
     }
 
     func save(as: Bool = false) {
@@ -617,16 +642,16 @@ final class SceneStore: SceneHost {
     /// Creates a project folder and opens it. With `keepScene`, the current scene moves into it (its files are
     /// copied into the project); otherwise the project starts empty.
     func createProject(name: String, in directory: URL, keepScene: Bool) {
+        // A loose scene moving into the project takes its chat along; a scene from another project does not.
+        let adopt = keepScene && project == nil
         leaveProject()
         do {
             let url = try ProjectStore.create(name: name, in: directory)
-            activate(project: url)
+            activate(project: url, adopting: adopt)
             if keepScene {
                 collectAssets()
             } else {
-                apply("New Project") { $0 = MotionScene() }
-                selection = nil
-                time = 0
+                replaceDocument(with: MotionScene(), fileURL: nil)
             }
             try ProjectStore.save(scene, to: url)
             fileURL = ProjectStore.sceneURL(url)
@@ -660,8 +685,7 @@ final class SceneStore: SceneHost {
             let s = try ProjectStore.load(folder)
             leaveProject()
             activate(project: folder)
-            load(s, from: ProjectStore.sceneURL(folder))
-            clearHistory()
+            load(s, from: ProjectStore.sceneURL(folder), undoable: false)
         } catch {
             message = "Cannot open the project: \(error.localizedDescription)"
         }
@@ -747,6 +771,7 @@ final class SceneStore: SceneHost {
                 AssetStore.setActiveLibrary(ProjectStore.assetsURL(dest))
                 AssetLibrary.shared.reload()
                 clearHistory()
+                onProjectChange?(.moved(from: url.standardizedFileURL, to: dest))
             }
             setRecent(recentProjects.map { $0.standardizedFileURL == url.standardizedFileURL ? dest : $0 })
         } catch {
@@ -801,12 +826,26 @@ final class SceneStore: SceneHost {
         activate(project: nil)
     }
 
-    private func activate(project url: URL?) {
+    private func activate(project url: URL?, adopting: Bool = false) {
+        let changed = url != project
         project = url
         AssetStore.setActiveLibrary(url.map(ProjectStore.assetsURL))
         AssetLibrary.shared.reload()
+        // Before the new scene loads, so an agent still working on the old project is stopped first.
+        if changed {
+            if adopting, let url { onProjectChange?(.adopted(url)) } else { onProjectChange?(.opened(url)) }
+        }
         guard let url else { return }
         setRecent([url] + recentProjects.filter { $0 != url }.prefix(9))
+    }
+
+    enum ProjectChange {
+        /// Another project (or none: a loose scene) replaced the open one.
+        case opened(URL?)
+        /// The open project's folder moved (renamed); it is still the same project.
+        case moved(from: URL, to: URL)
+        /// The loose scene that was open became this new project, so its chat goes with it.
+        case adopted(URL)
     }
 
     private static let recentKey = "recentProjects"

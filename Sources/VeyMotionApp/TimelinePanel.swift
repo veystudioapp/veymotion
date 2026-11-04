@@ -48,6 +48,17 @@ final class TimelineState {
         clamp()
     }
 
+    /// Forgets view state that belonged to the previous document (zoom, scroll, expanded rows, selected key).
+    func resetForNewDocument() {
+        zoom = 1
+        scrollX = 0
+        collapsed = []
+        expanded = []
+        selectedKey = nil
+        dragOrigin = nil
+        zoomBase = nil
+    }
+
     /// Scrolls so time t is visible (used to follow the playhead).
     func reveal(_ t: Double) {
         let px = x(t)
@@ -258,6 +269,7 @@ struct TimelinePanel: View {
             }
             .onChange(of: trackW) { _, w in tl.trackWidth = w; tl.clamp() }
             .onChange(of: scene.duration) { _, d in tl.duration = d; tl.clamp() }
+            .onChange(of: store.documentRevision) { tl.resetForNewDocument() }
             .onHover { tl.hovering = $0 }
             .onContinuousHover { phase in
                 if case let .active(p) = phase { tl.mouseX = Double(p.x - nameWidth) } else { tl.mouseX = nil }
