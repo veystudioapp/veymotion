@@ -1,0 +1,837 @@
+import AppKit
+import Foundation
+import Observation
+import UniformTypeIdentifiers
+import VeyMotionCore
+import VeyMotionMCP
+
+/// Single source of truth for the editor. UI edits and MCP edits both go through `apply`, so both are undoable.
+@Observable
+final class SceneStore: SceneHost {
+    static let shared = SceneStore()
+
+    var scene: MotionScene = .sample
+    var selection: String?
+    var time: Double = 0
+    var isPlaying = false
+    var fileURL: URL?
+    /// The open project folder (scene.json + assets/), or nil when editing a loose scene file.
+    private(set) var project: URL?
+    private(set) var recentProjects: [URL] = SceneStore.loadRecentProjects()
+    var showNewProject = false
+    /// The Projects screen; shown when the app starts.
+    var showProjects = true
+    var isDirty = false
+    var mcpStatus = "Starting…"
+    var exportProgress: Double?
+    var message: String?
+    var lastAgentAction: String?
+
+    private(set) var undoStack: [(label: String, scene: MotionScene)] = []
+    private(set) var redoStack: [(label: String, scene: MotionScene)] = []
+
+    @ObservationIgnored private var timer: Timer?
+    @ObservationIgnored private var playAnchor: (date: Date, time: Double)?
+    @ObservationIgnored private var mcp: MCPHTTPServer?
+    @ObservationIgnored private var controlSocket: ControlSocketServer?
+    var controlStatus = "Starting…"
+    @ObservationIgnored let renderer = FrameRenderer()
+    @ObservationIgnored let audio = AudioPreview()
+
+    static let mcpPort: UInt16 = 19790
+    var mcpEndpoint: String { "http://127.0.0.1:\(Self.mcpPort)/mcp" }
+    var claudeCommand: String { "claude mcp add --transport http veymotion \(mcpEndpoint)" }
+
+    var selectedLayer: MotionLayer? {
+        guard let selection else { return nil }
+        return scene.layers.first { $0.id == selection }
+    }
+
+    // MARK: - Mutations
+
+    func apply(_ label: String, _ body: (inout MotionScene) throws -> Void) rethrows {
+        // A discrete edit (e.g. from the agent) during a drag ends the drag first, so neither is lost.
+        if interactiveBase != nil { endInteractive() }
+        var s = scene
+        try body(&s)
+        guard s != scene else { return }
+        undoStack.append((label, scene))
+        if undoStack.count > 300 { undoStack.removeFirst() }
+        redoStack.removeAll()
+        commit(s)
+    }
+
+    private func commit(_ s: MotionScene) {
+        scene = s
+        isDirty = true
+        if let sel = selection, !s.layers.contains(where: { $0.id == sel }) { selection = nil }
+        time = min(time, s.duration)
+        scheduleAutosave()
+    }
+
+    // MARK: - Autosave
+
+    @ObservationIgnored private var autosaveWork: DispatchWorkItem?
+
+    /// A project has a fixed place on disk, so its edits are written shortly after they happen. Saving only on
+    /// quit loses everything when the app is killed (Ctrl+C on `swift run`, a crash, a rebuild).
+    private func scheduleAutosave() {
+        guard project != nil else { return }
+        autosaveWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            // A drag in progress reschedules from endInteractive; load/open clear isDirty, so they skip this.
+            guard let self, self.project != nil, self.isDirty, !self.isInteracting else { return }
+            self.saveProject(quiet: true)
+        }
+        autosaveWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: work)
+    }
+
+    // MARK: - Interactive edits (drags): live updates, one undo step per gesture
+
+    @ObservationIgnored private var interactiveBase: MotionScene?
+    @ObservationIgnored private var interactiveLabel = ""
+
+    var isInteracting: Bool { interactiveBase != nil }
+
+    /// Starts a gesture. Each `updateInteractive` re-applies its change to the scene as it was at the start,
+    /// so drags never accumulate rounding errors.
+    func beginInteractive(_ label: String) {
+        guard interactiveBase == nil else { return }
+        interactiveBase = scene
+        interactiveLabel = label
+    }
+
+    func updateInteractive(_ body: (inout MotionScene) throws -> Void) {
+        guard let base = interactiveBase else { return }
+        var s = base
+        do { try body(&s) } catch { return }
+        if s != scene { scene = s }
+    }
+
+    func endInteractive() {
+        guard let base = interactiveBase else { return }
+        interactiveBase = nil
+        guard scene != base else { return }
+        undoStack.append((interactiveLabel, base))
+        if undoStack.count > 300 { undoStack.removeFirst() }
+        redoStack.removeAll()
+        isDirty = true
+        scheduleAutosave()
+    }
+
+    var canUndo: Bool { !undoStack.isEmpty }
+    var canRedo: Bool { !redoStack.isEmpty }
+
+    func undo() {
+        guard let last = undoStack.popLast() else { return }
+        redoStack.append((last.label, scene))
+        commit(last.scene)
+    }
+
+    func redo() {
+        guard let next = redoStack.popLast() else { return }
+        undoStack.append((next.label, scene))
+        commit(next.scene)
+    }
+
+    /// Changes one animatable property at the playhead (upserts a keyframe if the property is animated).
+    func setValue(_ id: String, _ p: AnimProperty, _ v: Double) {
+        try? apply("Change \(p.rawValue)") { try $0.setValue(id, property: p, value: v, at: time) }
+    }
+
+    func toggleAnimation(_ id: String, _ p: AnimProperty) { toggleAnimation(id, .number(p)) }
+
+    /// Starts animating a track with one key at the playhead, or removes all its keys.
+    func toggleAnimation(_ id: String, _ track: KeyTrack) {
+        guard let layer = scene.layers.first(where: { $0.id == id }) else { return }
+        let animated = layer.isAnimated(track)
+        try? apply(animated ? "Remove Keyframes" : "Animate \(track.name)") {
+            switch track {
+            case let .number(p):
+                let kfs = animated ? [] : [MotionKeyframe(t: time, v: layer[p].value(at: time))]
+                try $0.setKeyframes(id, property: p, keyframes: kfs)
+            case let .color(c):
+                let current = layer.color(c, at: time) ?? .white
+                let kfs = animated ? [] : [ColorKeyframe(t: time, v: current)]
+                try $0.setColorKeyframes(id, property: c, keyframes: kfs)
+            }
+        }
+    }
+
+    /// Adds a key at the playhead holding the track's current value.
+    func addKey(_ id: String, _ track: KeyTrack) {
+        guard let layer = scene.layers.first(where: { $0.id == id }) else { return }
+        switch track {
+        case let .number(p): setValue(id, p, layer[p].value(at: time))
+        case let .color(c): if let v = layer.color(c, at: time) { setColor(id, c, v) }
+        }
+    }
+
+    func setColor(_ id: String, _ c: ColorProperty, _ v: RGBA) {
+        try? apply("Change \(c.rawValue)") { try $0.setColor(id, property: c, value: v, at: time) }
+    }
+
+    func updateLayer(_ id: String, _ label: String = "Edit Layer", _ body: (inout MotionLayer) -> Void) {
+        try? apply(label) { s in
+            let i = try s.layerIndex(id)
+            body(&s.layers[i])
+        }
+    }
+
+    func addLayer(_ type: LayerType, path: String? = nil) {
+        var l = MotionLayer(type: type, x: Double(scene.width) / 2, y: Double(scene.height) / 2)
+        switch type {
+        case .rect: l.width = 400; l.height = 240; l.cornerRadius = 24; l.fill = .constant(RGBA(hex: "#6C5CE7")!)
+        case .ellipse: l.width = 240; l.height = 240; l.fill = .constant(RGBA(hex: "#00B894")!)
+        case .text: l.text = "New Text"
+        case .image: l.path = path; l.width = 600
+        case .audio:
+            l.path = path
+            l.start = time
+            if let path { l.name = (path as NSString).lastPathComponent }
+            l.sourceDuration = path.flatMap { try? AudioFileInfo.duration(of: $0) }
+            l.role = (l.sourceDuration ?? 0) > 20 ? .music : .sfx
+            if l.role == .music { l.duckTo = 0.3; l.fadeOut = 1.5 }
+        }
+        var id = ""
+        apply("Add Layer") { id = $0.addLayer(l) }
+        selection = id
+    }
+
+    func addAudioLayer() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.audio]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        addFileLayer(url.path)
+    }
+
+    /// Adds a generated voice-over (from the Voice-over sheet) at `start`.
+    func addVoiceLayer(_ result: VoiceResult, script: String, start: Double, captions: Bool) {
+        var l = MotionLayer(id: "vo", name: "Voice", type: .audio)
+        l.role = .voice
+        l.path = result.url.path
+        l.start = start
+        l.sourceDuration = result.duration
+        l.transcript = script
+        l.words = result.words
+        var id = ""
+        apply("Add Voice-over") { s in
+            id = s.addLayer(l)
+            let end = start + result.duration
+            if end > s.duration { s.duration = (end + 0.5).rounded(.up) }
+            if captions { _ = try? s.addCaptions(forVoice: id) }
+        }
+        selection = id
+    }
+
+    func addCaptions(for id: String) {
+        do {
+            try apply("Add Captions") { _ = try $0.addCaptions(forVoice: id) }
+        } catch {
+            message = error.localizedDescription
+        }
+    }
+
+    func addImageLayer() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        addFileLayer(url.path)
+    }
+
+    // MARK: - Assets
+
+    /// Adds an image or audio layer for a file (an asset, or a file dropped from Finder).
+    func addFileLayer(_ path: String) {
+        let name = (path as NSString).lastPathComponent
+        var path = path
+        // A project keeps its own copy of every file it uses, so the folder stays complete.
+        if project != nil, !AssetStore.contains(path), AssetStore.kind(of: URL(fileURLWithPath: path)) != .other {
+            do {
+                path = try AssetStore.importFile(AssetStore.expand(path)).path
+                AssetLibrary.shared.refresh()
+            } catch {
+                message = "Cannot copy \(name) into the project: \(error.localizedDescription)"
+                return
+            }
+        }
+        switch AssetStore.kind(of: URL(fileURLWithPath: path)) {
+        case .image:
+            addLayer(.image, path: path)
+        case .audio:
+            guard (try? AudioFileInfo.duration(of: path)) != nil else {
+                message = "Cannot read audio file \(name)"
+                return
+            }
+            addLayer(.audio, path: path)
+        default:
+            message = "\(name) is not an image or audio file"
+        }
+    }
+
+    /// Adds an audio file as background music: from 0 to the end of the scene, faded in/out, quieter than
+    /// narration and ducked while a voice speaks.
+    func addMusicLayer(_ path: String) {
+        guard let length = try? AudioFileInfo.duration(of: path) else {
+            message = "Cannot read audio file \((path as NSString).lastPathComponent)"
+            return
+        }
+        var l = MotionLayer(id: "music", name: (path as NSString).lastPathComponent, type: .audio)
+        l.path = path
+        l.role = .music
+        l.sourceDuration = length
+        l.start = 0
+        if length > scene.duration { l.end = scene.duration }
+        l.volume = .constant(0.6)
+        l.fadeIn = 0.5
+        l.fadeOut = min(1.5, scene.duration / 4)
+        l.duckTo = 0.25
+        var id = ""
+        apply("Add Background Music") { id = $0.addLayer(l) }
+        selection = id
+        if length < scene.duration - 0.5 {
+            message = String(format: "Music is %.1fs but the scene is %.1fs — it stops early.", length, scene.duration)
+        }
+    }
+
+    /// Imports files into the library: into `folder` ("" = top level), or with nil into the type folders of a
+    /// project (top level in the shared library). Files already in the library are moved there.
+    func importAssets(_ urls: [URL], folder target: String? = nil) {
+        let folder = target ?? ""
+        var names: [String] = []
+        for url in urls {
+            do {
+                var isDir: ObjCBool = false
+                _ = FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
+                if let name = AssetStore.relativeName(of: url.path) { // already in the library: move it
+                    if isDir.boolValue {
+                        let dest = AssetStore.join(folder, url.lastPathComponent)
+                        if dest != name { renameAssetFolder(name, to: dest) }
+                    } else if let a = AssetStore.info(url), a.folder != folder {
+                        moveAsset(a, toFolder: folder)
+                    }
+                } else if isDir.boolValue {
+                    message = "Folders cannot be imported yet: drop the files inside \(url.lastPathComponent) instead"
+                } else {
+                    names.append(try AssetStore.importFile(url, folder: target).name)
+                }
+            } catch {
+                message = error.localizedDescription
+            }
+        }
+        if !names.isEmpty { message = "Imported \(names.joined(separator: ", "))" }
+        AssetLibrary.shared.refresh()
+    }
+
+    func importAssetsWithPanel(folder: String? = nil) {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK else { return }
+        importAssets(panel.urls, folder: folder)
+    }
+
+    /// Renames the file (keeping its folder) and repoints the layers that use it (that part is undoable).
+    func renameAsset(_ asset: AssetInfo, to newName: String) {
+        relocateAsset(asset, label: "Rename Asset") {
+            try AssetStore.rename(asset.path, to: AssetStore.join(asset.folder, newName))
+        }
+    }
+
+    /// Moves the file into `folder` ("" = top level) and repoints the layers that use it.
+    func moveAsset(_ asset: AssetInfo, toFolder folder: String) {
+        guard asset.folder != folder else { return }
+        relocateAsset(asset, label: "Move Asset") { try AssetStore.move(asset.path, toFolder: folder) }
+    }
+
+    private func relocateAsset(_ asset: AssetInfo, label: String, _ op: () throws -> (from: String, to: String)) {
+        do {
+            let moved = try op()
+            if !scene.layers(usingPath: moved.from).isEmpty {
+                apply(label) { $0.replacePath(moved.from, with: moved.to) }
+            }
+        } catch {
+            message = error.localizedDescription
+        }
+        AssetLibrary.shared.refresh()
+    }
+
+    func trashAsset(_ asset: AssetInfo) {
+        do {
+            try AssetStore.trash(asset.path)
+            message = "Moved \(asset.fileName) to the Trash"
+        } catch {
+            message = error.localizedDescription
+        }
+        AssetLibrary.shared.refresh()
+    }
+
+    /// Creates `name` inside `parent` and returns its full name, or nil on failure.
+    @discardableResult
+    func createAssetFolder(_ name: String, in parent: String) -> String? {
+        defer { AssetLibrary.shared.refresh() }
+        do {
+            let full = AssetStore.join(parent, name)
+            if (try? AssetStore.existingFolder(full)) != nil {
+                message = "A folder named \(name) already exists"
+                return nil
+            }
+            return try AssetStore.createFolder(full)
+        } catch {
+            message = error.localizedDescription
+            return nil
+        }
+    }
+
+    /// Renames or moves a folder (`newName` is the full name) and repoints layers that use files inside.
+    func renameAssetFolder(_ folder: String, to newName: String) {
+        do {
+            let moved = try AssetStore.renameFolder(folder, to: newName)
+            if !scene.layers(inFolder: moved.from).isEmpty {
+                apply("Move Folder") { $0.replaceFolder(moved.from, with: moved.to) }
+            }
+        } catch {
+            message = error.localizedDescription
+        }
+        AssetLibrary.shared.refresh()
+    }
+
+    func trashAssetFolder(_ folder: String) {
+        do {
+            try AssetStore.trashFolder(folder)
+            message = "Moved folder \((folder as NSString).lastPathComponent) to the Trash"
+        } catch {
+            message = error.localizedDescription
+        }
+        AssetLibrary.shared.refresh()
+    }
+
+    func deleteSelected() {
+        guard let id = selection else { return }
+        try? apply("Delete Layer") { try $0.removeLayer(id) }
+    }
+
+    func duplicateSelected() {
+        guard let id = selection else { return }
+        var newId = ""
+        try? apply("Duplicate Layer") { newId = try $0.duplicateLayer(id) }
+        if !newId.isEmpty { selection = newId }
+    }
+
+    func move(_ id: String, by delta: Int) {
+        guard let i = scene.layers.firstIndex(where: { $0.id == id }) else { return }
+        try? apply("Reorder Layer") { try $0.moveLayer(id, to: i + delta) }
+    }
+
+    func applyPreset(_ preset: Preset, duration: Double = 0.6) {
+        guard let id = selection else { return }
+        do {
+            try apply("Apply \(preset.title)") { try $0.applyPreset(preset, to: id, start: time, duration: duration) }
+        } catch {
+            message = error.localizedDescription
+        }
+    }
+
+    /// Applies a preset to several layers from the playhead, each `stagger` seconds after the previous.
+    func applyPreset(_ preset: Preset, to ids: [String], duration: Double = 0.6, stagger: Double = 0.1) {
+        do {
+            try apply("Apply \(preset.title)") {
+                try $0.applyPreset(preset, to: ids, start: time, duration: duration, stagger: stagger)
+            }
+        } catch {
+            message = error.localizedDescription
+        }
+    }
+
+    // MARK: - Playback
+
+    func togglePlay() { isPlaying ? pause() : play() }
+
+    func play() {
+        if time >= scene.duration - 0.001 { time = 0 }
+        isPlaying = true
+        playAnchor = (Date(), time)
+        audio.play(scene, from: time)
+        let t = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in self?.tick() }
+        RunLoop.main.add(t, forMode: .common)
+        timer = t
+    }
+
+    func pause() {
+        timer?.invalidate()
+        timer = nil
+        isPlaying = false
+        audio.stop()
+    }
+
+    private func tick() {
+        guard let anchor = playAnchor else { return }
+        let elapsed = anchor.time + Date().timeIntervalSince(anchor.date)
+        if elapsed >= scene.duration {
+            // Loop: restart picture and sound together.
+            playAnchor = (Date(), 0)
+            time = 0
+            audio.play(scene, from: 0)
+        } else {
+            time = elapsed
+        }
+    }
+
+    func seek(_ t: Double) {
+        time = min(max(t, 0), scene.duration)
+        if isPlaying {
+            playAnchor = (Date(), time)
+            audio.play(scene, from: time)
+        }
+    }
+
+    func step(frames: Int) {
+        pause()
+        let frame = (time * Double(scene.fps)).rounded() + Double(frames)
+        seek(frame / Double(scene.fps))
+    }
+
+    // MARK: - Files
+
+    func newScene() {
+        leaveProject()
+        apply("New Scene") { $0 = MotionScene() }
+        fileURL = nil
+        selection = nil
+        time = 0
+    }
+
+    func open() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.json, .folder]
+        panel.canChooseDirectories = true
+        panel.message = "Choose a scene file or a project folder"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        if ProjectStore.project(for: url) != nil { openProject(url); return }
+        do {
+            var s = try SceneJSON.decode(MotionScene.self, from: Data(contentsOf: url))
+            s.resolvePaths(relativeTo: url.deletingLastPathComponent())
+            leaveProject()
+            load(s, from: url)
+        } catch {
+            message = "Cannot open: \(error.localizedDescription)"
+        }
+    }
+
+    private func load(_ loaded: MotionScene, from url: URL) {
+        var s = loaded
+        let problems = s.refreshAudioInfo()
+        if !problems.isEmpty { message = problems.joined(separator: "; ") }
+        apply("Open") { $0 = s }
+        fileURL = url
+        isDirty = false
+        selection = nil
+        time = 0
+    }
+
+    func save(as: Bool = false) {
+        if let project {
+            if `as` { saveProjectAs(project) } else { saveProject() }
+            return
+        }
+        var url = fileURL
+        if url == nil || `as` {
+            let panel = NSSavePanel()
+            panel.allowedContentTypes = [.json]
+            panel.nameFieldStringValue = fileURL?.lastPathComponent ?? "Untitled.json"
+            guard panel.runModal() == .OK else { return }
+            url = panel.url
+        }
+        guard let url else { return }
+        do {
+            try SceneJSON.write(SceneJSON.encode(scene), to: url)
+            fileURL = url
+            isDirty = false
+            message = "Saved \(url.lastPathComponent)"
+        } catch {
+            message = "Cannot save: \(error.localizedDescription)"
+        }
+    }
+
+    // MARK: - Projects
+
+    /// Creates a project folder and opens it. With `keepScene`, the current scene moves into it (its files are
+    /// copied into the project); otherwise the project starts empty.
+    func createProject(name: String, in directory: URL, keepScene: Bool) {
+        leaveProject()
+        do {
+            let url = try ProjectStore.create(name: name, in: directory)
+            activate(project: url)
+            if keepScene {
+                collectAssets()
+            } else {
+                apply("New Project") { $0 = MotionScene() }
+                selection = nil
+                time = 0
+            }
+            try ProjectStore.save(scene, to: url)
+            fileURL = ProjectStore.sceneURL(url)
+            isDirty = false
+            clearHistory()
+            showProjects = false
+            message = "Created project \(url.lastPathComponent) in \(url.deletingLastPathComponent().path)"
+        } catch {
+            message = "Cannot create the project: \(error.localizedDescription)"
+        }
+    }
+
+    func openProjectWithPanel() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.directoryURL = ProjectStore.projectsDirectory
+        panel.message = "Choose a project folder"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        openProject(url)
+    }
+
+    /// Opens a project folder (or its scene.json).
+    func openProject(_ url: URL) {
+        guard let folder = ProjectStore.project(for: url) else {
+            message = "\(url.lastPathComponent) is not a VeyMotion project (no scene.json inside)"
+            return
+        }
+        guard folder != project else { return }
+        do {
+            let s = try ProjectStore.load(folder)
+            leaveProject()
+            activate(project: folder)
+            load(s, from: ProjectStore.sceneURL(folder))
+            clearHistory()
+        } catch {
+            message = "Cannot open the project: \(error.localizedDescription)"
+        }
+    }
+
+    func closeProject() {
+        guard project != nil else { return }
+        newScene()
+    }
+
+    func saveProject(quiet: Bool = false) {
+        guard let project else { return }
+        do {
+            try ProjectStore.save(scene, to: project)
+            isDirty = false
+            if !quiet { message = "Saved project \(project.lastPathComponent)" }
+        } catch {
+            message = "Cannot save: \(error.localizedDescription)"
+        }
+    }
+
+    /// Copies the whole project folder to a new place and continues there.
+    private func saveProjectAs(_ current: URL) {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = current.lastPathComponent + " copy"
+        panel.directoryURL = current.deletingLastPathComponent()
+        panel.message = "Save a copy of the project folder"
+        guard panel.runModal() == .OK, let dest = panel.url?.standardizedFileURL else { return }
+        do {
+            if FileManager.default.fileExists(atPath: dest.path) {
+                throw SceneError.invalid("\(dest.lastPathComponent) already exists; choose another name")
+            }
+            try FileManager.default.copyItem(at: current, to: dest)
+            apply("Save Project As") { $0.replaceFolder(current.path, with: dest.path) }
+            activate(project: dest)
+            fileURL = ProjectStore.sceneURL(dest)
+            saveProject()
+        } catch {
+            message = "Cannot save the project: \(error.localizedDescription)"
+        }
+    }
+
+    /// Copies files the scene uses from outside the project into it and repoints those layers.
+    @discardableResult
+    func collectAssets() -> Int {
+        guard project != nil else { return 0 }
+        var moves: [(from: String, to: String)] = []
+        for path in Set(scene.layers.compactMap(\.path)) where !AssetStore.contains(path) {
+            let url = AssetStore.expand(path)
+            guard FileManager.default.fileExists(atPath: url.path),
+                  let a = try? AssetStore.importFile(url) else { continue }
+            moves.append((path, a.path))
+        }
+        if !moves.isEmpty {
+            apply("Copy Files into Project") { s in for m in moves { s.replacePath(m.from, with: m.to) } }
+        }
+        AssetLibrary.shared.refresh()
+        return moves.count
+    }
+
+    /// Copies a shared-library file into the open project.
+    func copyToProject(_ asset: AssetInfo) {
+        do {
+            let a = try AssetStore.importFile(URL(fileURLWithPath: asset.path))
+            message = "Copied \(asset.fileName) to \(a.name)"
+        } catch {
+            message = error.localizedDescription
+        }
+        AssetLibrary.shared.refresh()
+    }
+
+    /// Renames a project folder; the open project keeps working from its new place.
+    func renameProject(_ url: URL, to name: String) {
+        let isOpen = url.standardizedFileURL == project
+        if isOpen, isDirty { saveProject() }
+        do {
+            let dest = try ProjectStore.rename(url, to: name)
+            if isOpen {
+                // Layer paths are absolute in memory; follow the move (not an undo step: the files moved for real).
+                scene.replaceFolder(url.path, with: dest.path)
+                project = dest
+                fileURL = ProjectStore.sceneURL(dest)
+                AssetStore.setActiveLibrary(ProjectStore.assetsURL(dest))
+                AssetLibrary.shared.reload()
+                clearHistory()
+            }
+            setRecent(recentProjects.map { $0.standardizedFileURL == url.standardizedFileURL ? dest : $0 })
+        } catch {
+            message = "Cannot rename: \(error.localizedDescription)"
+        }
+    }
+
+    func duplicateProject(_ url: URL) {
+        if url.standardizedFileURL == project, isDirty { saveProject() }
+        do {
+            let copy = try ProjectStore.duplicate(url)
+            message = "Duplicated as \(copy.lastPathComponent)"
+        } catch {
+            message = "Cannot duplicate: \(error.localizedDescription)"
+        }
+    }
+
+    func trashProject(_ url: URL) {
+        guard url.standardizedFileURL != project else {
+            message = "Close the project before moving it to the Trash"
+            return
+        }
+        do {
+            try ProjectStore.trash(url)
+            setRecent(recentProjects.filter { $0.standardizedFileURL != url.standardizedFileURL })
+            message = "Moved \(url.lastPathComponent) to the Trash"
+        } catch {
+            message = "Cannot move to the Trash: \(error.localizedDescription)"
+        }
+    }
+
+    private func setRecent(_ urls: [URL]) {
+        recentProjects = urls
+        UserDefaults.standard.set(urls.map(\.path), forKey: Self.recentKey)
+    }
+
+    /// Undo must not bring another project's scene into this one (it would then be saved into this folder).
+    private func clearHistory() {
+        undoStack.removeAll()
+        redoStack.removeAll()
+    }
+
+    func clearRecentProjects() {
+        recentProjects = []
+        UserDefaults.standard.removeObject(forKey: Self.recentKey)
+    }
+
+    /// Saves the open project (projects have a fixed place, so switching away never loses work) and closes it.
+    private func leaveProject() {
+        guard project != nil else { return }
+        if isDirty { saveProject() }
+        activate(project: nil)
+    }
+
+    private func activate(project url: URL?) {
+        project = url
+        AssetStore.setActiveLibrary(url.map(ProjectStore.assetsURL))
+        AssetLibrary.shared.reload()
+        guard let url else { return }
+        setRecent([url] + recentProjects.filter { $0 != url }.prefix(9))
+    }
+
+    private static let recentKey = "recentProjects"
+
+    private static func loadRecentProjects() -> [URL] {
+        (UserDefaults.standard.stringArray(forKey: recentKey) ?? [])
+            .map { URL(fileURLWithPath: $0) }
+            .filter(ProjectStore.isProject)
+    }
+
+    func exportVideo() {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.mpeg4Movie, .quickTimeMovie]
+        panel.nameFieldStringValue = (project?.lastPathComponent ?? fileURL?.deletingPathExtension().lastPathComponent
+                                      ?? "VeyMotion") + ".mp4"
+        if let project { panel.directoryURL = project }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let snapshot = scene
+        exportProgress = 0
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                try VideoExporter.export(snapshot, to: url) { p in
+                    DispatchQueue.main.async { self.exportProgress = p }
+                }
+                DispatchQueue.main.async {
+                    self.exportProgress = nil
+                    self.message = "Exported \(url.lastPathComponent)"
+                    NSWorkspace.shared.activateFileViewerSelecting([url])
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.exportProgress = nil
+                    self.message = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    // MARK: - MCP
+
+    func startMCP() {
+        let server = MCPServer(host: self)
+        server.log = { [weak self] line in
+            DispatchQueue.main.async { self?.lastAgentAction = line }
+        }
+        let token = ProcessInfo.processInfo.environment["VEYMOTION_TOKEN"]
+        let http = MCPHTTPServer(server: server, port: Self.mcpPort, token: token)
+        http.onStateChange = { [weak self] status in
+            DispatchQueue.main.async { self?.mcpStatus = status }
+        }
+        do {
+            try http.start()
+            mcp = http
+        } catch {
+            mcpStatus = "Failed: \(error.localizedDescription)"
+        }
+
+        // Control socket for the `vmotion` CLI (used by the embedded Claude chat). Same tool layer as MCP.
+        let sock = ControlSocketServer(server: server)
+        do {
+            try sock.start()
+            controlSocket = sock
+            controlStatus = "Ready"
+        } catch {
+            controlStatus = "Failed: \(error.localizedDescription)"
+        }
+    }
+
+    func shutdown() {
+        if project != nil, isDirty { saveProject() } // a project has a fixed place, so quitting never loses work
+        controlSocket?.stop()
+        mcp?.stop()
+    }
+
+    // SceneHost — called from MCP worker threads.
+    func currentScene() -> MotionScene { onMain { scene } }
+
+    func mutate(_ label: String, _ body: (inout MotionScene) throws -> Void) throws {
+        try onMain { try apply("Agent: \(label)", body) }
+    }
+
+    private func onMain<T>(_ work: () throws -> T) rethrows -> T {
+        if Thread.isMainThread { return try work() }
+        return try DispatchQueue.main.sync(execute: work)
+    }
+}

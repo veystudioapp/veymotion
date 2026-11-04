@@ -1,0 +1,274 @@
+import Foundation
+import VeyMotionCore
+import VeyMotionMCP
+
+setvbuf(stdout, nil, _IOLBF, 0) // flush log lines promptly even when piped
+
+let usage = """
+vmotion — VeyMotion command line
+
+EDIT A SCENE (talks to the running VeyMotion app, or edits a file with --scene)
+  vmotion <command> ['<json-args>' | -] [--scene file.json] [--out frame.png]
+                                                  (or set VEYMOTION_SCENE=file.json instead of --scene)
+  vmotion tools                                   List commands and their arguments
+  vmotion docs                                    Scene format reference
+
+FILES
+  vmotion sample <scene.json>                     Write the demo scene
+  vmotion frame  <scene.json> <time> <out.png> [scale]
+  vmotion render <scene.json> <out.mp4|out.mov>
+
+AGENT
+  vmotion chat [--model m] "prompt"               One Claude Code turn in the terminal (edits the app's scene)
+
+SERVERS
+  vmotion mcp    <scene.json>                     MCP over stdio, editing the file
+  vmotion serve  <scene.json> [port]              MCP over HTTP (default port 19790)
+  vmotion daemon <scene.json>                     Control socket for a file (headless app stand-in)
+
+"""
+
+func fail(_ message: String, code: Int32 = 1) -> Never {
+    FileHandle.standardError.write(Data((message + "\n").utf8))
+    exit(code)
+}
+
+func loadScene(_ path: String) -> MotionScene {
+    do {
+        let url = URL(fileURLWithPath: path)
+        var s = try SceneJSON.decode(MotionScene.self, from: Data(contentsOf: url))
+        s.resolvePaths(relativeTo: url.deletingLastPathComponent())
+        return s
+    } catch {
+        fail("Cannot read \(path): \(error.localizedDescription)")
+    }
+}
+
+var framesDirectory: URL {
+    if let p = ProcessInfo.processInfo.environment["VEYMOTION_FRAMES_DIR"], !p.isEmpty {
+        return URL(fileURLWithPath: p, isDirectory: true)
+    }
+    // Inside the agent's working directory, where a sandboxed Claude Code Bash may write.
+    return ClaudeCodeAgent.Config.defaultWorkingDirectory.appendingPathComponent("frames", isDirectory: true)
+}
+
+/// Runs one tool, either against the running app (control socket) or a scene file.
+func runTool(_ tool: String, _ rest: [String]) -> Never {
+    var scenePath: String?
+    var outPath: String?
+    var json: String?
+    var i = 0
+    while i < rest.count {
+        switch rest[i] {
+        case "--scene":
+            guard i + 1 < rest.count else { fail("--scene needs a path") }
+            scenePath = rest[i + 1]; i += 2
+        case "--out":
+            guard i + 1 < rest.count else { fail("--out needs a path") }
+            outPath = rest[i + 1]; i += 2
+        default:
+            json = rest[i]; i += 1
+        }
+    }
+    if scenePath == nil, let env = ProcessInfo.processInfo.environment["VEYMOTION_SCENE"], !env.isEmpty {
+        scenePath = env
+    }
+    if json == "-" {
+        json = String(data: FileHandle.standardInput.readDataToEndOfFile(), encoding: .utf8)
+    }
+    var arguments: [String: Any] = [:]
+    if let json, !json.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        do {
+            guard let obj = try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any] else {
+                fail("Arguments must be a JSON object, e.g. '{\"id\": \"title\"}'", code: 2)
+            }
+            arguments = obj
+        } catch {
+            fail("Invalid JSON arguments: \(error.localizedDescription)", code: 2)
+        }
+    }
+
+    let request: [String: Any] = [
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": ["name": tool, "arguments": arguments],
+    ]
+    let response: [String: Any]
+    if let scenePath {
+        do {
+            let host = try FileSceneHost(url: URL(fileURLWithPath: scenePath))
+            response = MCPServer(host: host).handle(request) ?? [:]
+        } catch { fail(error.localizedDescription) }
+    } else {
+        do {
+            response = try ControlSocketClient.send(request)
+        } catch {
+            fail("VeyMotion app is not running (\(error.localizedDescription)). Open the app, or pass --scene <file.json>.", code: 3)
+        }
+    }
+
+    if let err = response["error"] as? [String: Any] {
+        print("Error: \(err["message"] as? String ?? "unknown")")
+        exit(1)
+    }
+    let result = response["result"] as? [String: Any] ?? [:]
+    for item in result["content"] as? [[String: Any]] ?? [] {
+        switch item["type"] as? String {
+        case "text":
+            print(item["text"] as? String ?? "")
+        case "image":
+            guard let b64 = item["data"] as? String, let data = Data(base64Encoded: b64) else { continue }
+            let url: URL
+            if let outPath {
+                url = URL(fileURLWithPath: outPath)
+            } else {
+                let label = (arguments["time"] as? NSNumber).map { String(format: "frame-%.2fs", $0.doubleValue) } ?? tool
+                url = framesDirectory.appendingPathComponent("\(label)-\(UUID().uuidString.prefix(6)).png")
+            }
+            do {
+                try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try data.write(to: url)
+                print("Frame saved: \(url.path)\n(Open it with the Read tool to see it.)")
+            } catch {
+                print("Error: cannot save frame: \(error.localizedDescription)")
+                exit(1)
+            }
+        default:
+            break
+        }
+    }
+    exit((result["isError"] as? Bool) == true ? 1 : 0)
+}
+
+var args = Array(CommandLine.arguments.dropFirst())
+guard let command = args.first else { print(usage); exit(0) }
+args.removeFirst()
+
+switch command {
+case "help", "--help", "-h":
+    print(usage)
+
+case "tools":
+    print(ToolCatalog.cliUsage)
+
+case "docs":
+    print(ToolCatalog.sceneReference)
+
+case "sample":
+    guard let out = args.first else { fail(usage) }
+    do {
+        try Data(MotionScene.sampleJSON.utf8).write(to: URL(fileURLWithPath: out))
+        print("Wrote \(out)")
+    } catch { fail(error.localizedDescription) }
+
+case "frame":
+    guard args.count >= 3, let t = Double(args[1]) else { fail(usage) }
+    let scene = loadScene(args[0])
+    let scale = args.count > 3 ? Double(args[3]) ?? 1 : 1
+    guard let png = FrameRenderer().pngData(scene, at: t, scale: scale) else { fail("Render failed") }
+    do { try png.write(to: URL(fileURLWithPath: args[2])) } catch { fail(error.localizedDescription) }
+    print("Wrote \(args[2])")
+
+case "render":
+    guard args.count >= 2 else { fail(usage) }
+    let scene = loadScene(args[0])
+    let url = URL(fileURLWithPath: args[1])
+    let started = Date()
+    var lastPct = -1
+    do {
+        try VideoExporter.export(scene, to: url) { p in
+            let pct = Int(p * 100)
+            if pct / 10 != lastPct / 10 { lastPct = pct; FileHandle.standardError.write(Data("\(pct)%\n".utf8)) }
+        }
+    } catch { fail(error.localizedDescription) }
+    print(String(format: "Wrote %@ (%d frames, %.1fs)", url.path, scene.frameCount, Date().timeIntervalSince(started)))
+
+case "mcp":
+    guard let path = args.first else { fail(usage) }
+    do {
+        let host = try FileSceneHost(url: URL(fileURLWithPath: path))
+        let server = MCPServer(host: host)
+        server.log = { FileHandle.standardError.write(Data(("[vmotion] " + $0 + "\n").utf8)) }
+        MCPStdioTransport.run(server: server)
+    } catch { fail(error.localizedDescription) }
+
+case "serve":
+    guard let path = args.first else { fail(usage) }
+    let port = args.count > 1 ? UInt16(args[1]) ?? 19790 : 19790
+    do {
+        let host = try FileSceneHost(url: URL(fileURLWithPath: path))
+        let server = MCPServer(host: host)
+        server.log = { print("[vmotion] \($0)") }
+        let http = MCPHTTPServer(server: server, port: port, token: ProcessInfo.processInfo.environment["VEYMOTION_TOKEN"])
+        http.onStateChange = { print("[vmotion] \($0)") }
+        try http.start()
+        dispatchMain()
+    } catch { fail(error.localizedDescription) }
+
+case "daemon":
+    guard let path = args.first else { fail(usage) }
+    do {
+        let host = try FileSceneHost(url: URL(fileURLWithPath: path))
+        let server = MCPServer(host: host)
+        server.log = { print("[vmotion] \($0)") }
+        let sock = ControlSocketServer(server: server)
+        try sock.start()
+        print("[vmotion] Control socket at \(sock.path)")
+        dispatchMain()
+    } catch { fail(error.localizedDescription) }
+
+case "chat":
+    // vmotion chat [--model m] "prompt"   — one agent turn in the terminal, against the app or $VEYMOTION_SCENE
+    var model: String?
+    var words: [String] = []
+    var j = 0
+    while j < args.count {
+        if args[j] == "--model", j + 1 < args.count { model = args[j + 1]; j += 2 } else { words.append(args[j]); j += 1 }
+    }
+    let prompt = words.joined(separator: " ")
+    guard !prompt.isEmpty else { fail("usage: vmotion chat [--model m] \"prompt\"") }
+    guard let claude = ClaudeCodeAgent.locateClaude() else { fail("Claude Code (`claude`) not found. Install it and run `claude` once to log in.") }
+    let selfDir = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath().deletingLastPathComponent().path
+    let workDir = ProcessInfo.processInfo.environment["VEYMOTION_AGENT_DIR"].map { URL(fileURLWithPath: $0, isDirectory: true) }
+        ?? ClaudeCodeAgent.Config.defaultWorkingDirectory
+    var env: [String: String] = [:]
+    if ProcessInfo.processInfo.environment["VEYMOTION_FRAMES_DIR"] == nil {
+        env["VEYMOTION_FRAMES_DIR"] = workDir.appendingPathComponent("frames").path
+    }
+    let agent = ClaudeCodeAgent(config: .init(claudePath: claude, vmotionDirectory: selfDir, workingDirectory: workDir,
+                                              model: model, extraEnvironment: env))
+    var lastWasDelta = false
+    agent.onEvent = { ev in
+        switch ev {
+        case let .started(sid, model): print("· session \(sid.prefix(8)) · \(model)")
+        case .thinking: break
+        case let .toolInputProgress(name, bytes):
+            if bytes > 0 && bytes % 4096 < 512 {
+                FileHandle.standardError.write(Data("  … writing \(name) input \(bytes / 1024) KB\n".utf8))
+            }
+        case let .textDelta(_, t): print(t, terminator: ""); fflush(stdout); lastWasDelta = true
+        case let .text(_, t): print(t)
+        case let .toolUse(_, name, input):
+            if lastWasDelta { print(""); lastWasDelta = false }
+            let detail = (input["command"] as? String) ?? (input["file_path"] as? String) ?? ""
+            print("▸ \(name): \(detail.prefix(200))")
+        case let .toolResult(_, out, isError, image):
+            let first = out.split(separator: "\n").first.map(String.init) ?? ""
+            print("  \(isError ? "✗" : "✓") \(first.prefix(160))\(image != nil ? " [image]" : "")")
+        case let .turnFinished(isError, _, cost, ms):
+            if lastWasDelta { print("") }
+            print(String(format: "· %@ · %.1fs · $%.4f", isError ? "error" : "done", Double(ms ?? 0) / 1000, cost ?? 0))
+            agent.finish()
+        case let .stderr(s): FileHandle.standardError.write(Data(s.utf8))
+        case let .exited(code): exit(code)
+        }
+    }
+    do { try agent.send(prompt) } catch { fail(error.localizedDescription) }
+    dispatchMain()
+
+default:
+    if let tool = ToolCatalog.toolName(for: command) {
+        runTool(tool, args)
+    }
+    print(usage)
+    fail("Unknown command '\(command)'. Run `vmotion tools` for the list.")
+}
