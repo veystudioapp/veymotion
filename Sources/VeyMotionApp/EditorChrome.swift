@@ -230,7 +230,7 @@ struct KeyframeButton: View {
     var body: some View {
         let tolerance = 0.5 / Double(store.scene.fps)
         let animated = layer.isAnimated(track)
-        let keyHere = layer.keyTimes(track).first { abs($0 - store.time) < tolerance }
+        let keyHere = layer.keyTimes(track).first { abs($0 - store.panelTime) < tolerance }
         Button {
             if !animated {
                 store.toggleAnimation(layer.id, track)
@@ -282,7 +282,7 @@ struct AnimColorField: View {
 
     var body: some View {
         HStack(spacing: 2) {
-            ColorField(label, layer.color(property, at: store.time) ?? .clear) { c in
+            ColorField(label, layer.color(property, at: store.panelTime) ?? .clear) { c in
                 store.setColor(layer.id, property, c)
             }
             KeyframeButton(layer: layer, track: .color(property))
@@ -418,7 +418,7 @@ struct AnimField: View {
 
     var body: some View {
         HStack(spacing: 2) {
-            NumberField(label, layer[property].value(at: store.time), unit: unit) { v in
+            NumberField(label, layer[property].value(at: store.panelTime), unit: unit) { v in
                 store.setValue(layer.id, property, v)
             }
             KeyframeButton(layer: layer, property: property)
@@ -435,7 +435,7 @@ struct AnimSlider: View {
     var range: ClosedRange<Double> = 0...1
 
     var body: some View {
-        let value = layer[property].value(at: store.time)
+        let value = layer[property].value(at: store.panelTime)
         HStack(spacing: 6) {
             RowLabel(label)
             Slider(value: Binding(get: { value }, set: { v in

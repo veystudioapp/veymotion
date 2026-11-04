@@ -246,7 +246,9 @@ struct TimelinePanel: View {
                     .frame(width: trackW, height: 10)
                     .frame(maxWidth: .infinity, alignment: .trailing)
             }
-            .overlay(alignment: .topLeading) { playhead(trackW: trackW) }
+            .overlay(alignment: .topLeading) {
+                TimelinePlayhead(tl: tl, trackW: trackW, nameWidth: nameWidth) { scrub(to: $0) }
+            }
             .coordinateSpace(name: "timeline")
             .onAppear {
                 tl.trackWidth = trackW
@@ -255,7 +257,6 @@ struct TimelinePanel: View {
             }
             .onChange(of: trackW) { _, w in tl.trackWidth = w; tl.clamp() }
             .onChange(of: scene.duration) { _, d in tl.duration = d; tl.clamp() }
-            .onChange(of: store.time) { _, t in if store.isPlaying { tl.reveal(t) } }
             .onHover { tl.hovering = $0 }
             .onContinuousHover { phase in
                 if case let .active(p) = phase { tl.mouseX = Double(p.x - nameWidth) } else { tl.mouseX = nil }
@@ -303,31 +304,6 @@ struct TimelinePanel: View {
     private var playheadAnchor: Double {
         let x = tl.x(store.time)
         return (0...tl.trackWidth).contains(x) ? x : tl.trackWidth / 2
-    }
-
-    private func playhead(trackW: Double) -> some View {
-        let x = tl.x(store.time)
-        return Group {
-            if x >= -1 && x <= trackW + 1 {
-                ZStack(alignment: .top) {
-                    // The line lets clicks through, so keyframes under the playhead stay editable.
-                    Rectangle().fill(Color.red).frame(width: 1.5).allowsHitTesting(false)
-                    PlayheadHandle()
-                        .fill(Color.red)
-                        .frame(width: 13, height: 15)
-                        .shadow(color: .black.opacity(0.25), radius: 1, y: 0.5)
-                        .padding(.horizontal, 6)
-                        .padding(.bottom, 6)
-                        .contentShape(Rectangle())
-                        .onHover { inside in if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() } }
-                        .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .named("timeline"))
-                            .onChanged { g in scrub(to: tl.time(atX: Double(g.location.x - nameWidth))) })
-                        .help("Drag to move the playhead")
-                }
-                .frame(width: 25)
-                .offset(x: nameWidth + x - 12.5, y: 27)
-            }
-        }
     }
 
     /// Moves the playhead to `t`, snapped to the nearest frame.
@@ -388,7 +364,7 @@ struct TimelinePanel: View {
                 Spacer().frame(width: indent ? 46 : 32)
                 Text(p.title).font(.caption).lineLimit(1)
                 Spacer(minLength: 4)
-                Text(format(l, p, at: store.time))
+                Text(format(l, p, at: store.panelTime))
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
@@ -652,6 +628,43 @@ struct TimelinePanel: View {
 // MARK: - Pieces
 
 /// A layer (or group) bar: drag to move, drag the edges to trim.
+/// The playhead line and handle, in its own view so only it re-renders while playing.
+struct TimelinePlayhead: View {
+    @Environment(SceneStore.self) private var store
+    let tl: TimelineState
+    let trackW: Double
+    let nameWidth: CGFloat
+    let scrub: (Double) -> Void
+
+    var body: some View {
+        let x = tl.x(store.time)
+        // Always present (even with the playhead scrolled out of view), so following it keeps working.
+        ZStack(alignment: .topLeading) {
+            Color.clear.frame(width: 0, height: 0)
+            if x >= -1 && x <= trackW + 1 {
+                ZStack(alignment: .top) {
+                    // The line lets clicks through, so keyframes under the playhead stay editable.
+                    Rectangle().fill(Color.red).frame(width: 1.5).allowsHitTesting(false)
+                    PlayheadHandle()
+                        .fill(Color.red)
+                        .frame(width: 13, height: 15)
+                        .shadow(color: .black.opacity(0.25), radius: 1, y: 0.5)
+                        .padding(.horizontal, 6)
+                        .padding(.bottom, 6)
+                        .contentShape(Rectangle())
+                        .onHover { inside in if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() } }
+                        .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .named("timeline"))
+                            .onChanged { g in scrub(tl.time(atX: Double(g.location.x - nameWidth))) })
+                        .help("Drag to move the playhead")
+                }
+                .frame(width: 25)
+                .offset(x: nameWidth + x - 12.5, y: 27)
+            }
+        }
+        .onChange(of: store.time) { _, t in if store.isPlaying { tl.reveal(t) } }
+    }
+}
+
 struct TimelineBar: View {
     let x0: Double
     let x1: Double

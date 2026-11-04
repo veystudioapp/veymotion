@@ -9,7 +9,7 @@ import UniformTypeIdentifiers
 /// Deterministic CoreGraphics renderer. Preview and export both use this, so what you see is what you export.
 /// Not thread-safe: use one instance per thread.
 public final class FrameRenderer {
-    private var imageCache: [String: (image: CGImage, size: CGSize, modified: Date?)] = [:]
+    private var imageCache: [String: (image: CGImage, size: CGSize, modified: Double?)] = [:]
     public static let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
 
     public init() {}
@@ -83,18 +83,25 @@ public final class FrameRenderer {
         let blur = max(0, layer.value(.blur, at: t)) + camera.depthBlur(depth)
 
         ctx.saveGState()
-        applyShadow(layer, at: t, in: ctx)
+        let shadowed = applyShadow(layer, at: t, in: ctx)
         ctx.setAlpha(opacity)
-        if blur * pixelScale > 0.25, let img = blurredLayer(layer, scene: scene, transform: m, radius: blur, at: t) {
-            // The blurred layer is a full-frame device-pixel image: draw it 1:1 over the scene.
-            ctx.translateBy(x: 0, y: CGFloat(scene.height))
-            ctx.scaleBy(x: 1, y: -1)
-            ctx.draw(img, in: CGRect(x: 0, y: 0, width: scene.width, height: scene.height))
+        if blur * pixelScale > 0.25 {
+            // The blurred layer is a device-pixel image of part of the frame: draw it 1:1 at its place.
+            if let blurred = blurredLayer(layer, scene: scene, transform: m, radius: blur, at: t) {
+                let sx = Double(scene.width) / Double(pixelSize.w), sy = Double(scene.height) / Double(pixelSize.h)
+                let r = blurred.rect
+                ctx.translateBy(x: 0, y: CGFloat(scene.height))
+                ctx.scaleBy(x: 1, y: -1)
+                ctx.draw(blurred.image, in: CGRect(x: r.minX * sx, y: r.minY * sy, width: r.width * sx, height: r.height * sy))
+            }
         } else {
             ctx.concatenate(m)
-            ctx.beginTransparencyLayer(auxiliaryInfo: nil)
+            // Shadow and partial opacity apply to the layer as a whole. Without them, drawing directly
+            // gives the same pixels and skips an offscreen pass.
+            let grouped = shadowed || opacity < 1
+            if grouped { ctx.beginTransparencyLayer(auxiliaryInfo: nil) }
             drawContent(layer, at: t, in: ctx)
-            ctx.endTransparencyLayer()
+            if grouped { ctx.endTransparencyLayer() }
         }
         ctx.restoreGState()
     }
@@ -109,37 +116,81 @@ public final class FrameRenderer {
     }
 
     /// Drop shadow of the whole layer. Offsets are in scene pixels (y down), independent of rotation.
-    private func applyShadow(_ layer: MotionLayer, at t: Double, in ctx: CGContext) {
+    private func applyShadow(_ layer: MotionLayer, at t: Double, in ctx: CGContext) -> Bool {
         let amount = min(max(layer.value(.shadowOpacity, at: t), 0), 1)
-        guard amount > 0.001 else { return }
+        guard amount > 0.001 else { return false }
         var c = layer.shadowColor
         c.a *= amount
         let dx = layer.value(.shadowX, at: t) * pixelScale
         let dy = layer.value(.shadowY, at: t) * pixelScale
         ctx.setShadow(offset: CGSize(width: dx, height: -dy), blur: max(0, layer.value(.shadowBlur, at: t)) * pixelScale,
                       color: c.cgColor)
+        return true
     }
 
-    /// Renders the layer alone into a frame-sized bitmap and applies a gaussian blur (radius in scene pixels).
+    /// Renders the layer alone and applies a gaussian blur (radius in scene pixels). Returns the blurred image and
+    /// the device-pixel rect of the frame it covers (bottom-left origin), or nil if nothing of it is in frame.
     private func blurredLayer(_ layer: MotionLayer, scene: MotionScene, transform m: CGAffineTransform,
-                              radius: Double, at t: Double) -> CGImage? {
+                              radius: Double, at t: Double) -> (image: CGImage, rect: CGRect)? {
         let (w, h) = pixelSize
-        guard w > 0, h > 0, let off = Self.bitmap(w, h) else { return nil }
+        let sigma = radius * pixelScale / 2
+        let frame = CGRect(x: 0, y: 0, width: w, height: h)
+        // Only the area the layer can reach once blurred, rather than the whole frame.
+        var area = frame
+        if let local = contentBounds(layer, at: t) {
+            let toDevice = m.concatenating(CGAffineTransform(a: Double(w) / Double(scene.width), b: 0, c: 0,
+                                                             d: -Double(h) / Double(scene.height), tx: 0, ty: Double(h)))
+            let reach = Double(Self.blurReach(sigma))
+            area = local.applying(toDevice).insetBy(dx: -reach, dy: -reach).integral.intersection(frame)
+        }
+        guard !area.isNull, area.width >= 1, area.height >= 1,
+              let off = Self.bitmap(Int(area.width), Int(area.height)) else { return nil }
         off.setShouldAntialias(true)
         off.interpolationQuality = .high
+        off.translateBy(x: -area.minX, y: -area.minY)
         Self.applySceneSpace(off, scene: scene, pixelWidth: w, pixelHeight: h)
         off.concatenate(m)
         drawContent(layer, at: t, in: off)
-        Self.boxBlur(off, sigma: radius * pixelScale / 2)
-        return off.makeImage()
+        Self.boxBlur(off, sigma: sigma)
+        guard let image = off.makeImage() else { return nil }
+        return (image, area)
+    }
+
+    /// Layer-local bounds of what `drawContent` paints, or nil when unknown (text animators move glyphs anywhere).
+    private func contentBounds(_ layer: MotionLayer, at t: Double) -> CGRect? {
+        switch layer.type {
+        case .rect, .ellipse:
+            let w = max(layer.shapeWidth(at: t), 0), h = max(layer.shapeHeight(at: t), 0)
+            let stroke = max(layer.value(.strokeWidth, at: t), 0) // covers half the line plus miter corners
+            return CGRect(x: -w / 2, y: -h / 2, width: w, height: h).insetBy(dx: -stroke, dy: -stroke)
+        case .image:
+            return imageFrame(layer, at: t).rect.insetBy(dx: -4, dy: -4) // placeholder outline
+        case .text:
+            guard layer.textAnimators.isEmpty, let box = textLayout(layer, at: t)?.box else { return nil }
+            let pad = max(layer.fontSize, 1) // glyph overhang outside the line box (italics, accents)
+            return CGRect(x: -box.width / 2, y: -box.height / 2, width: box.width, height: box.height)
+                .insetBy(dx: -pad, dy: -pad)
+        case .audio, .camera:
+            return nil
+        }
+    }
+
+    /// Box size of each of the three passes approximating a gaussian of `sigma` pixels, or nil for no blur.
+    private static func boxSize(_ sigma: Double) -> Int? {
+        guard sigma > 0.1 else { return nil }
+        var size = Int((12 * sigma * sigma / 3 + 1).squareRoot().rounded())
+        if size % 2 == 0 { size += 1 }
+        return size >= 3 ? size : nil
+    }
+
+    /// How far, in pixels, the blur spreads a pixel.
+    private static func blurReach(_ sigma: Double) -> Int {
+        boxSize(sigma).map { 3 * ($0 / 2) + 1 } ?? 0
     }
 
     /// Gaussian blur approximated by three box blurs (vImage, CPU, deterministic). Works on premultiplied pixels.
     private static func boxBlur(_ ctx: CGContext, sigma: Double) {
-        guard sigma > 0.1, let data = ctx.data else { return }
-        var size = Int((12 * sigma * sigma / 3 + 1).squareRoot().rounded())
-        if size % 2 == 0 { size += 1 }
-        guard size >= 3 else { return }
+        guard let size = boxSize(sigma), let data = ctx.data else { return }
         let w = ctx.width, h = ctx.height, rowBytes = ctx.bytesPerRow
         guard let tmp = malloc(rowBytes * h) else { return }
         defer { free(tmp) }
@@ -195,8 +246,27 @@ public final class FrameRenderer {
     }
 
     private func drawText(_ layer: MotionLayer, at t: Double, in ctx: CGContext) {
+        guard let layout = textLayout(layer, at: t) else { return }
+        let (bw, bh) = (layout.box.width, layout.box.height)
+        ctx.saveGState()
+        // Local y-up space with origin at the text box's bottom-left.
+        ctx.translateBy(x: -bw / 2, y: bh / 2)
+        ctx.scaleBy(x: 1, y: -1)
+        ctx.textMatrix = .identity
+        let path = CGPath(rect: CGRect(x: 0, y: 0, width: bw, height: bh), transform: nil)
+        let frame = CTFramesetterCreateFrame(layout.setter, CFRange(location: 0, length: 0), path, nil)
+        if !layer.textAnimators.isEmpty {
+            drawAnimatedGlyphs(frame, layer: layer, shownUTF16: layout.shownUTF16, at: t, in: ctx)
+        } else {
+            CTFrameDraw(frame, ctx)
+        }
+        ctx.restoreGState()
+    }
+
+    /// Typesets the layer's text: the framesetter, the text box size, and how many UTF-16 units the reveal shows.
+    private func textLayout(_ layer: MotionLayer, at t: Double) -> (setter: CTFramesetter, box: CGSize, shownUTF16: Int)? {
         let full = layer.text
-        guard !full.isEmpty else { return }
+        guard !full.isEmpty else { return nil }
         let font = Self.font(for: layer)
 
         var alignment: CTTextAlignment
@@ -238,20 +308,7 @@ public final class FrameRenderer {
             CGSize(width: constraintW, height: .greatestFiniteMagnitude), nil)
         let bw = ceil(layer.maxWidth ?? suggested.width) + 2
         let bh = ceil(suggested.height) + 2
-
-        ctx.saveGState()
-        // Local y-up space with origin at the text box's bottom-left.
-        ctx.translateBy(x: -bw / 2, y: bh / 2)
-        ctx.scaleBy(x: 1, y: -1)
-        ctx.textMatrix = .identity
-        let path = CGPath(rect: CGRect(x: 0, y: 0, width: bw, height: bh), transform: nil)
-        let frame = CTFramesetterCreateFrame(setter, CFRange(location: 0, length: 0), path, nil)
-        if animated {
-            drawAnimatedGlyphs(frame, layer: layer, shownUTF16: shownUTF16, at: t, in: ctx)
-        } else {
-            CTFrameDraw(frame, ctx)
-        }
-        ctx.restoreGState()
+        return (setter, CGSize(width: bw, height: bh), shownUTF16)
     }
 
     /// Draws each glyph with the transform/opacity of its character, word or line (text animators).
@@ -329,28 +386,35 @@ public final class FrameRenderer {
     }
 
     private func drawImage(_ layer: MotionLayer, at t: Double, in ctx: CGContext) {
-        guard let path = layer.path, let loaded = loadImage(path) else {
-            drawPlaceholder(layer, at: t, in: ctx)
+        let (img, rect) = imageFrame(layer, at: t)
+        guard let img else {
+            drawPlaceholder(rect, in: ctx)
             return
         }
-        let (img, natural) = loaded
-        let iw = Double(natural.width), ih = Double(natural.height)
-        let setW = layer.width.map { $0.value(at: t) }.flatMap { $0 > 0 ? $0 : nil }
-        let setH = layer.height.map { $0.value(at: t) }.flatMap { $0 > 0 ? $0 : nil }
-        var w = setW ?? iw, h = setH ?? ih
-        if setW != nil && setH == nil { h = w * ih / iw }
-        if setH != nil && setW == nil { w = h * iw / ih }
         ctx.saveGState()
-        ctx.translateBy(x: -w / 2, y: h / 2)
+        ctx.translateBy(x: rect.minX, y: rect.maxY)
         ctx.scaleBy(x: 1, y: -1)
-        ctx.draw(img, in: CGRect(x: 0, y: 0, width: w, height: h))
+        ctx.draw(img, in: CGRect(origin: .zero, size: rect.size))
         ctx.restoreGState()
     }
 
-    private func drawPlaceholder(_ layer: MotionLayer, at t: Double, in ctx: CGContext) {
-        let w = layer.width.map { $0.value(at: t) }.flatMap { $0 > 0 ? $0 : nil } ?? 400
-        let h = layer.height.map { $0.value(at: t) }.flatMap { $0 > 0 ? $0 : nil } ?? 240
-        let rect = CGRect(x: -w / 2, y: -h / 2, width: w, height: h)
+    /// The image (nil if missing) and its layer-local rect: natural size unless width/height are set.
+    private func imageFrame(_ layer: MotionLayer, at t: Double) -> (image: CGImage?, rect: CGRect) {
+        let setW = layer.width.map { $0.value(at: t) }.flatMap { $0 > 0 ? $0 : nil }
+        let setH = layer.height.map { $0.value(at: t) }.flatMap { $0 > 0 ? $0 : nil }
+        var img: CGImage?
+        var w = setW ?? 400, h = setH ?? 240
+        if let path = layer.path, let loaded = loadImage(path) {
+            img = loaded.0
+            let iw = Double(loaded.1.width), ih = Double(loaded.1.height)
+            w = setW ?? iw; h = setH ?? ih
+            if setW != nil && setH == nil { h = w * ih / iw }
+            if setH != nil && setW == nil { w = h * iw / ih }
+        }
+        return (img, CGRect(x: -w / 2, y: -h / 2, width: w, height: h))
+    }
+
+    private func drawPlaceholder(_ rect: CGRect, in ctx: CGContext) {
         ctx.setFillColor(RGBA(r: 0.5, g: 0.5, b: 0.5, a: 0.25).cgColor)
         ctx.fill(rect)
         ctx.setStrokeColor(RGBA(r: 1, g: 0.3, b: 0.3).cgColor)
@@ -364,7 +428,10 @@ public final class FrameRenderer {
     private func loadImage(_ path: String) -> (CGImage, CGSize)? {
         let expanded = (path as NSString).expandingTildeInPath
         // Keyed by modification date too, so a file that is overwritten (e.g. by write_asset) reloads.
-        let modified = (try? FileManager.default.attributesOfItem(atPath: expanded))?[.modificationDate] as? Date
+        // Checked every frame, so a bare stat(2) rather than FileManager's attribute dictionary.
+        var info = stat()
+        let modified = stat(expanded, &info) == 0
+            ? Double(info.st_mtimespec.tv_sec) + Double(info.st_mtimespec.tv_nsec) / 1e9 : nil
         if let cached = imageCache[expanded], cached.modified == modified { return (cached.image, cached.size) }
         guard let loaded = AssetStore.loadImage(URL(fileURLWithPath: expanded)) else { return nil }
         imageCache[expanded] = (loaded.image, loaded.size, modified)

@@ -227,8 +227,8 @@ struct LayerInspector: View {
             FileRow(path: layer.path, kind: .image) { p in store.updateLayer(id, "Change Image") { $0.path = p } }
             Grid(horizontalSpacing: 8, verticalSpacing: 6) {
                 GridRow {
-                    let w = layer.width?.value(at: store.time) ?? 0
-                    let h = layer.height?.value(at: store.time) ?? 0
+                    let w = layer.width?.value(at: store.panelTime) ?? 0
+                    let h = layer.height?.value(at: store.panelTime) ?? 0
                     HStack(spacing: 2) {
                         NumberField("W", w, unit: layer.width == nil ? "auto" : nil, digits: 0) { v in
                             store.setValue(id, .width, max(0, v))
@@ -255,7 +255,7 @@ struct CameraInspector: View {
     let layer: MotionLayer
 
     var body: some View {
-        let active = store.scene.activeCamera(at: store.time)?.id == layer.id
+        let active = store.scene.activeCamera(at: store.panelTime)?.id == layer.id
         InspectorSection("Camera") {
             Grid(horizontalSpacing: 8, verticalSpacing: 6) {
                 GridRow {
@@ -331,7 +331,7 @@ struct EffectsSection: View {
                 }
             }
             AnimSlider(layer: layer, property: .shadowOpacity, label: "Shadow")
-            if layer.value(.shadowOpacity, at: store.time) > 0 || layer[.shadowOpacity].isAnimated {
+            if layer.value(.shadowOpacity, at: store.panelTime) > 0 || layer[.shadowOpacity].isAnimated {
                 Grid(horizontalSpacing: 8, verticalSpacing: 6) {
                     GridRow {
                         AnimField(layer: layer, property: .shadowX, label: "X")

@@ -12,7 +12,12 @@ final class SceneStore: SceneHost {
 
     var scene: MotionScene = .sample
     var selection: String?
-    var time: Double = 0
+    var time: Double = 0 {
+        didSet { if !isPlaying { panelTime = time } }
+    }
+    /// The playhead as read by inspector and timeline values: held while playing, so those panels
+    /// don't re-render every frame.
+    private(set) var panelTime: Double = 0
     var isPlaying = false
     var fileURL: URL?
     /// The open project folder (scene.json + assets/), or nil when editing a loose scene file.
@@ -470,6 +475,7 @@ final class SceneStore: SceneHost {
         timer?.invalidate()
         timer = nil
         isPlaying = false
+        panelTime = time
         audio.stop()
     }
 
@@ -482,7 +488,10 @@ final class SceneStore: SceneHost {
             time = 0
             audio.play(scene, from: 0)
         } else {
-            time = elapsed
+            // Whole frames only: ticks within one frame would redraw an identical canvas.
+            let fps = Double(max(scene.fps, 1))
+            let frame = (elapsed * fps).rounded(.down) / fps
+            if frame != time { time = frame }
         }
     }
 
