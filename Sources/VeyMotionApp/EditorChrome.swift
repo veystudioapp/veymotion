@@ -461,6 +461,7 @@ extension LayerType {
         case .text: return "textformat"
         case .image: return "photo"
         case .audio: return "waveform"
+        case .camera: return "video"
         }
     }
 }

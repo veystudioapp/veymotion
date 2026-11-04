@@ -10,7 +10,7 @@ enum Docs {
     - layers[0] is drawn first (bottom); the last layer is on top.
 
     LAYER
-    Common: id, name, type ("rect" | "ellipse" | "text" | "image" | "audio"), start, end (seconds, end optional = scene end),
+    Common: id, name, type ("rect" | "ellipse" | "text" | "image" | "audio" | "camera"), start, end (seconds, end optional = scene end),
             x, y, scale, rotation (degrees), opacity (0..1)
     rect/ellipse: width, height, cornerRadius (rect), fill "#RRGGBB[AA]", stroke, strokeWidth, trim (0..1: part of the
           stroke drawn, for "draw on" line animations)
@@ -19,15 +19,16 @@ enum Docs {
           letterSpacing (px), textAnimators (see TEXT ANIMATORS)
     image: path (absolute file path), width/height (optional; keeps aspect if only one is set)
     Optional on every visual layer (omit when unused):
-      scaleX, scaleY (multiply scale; flip effects), skewX, skewY (degrees), anchorX, anchorY (pivot for rotation/scale/
+      z (depth in px, default 0; positive = farther from the camera, see CAMERA), scaleX, scaleY (multiply scale; flip effects), skewX, skewY (degrees), anchorX, anchorY (pivot for rotation/scale/
       skew as an offset from the center in layer px, e.g. anchorX = -width/2 spins around the left edge; does not move the
       layer), blur (px), shadowOpacity (0..1, shadow off when 0), shadowX, shadowY (px, default 0/8), shadowBlur (default 16),
       shadowColor ("#000000"), parent, motionPath, pathProgress, loop, wiggle (see below)
 
     ANIMATION
-    Every number above (x, y, scale, scaleX, scaleY, rotation, skewX, skewY, anchorX, anchorY, opacity, width, height,
-    cornerRadius, strokeWidth, trim, reveal, letterSpacing, blur, shadowX, shadowY, shadowBlur, shadowOpacity, pathProgress,
-    volume) and the colors fill, stroke and color can be a plain value or
+    Every number above and in CAMERA (x, y, z, scale, scaleX, scaleY, rotation, skewX, skewY, anchorX, anchorY, opacity,
+    width, height, cornerRadius, strokeWidth, trim, reveal, letterSpacing, blur, shadowX, shadowY, shadowBlur,
+    shadowOpacity, pathProgress, volume, perspective, focus, aperture) and the colors fill, stroke and color can be a
+    plain value or
       {"keyframes":[{"t":0.5,"v":0},{"t":1.2,"v":1,"easing":"easeOut"}]}     (colors: "v":"#FF5500")
     - Never write the same key twice in one object (e.g. "y": 500 and "y": {"keyframes": ...}); only one would be used.
     - t is ABSOLUTE scene time in seconds. Before the first keyframe the first value holds; after the last, the last holds
@@ -47,6 +48,23 @@ enum Docs {
     - motionPath: {"points":[[200,800],[960,300],[1700,800]],"smooth":true,"closed":false,"orient":false} — the layer's
       center follows the path (x/y are then ignored); animate pathProgress 0→1 to move along it at even speed;
       orient = true turns the layer to face the direction of travel.
+
+    CAMERA (2.5D: layers stay flat and face the camera, placed at different depths)
+    - Give visual layers a depth z (px): 0 = normal size, positive = farther (smaller, moves less), negative = closer.
+      A child's depth adds its parent's z. Layers are drawn farthest first (list order only breaks ties), and a layer
+      at z = 1000 with the default perspective looks 2/3 its size, so scale far backgrounds up to still fill the frame.
+    - Camera layer: {"id":"cam","type":"camera","x":960,"y":540,"z":0,"scale":1,"rotation":0,
+                     "perspective":2000,"focus":0,"aperture":0}
+      x, y = the scene point the camera looks at (shown at the frame center; set it to the scene center when the scene
+      is not 1920x1080); animate x/y to pan with parallax. z = dolly (positive moves toward the layers: push-in).
+      scale = lens zoom (magnifies everything, no parallax). rotation = roll (degrees). perspective = distance from
+      the camera to the z = 0 plane (default 2000; smaller = stronger depth effect; animate it against z for a dolly
+      zoom). focus = depth z that is sharp; aperture = blur in px for layers 1000 px of depth from focus (0 = off,
+      try 20–60); animate focus for a rack focus.
+    - Camera layers are not drawn, cannot have a parent, and support motionPath/pathProgress, loop and wiggle
+      (wiggle x/y/rotation = handheld shake). The topmost camera layer visible at time t is used, so cameras with
+      start/end make cuts. Without a camera, a default one is used (z still works).
+    - Layers that end up behind the camera (z − camera z < −perspective) are not drawn.
 
     TEXT ANIMATORS (per character / word / line, staggered)
     "textAnimators":[{"unit":"char","mode":"in","start":0.5,"duration":0.5,"stagger":0.04,"order":"forward",
@@ -117,6 +135,8 @@ enum Docs {
     - apply_preset is a quick way to add common entrances/exits/emphasis; pass `ids` + `stagger` to cascade one preset
       over several layers (e.g. list items 0.12s apart). Combine with easings like easeOutBack / easeOutExpo for polish,
       and use loop/wiggle for ambient motion (floating shapes, subtle camera-like drift).
+    - For depth, spread layers over z (e.g. background 1500, mid 600, title 0, foreground particles −300) and add a
+      camera that slowly pans or pushes in; a little aperture with focus on the title adds a cinematic look.
     """#
 
     static let toolsJSON = #"""
@@ -195,7 +215,7 @@ enum Docs {
           "type": "object",
           "properties": {
             "id": { "type": "string" },
-            "property": { "type": "string", "enum": ["x", "y", "scale", "scaleX", "scaleY", "rotation", "skewX", "skewY", "anchorX", "anchorY", "opacity", "width", "height", "cornerRadius", "strokeWidth", "trim", "reveal", "letterSpacing", "blur", "shadowX", "shadowY", "shadowBlur", "shadowOpacity", "pathProgress", "volume", "fill", "stroke", "color"] },
+            "property": { "type": "string", "enum": ["x", "y", "z", "scale", "scaleX", "scaleY", "rotation", "skewX", "skewY", "anchorX", "anchorY", "opacity", "width", "height", "cornerRadius", "strokeWidth", "trim", "reveal", "letterSpacing", "blur", "shadowX", "shadowY", "shadowBlur", "shadowOpacity", "pathProgress", "volume", "perspective", "focus", "aperture", "fill", "stroke", "color"] },
             "keyframes": {
               "type": "array",
               "items": {

@@ -161,7 +161,7 @@ vmotion render scene.json out.mp4
 - Scene pixels, origin top-left; `x`/`y` is the layer center. First layer = bottom.
 - Animatable: `x`, `y`, `scale`, `scaleX`, `scaleY`, `rotation` (deg), `skewX`, `skewY`, `anchorX`, `anchorY`, `opacity`,
   `width`, `height`, `cornerRadius`, `strokeWidth`, `trim` (stroke draw-on), `reveal` (typewriter), `letterSpacing`,
-  `blur`, `shadowX/Y/Blur/Opacity`, `pathProgress`, and the colors `fill`, `stroke`, `color`.
+  `blur`, `shadowX/Y/Blur/Opacity`, `pathProgress`, `z` (depth), and the colors `fill`, `stroke`, `color`.
   Each is a value or `{"keyframes": [...]}` (color keyframes use `"v": "#RRGGBB"`).
 - Keyframe `t` is absolute seconds; `easing` shapes the segment *arriving* at that keyframe:
   `linear | easeIn | easeOut | easeInOut (default) | hold | spring | spring(damping,frequency) | steps(n) |
@@ -170,6 +170,10 @@ vmotion render scene.json out.mp4
   `motionPath` (curve the layer follows, driven by `pathProgress`), `textAnimators` (staggered per char/word/line).
 - Layer types: `rect` (width, height, cornerRadius, fill, stroke, strokeWidth), `ellipse`,
   `text` (text, fontSize, fontWeight, fontName, color, align, maxWidth), `image` (path, width, height).
+- **Camera (2.5D)**: give layers a depth `z` (positive = farther) and add a `camera` layer: `x`/`y` pan with
+  parallax, `z` dollies in, `scale` zooms the lens, `rotation` rolls, `perspective` sets the depth strength, and
+  `focus` + `aperture` add depth of field. Layers stay flat and face the camera (no X/Y rotation). Several cameras
+  with start/end make cuts; without one, a default camera is used.
 
 The full reference the agent sees is in `Sources/VeyMotionMCP/Docs.swift`.
 

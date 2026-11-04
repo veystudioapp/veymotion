@@ -32,8 +32,14 @@ public final class FrameRenderer {
         ctx.setFillColor(scene.background.cgColor)
         ctx.fill(CGRect(x: 0, y: 0, width: scene.width, height: scene.height))
 
-        for layer in scene.layers where layer.type.isVisual && layer.isVisible(at: t, sceneDuration: scene.duration) {
-            drawLayer(layer, scene: scene, at: t, in: ctx)
+        // Farthest first; layers at the same depth keep their order in the list (all z = 0: plain list order).
+        let camera = scene.camera(at: t)
+        let visible = scene.layers.enumerated()
+            .filter { $0.element.type.isVisual && $0.element.isVisible(at: t, sceneDuration: scene.duration) }
+            .map { (index: $0.offset, layer: $0.element, depth: scene.depth(of: $0.element, at: t)) }
+            .sorted { $0.depth != $1.depth ? $0.depth > $1.depth : $0.index < $1.index }
+        for item in visible {
+            drawLayer(item.layer, depth: item.depth, camera: camera, scene: scene, at: t, in: ctx)
         }
         ctx.restoreGState()
     }
@@ -67,12 +73,14 @@ public final class FrameRenderer {
 
     // MARK: - Layers
 
-    private func drawLayer(_ layer: MotionLayer, scene: MotionScene, at t: Double, in ctx: CGContext) {
+    private func drawLayer(_ layer: MotionLayer, depth: Double, camera: CameraView, scene: MotionScene,
+                           at t: Double, in ctx: CGContext) {
         let opacity = min(max(layer.value(.opacity, at: t), 0), 1)
         guard opacity > 0.001 else { return }
-        let m = scene.worldTransform(of: layer, at: t)
+        guard let projection = camera.projection(depth: depth) else { return } // behind the camera
+        let m = scene.worldTransform(of: layer, at: t).concatenating(projection)
         guard abs(m.a * m.d - m.b * m.c) > 1e-8 else { return } // scaled to nothing
-        let blur = max(0, layer.value(.blur, at: t))
+        let blur = max(0, layer.value(.blur, at: t)) + camera.depthBlur(depth)
 
         ctx.saveGState()
         applyShadow(layer, at: t, in: ctx)
@@ -96,7 +104,7 @@ public final class FrameRenderer {
         case .rect, .ellipse: drawShape(layer, at: t, in: ctx)
         case .text: drawText(layer, at: t, in: ctx)
         case .image: drawImage(layer, at: t, in: ctx)
-        case .audio: break
+        case .audio, .camera: break
         }
     }
 

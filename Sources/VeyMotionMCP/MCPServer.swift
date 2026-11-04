@@ -437,9 +437,10 @@ public final class MCPServer {
             let scene = host.currentScene()
             guard let png = FrameRenderer().pngData(scene, at: t, scale: scale) else { throw ToolError("render failed") }
             let visible = scene.layers.filter { $0.isVisible(at: t, sceneDuration: scene.duration) }.map(\.id)
+            let camera = scene.activeCamera(at: t).map { ", camera: \($0.id)" } ?? ""
             return ["content": [
                 ["type": "image", "data": png.base64EncodedString(), "mimeType": "image/png"],
-                ["type": "text", "text": "t=\(t)s, visible layers: \(visible.joined(separator: ", "))"],
+                ["type": "text", "text": "t=\(t)s, visible layers: \(visible.joined(separator: ", "))\(camera)"],
             ]]
 
         case "export_video":

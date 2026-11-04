@@ -193,6 +193,7 @@ final class SceneStore: SceneHost {
         case .ellipse: l.width = 240; l.height = 240; l.fill = .constant(RGBA(hex: "#00B894")!)
         case .text: l.text = "New Text"
         case .image: l.path = path; l.width = 600
+        case .camera: l.id = "camera"
         case .audio:
             l.path = path
             l.start = time

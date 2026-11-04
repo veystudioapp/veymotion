@@ -94,6 +94,8 @@ struct ContentView: View {
                         .help("Add audio file")
                     Button { showVoice = true } label: { Label("Voice-over", systemImage: "mic") }
                         .help("Generate a voice-over")
+                    Button { store.addLayer(.camera) } label: { Label("Camera", systemImage: "video") }
+                        .help("Add a camera (give layers a Z depth for parallax and depth of field)")
                 }
                 .controlGroupStyle(.navigation)
             }
@@ -180,7 +182,7 @@ struct CanvasView: View {
                         .frame(width: fit.width, height: fit.height)
                         .shadow(color: .black.opacity(0.35), radius: 12, y: 4)
                 }
-                if let layer = store.selectedLayer, layer.type != .text, layer.type != .audio,
+                if let layer = store.selectedLayer, layer.type.isVisual, layer.type != .text,
                    layer.isVisible(at: store.time, sceneDuration: scene.duration) {
                     SelectionBox(layer: layer, scene: scene, time: store.time, unit: fit.width / Double(scene.width))
                         .frame(width: fit.width, height: fit.height)
@@ -212,11 +214,12 @@ struct SelectionBox: View {
         }
         let w = layer.type == .image ? size(layer.width, 400) : layer.shapeWidth(at: time)
         let h = layer.type == .image ? size(layer.height, 240) : layer.shapeHeight(at: time)
-        let m = scene.worldTransform(of: layer, at: time).concatenating(CGAffineTransform(scaleX: unit, y: unit))
-        Path(CGRect(x: -w / 2, y: -h / 2, width: w, height: h))
-            .applying(m)
-            .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 1.5, dash: [5, 3]))
-            .allowsHitTesting(false)
+        if let screen = scene.screenTransform(of: layer, at: time) {
+            Path(CGRect(x: -w / 2, y: -h / 2, width: w, height: h))
+                .applying(screen.concatenating(CGAffineTransform(scaleX: unit, y: unit)))
+                .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 1.5, dash: [5, 3]))
+                .allowsHitTesting(false)
+        }
     }
 }
 
