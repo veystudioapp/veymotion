@@ -169,7 +169,12 @@ vmotion render scene.json out.mp4
 - Per layer: `loop` (`cycle`/`pingpong`/`offset` after the last key), `wiggle` (smooth noise), `parent`,
   `motionPath` (curve the layer follows, driven by `pathProgress`), `textAnimators` (staggered per char/word/line).
 - Layer types: `rect` (width, height, cornerRadius, fill, stroke, strokeWidth), `ellipse`,
-  `text` (text, fontSize, fontWeight, fontName, color, align, maxWidth), `image` (path, width, height).
+  `text` (text, fontSize, fontWeight, fontName, color, align, maxWidth), `image` (path, width, height),
+  `video` (path to a .mov/.mp4 or a folder of numbered images, width, height, trimIn, speed,
+  playback `once`/`hold`/`loop`, fps for image sequences).
+- **3D**: render in Blender (or any 3D app) to a PNG sequence with a transparent background, or ProRes 4444 with
+  alpha, and add the folder/file as a `video` layer. It composites like any other layer. The video's own sound is
+  not played.
 - **Camera (2.5D)**: give layers a depth `z` (positive = farther) and add a `camera` layer: `x`/`y` pan with
   parallax, `z` dollies in, `scale` zooms the lens, `rotation` rolls, `perspective` sets the depth strength, and
   `focus` + `aperture` add depth of field. Layers stay flat and face the camera (no X/Y rotation). Several cameras

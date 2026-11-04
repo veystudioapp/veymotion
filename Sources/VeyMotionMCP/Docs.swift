@@ -10,7 +10,7 @@ enum Docs {
     - layers[0] is drawn first (bottom); the last layer is on top.
 
     LAYER
-    Common: id, name, type ("rect" | "ellipse" | "text" | "image" | "audio" | "camera"), start, end (seconds, end optional = scene end),
+    Common: id, name, type ("rect" | "ellipse" | "text" | "image" | "video" | "audio" | "camera"), start, end (seconds, end optional = scene end),
             x, y, scale, rotation (degrees), opacity (0..1)
     rect/ellipse: width, height, cornerRadius (rect), fill "#RRGGBB[AA]", stroke, strokeWidth, trim (0..1: part of the
           stroke drawn, for "draw on" line animations)
@@ -18,6 +18,11 @@ enum Docs {
           fontName (optional PostScript name), color, align (left|center|right), maxWidth (wraps), reveal (0..1 typewriter),
           letterSpacing (px), textAnimators (see TEXT ANIMATORS)
     image: path (absolute file path), width/height (optional; keeps aspect if only one is set)
+    video: path = a movie file (.mov/.mp4/.m4v) or a FOLDER of numbered images (image sequence, e.g. a Blender render;
+          frames in natural name order), width/height (as image), trimIn (source seconds skipped), speed (1 = normal),
+          playback ("once": the layer ends with the clip, default | "hold": last frame stays | "loop": starts over),
+          fps (image sequences only: frames per second of the images; set to the render's rate, Blender's default is 24).
+          The video's own sound is not played. sourceDuration is filled in by the app.
     Optional on every visual layer (omit when unused):
       z (depth in px, default 0; positive = farther from the camera, see CAMERA), scaleX, scaleY (multiply scale; flip effects), skewX, skewY (degrees), anchorX, anchorY (pivot for rotation/scale/
       skew as an offset from the center in layer px, e.g. anchorX = -width/2 spins around the left edge; does not move the
@@ -73,6 +78,11 @@ enum Docs {
     - opacity/x/y/scale/rotation describe the AWAY state (x/y in px, y down); units animate between it and normal.
     - Unit i starts at start + rank·stagger; order: forward | reverse | center | edges | random (seed).
     - Use one "in" and optionally one "out" animator. The text*/typewriter presets create them for you.
+
+    3D MODELS / RENDERS
+    3D content comes in as rendered video: render in Blender (or any 3D app) to a PNG sequence with a transparent
+    background (Film → Transparent, output PNG RGBA) or ProRes 4444 .mov with alpha, then add a video layer pointing at
+    the folder or file. It composites like any layer (position, scale, z, blur, shadow, presets).
 
     AUDIO
     audio layers: type "audio", path, start, end (optional; default = end of file), role ("voice"|"music"|"sfx"),

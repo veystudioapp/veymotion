@@ -10,7 +10,11 @@ import VeyMotionMCP
 final class SceneStore: SceneHost {
     static let shared = SceneStore()
 
-    var scene: MotionScene = .sample
+    var scene: MotionScene = .sample {
+        didSet { sceneRevision &+= 1 }
+    }
+    /// Bumped on every scene change, so views can react without comparing whole scenes.
+    private(set) var sceneRevision = 0
     var selection: String?
     var time: Double = 0 {
         didSet { if !isPlaying { panelTime = time } }
@@ -47,7 +51,6 @@ final class SceneStore: SceneHost {
     @ObservationIgnored private var mcp: MCPHTTPServer?
     @ObservationIgnored private var controlSocket: ControlSocketServer?
     var controlStatus = "Starting…"
-    @ObservationIgnored let renderer = FrameRenderer()
     @ObservationIgnored let audio = AudioPreview()
 
     static let mcpPort: UInt16 = 19790
@@ -198,6 +201,17 @@ final class SceneStore: SceneHost {
         case .ellipse: l.width = 240; l.height = 240; l.fill = .constant(RGBA(hex: "#00B894")!)
         case .text: l.text = "New Text"
         case .image: l.path = path; l.width = 600
+        case .video:
+            l.path = path
+            l.start = time
+            if let path { l.name = (path as NSString).lastPathComponent }
+            try? l.loadVideoInfo(sceneFps: scene.fps)
+            // Natural size, scaled down to fit the frame when larger (set explicitly so the selection box knows it).
+            if let path, let info = try? VideoSource.info(of: path), info.width > 0, info.height > 0 {
+                let fit = min(1, Double(scene.width) / Double(info.width), Double(scene.height) / Double(info.height))
+                l.width = .constant((Double(info.width) * fit).rounded())
+                l.height = .constant((Double(info.height) * fit).rounded())
+            }
         case .camera: l.id = "camera"
         case .audio:
             l.path = path
@@ -246,6 +260,16 @@ final class SceneStore: SceneHost {
         }
     }
 
+    /// A movie file, or a folder of numbered images (a rendered image sequence).
+    func addVideoLayer() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.movie, .folder]
+        panel.canChooseDirectories = true
+        panel.message = "Choose a movie (.mov/.mp4) or a folder of numbered images (e.g. a Blender PNG render)"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        addFileLayer(url.path)
+    }
+
     func addImageLayer() {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.image]
@@ -255,9 +279,19 @@ final class SceneStore: SceneHost {
 
     // MARK: - Assets
 
-    /// Adds an image or audio layer for a file (an asset, or a file dropped from Finder).
+    /// Adds an image, video or audio layer for a file (an asset, or a file dropped from Finder). A folder becomes an
+    /// image-sequence video layer.
     func addFileLayer(_ path: String) {
         let name = (path as NSString).lastPathComponent
+        if VideoSource.isSequence(path) {
+            do {
+                _ = try VideoSource.info(of: path)
+                addLayer(.video, path: path)
+            } catch {
+                message = error.localizedDescription
+            }
+            return
+        }
         var path = path
         // A project keeps its own copy of every file it uses, so the folder stays complete.
         if project != nil, !AssetStore.contains(path), AssetStore.kind(of: URL(fileURLWithPath: path)) != .other {
@@ -278,8 +312,15 @@ final class SceneStore: SceneHost {
                 return
             }
             addLayer(.audio, path: path)
+        case .video:
+            do {
+                _ = try VideoSource.info(of: path)
+                addLayer(.video, path: path)
+            } catch {
+                message = "Cannot read video \(name): \(error.localizedDescription)"
+            }
         default:
-            message = "\(name) is not an image or audio file"
+            message = "\(name) is not an image, video or audio file"
         }
     }
 
@@ -538,7 +579,7 @@ final class SceneStore: SceneHost {
 
     private func load(_ loaded: MotionScene, from url: URL) {
         var s = loaded
-        let problems = s.refreshAudioInfo()
+        let problems = s.refreshMediaInfo()
         if !problems.isEmpty { message = problems.joined(separator: "; ") }
         apply("Open") { $0 = s }
         fileURL = url

@@ -157,6 +157,7 @@ struct LayerInspector: View {
         switch layer.type {
         case .text: return "Text"
         case .image: return "Image"
+        case .video: return "Video"
         default: return "Shape"
         }
     }
@@ -225,26 +226,77 @@ struct LayerInspector: View {
             AnimColorField(layer: layer, property: .color, label: "Color")
         case .image:
             FileRow(path: layer.path, kind: .image) { p in store.updateLayer(id, "Change Image") { $0.path = p } }
+            sizeFields
+        case .video:
+            let fps = store.scene.fps
+            FileRow(path: layer.path, kind: .video) { p in
+                store.updateLayer(id, "Change Video") { l in
+                    l.path = p; l.trimIn = 0; l.fps = nil
+                    try? l.loadVideoInfo(sceneFps: fps)
+                }
+            }
+            let sequence = layer.path.map(VideoSource.isSequence) ?? false
+            if let d = layer.sourceDuration {
+                Text(String(format: "%@ length %.2fs", sequence ? "Sequence" : "Clip", d))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            sizeFields
             Grid(horizontalSpacing: 8, verticalSpacing: 6) {
                 GridRow {
-                    let w = layer.width?.value(at: store.panelTime) ?? 0
-                    let h = layer.height?.value(at: store.panelTime) ?? 0
-                    HStack(spacing: 2) {
-                        NumberField("W", w, unit: layer.width == nil ? "auto" : nil, digits: 0) { v in
-                            store.setValue(id, .width, max(0, v))
+                    NumberField("Trim in", layer.trimIn, unit: "s") { v in store.updateLayer(id, "Trim Video") { $0.trimIn = max(0, v) } }
+                    NumberField("Speed", layer.speed, unit: "×") { v in store.updateLayer(id, "Video Speed") { $0.speed = max(0.05, v) } }
+                }
+                if sequence {
+                    GridRow {
+                        NumberField("FPS", layer.fps ?? Double(fps), digits: 0) { v in
+                            store.updateLayer(id, "Sequence FPS") { l in
+                                l.fps = max(1, v)
+                                try? l.loadVideoInfo(sceneFps: fps)
+                            }
                         }
-                        if layer.width != nil { KeyframeButton(layer: layer, property: .width) }
-                    }
-                    HStack(spacing: 2) {
-                        NumberField("H", h, unit: layer.height == nil ? "auto" : nil, digits: 0) { v in
-                            store.setValue(id, .height, max(0, v))
-                        }
-                        if layer.height != nil { KeyframeButton(layer: layer, property: .height) }
+                        .help("Frame rate the images were rendered at (Blender's default is 24)")
+                        Color.clear.frame(height: 1)
                     }
                 }
             }
+            HStack(spacing: 6) {
+                RowLabel("At end")
+                Picker("", selection: Binding(get: { layer.playback },
+                                              set: { v in store.updateLayer(id, "Video Playback") { $0.playback = v } })) {
+                    Text("Stop").tag(VideoPlayback.once)
+                    Text("Hold").tag(VideoPlayback.hold)
+                    Text("Loop").tag(VideoPlayback.loop)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .controlSize(.small)
+            }
+            .help("Stop: the layer ends with the clip. Hold: the last frame stays. Loop: the clip starts over.")
         case .audio, .camera:
             EmptyView()
+        }
+    }
+
+    /// Width/height of an image or video ("auto" = natural size; one side set keeps the aspect).
+    @ViewBuilder private var sizeFields: some View {
+        let id = layer.id
+        Grid(horizontalSpacing: 8, verticalSpacing: 6) {
+            GridRow {
+                let w = layer.width?.value(at: store.panelTime) ?? 0
+                let h = layer.height?.value(at: store.panelTime) ?? 0
+                HStack(spacing: 2) {
+                    NumberField("W", w, unit: layer.width == nil ? "auto" : nil, digits: 0) { v in
+                        store.setValue(id, .width, max(0, v))
+                    }
+                    if layer.width != nil { KeyframeButton(layer: layer, property: .width) }
+                }
+                HStack(spacing: 2) {
+                    NumberField("H", h, unit: layer.height == nil ? "auto" : nil, digits: 0) { v in
+                        store.setValue(id, .height, max(0, v))
+                    }
+                    if layer.height != nil { KeyframeButton(layer: layer, property: .height) }
+                }
+            }
         }
     }
 }
@@ -573,7 +625,7 @@ struct FileRow: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Image(systemName: kind == .image ? "photo" : "waveform").foregroundStyle(.secondary)
+            Image(systemName: kind == .image ? "photo" : kind == .video ? "film" : "waveform").foregroundStyle(.secondary)
             Text((path as NSString?)?.lastPathComponent ?? "No file")
                 .lineLimit(1).truncationMode(.middle)
                 .foregroundStyle(path == nil ? .secondary : .primary)
@@ -588,7 +640,13 @@ struct FileRow: View {
                 }
                 Button("Other File…") {
                     let panel = NSOpenPanel()
-                    panel.allowedContentTypes = [kind == .image ? .image : .audio]
+                    switch kind {
+                    case .image: panel.allowedContentTypes = [.image]
+                    case .video:
+                        panel.allowedContentTypes = [.movie, .folder] // a folder = image sequence
+                        panel.canChooseDirectories = true
+                    default: panel.allowedContentTypes = [.audio]
+                    }
                     if panel.runModal() == .OK, let url = panel.url { onPick(url.path) }
                 }
             }

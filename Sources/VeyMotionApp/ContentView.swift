@@ -90,6 +90,8 @@ struct ContentView: View {
                         .help("Add text (⇧⌘T)")
                     Button { store.addImageLayer() } label: { Label("Image", systemImage: "photo") }
                         .help("Add image from a file")
+                    Button { store.addVideoLayer() } label: { Label("Video", systemImage: "film") }
+                        .help("Add a movie or an image sequence (e.g. a 3D render from Blender)")
                     Button { store.addAudioLayer() } label: { Label("Audio", systemImage: "music.note") }
                         .help("Add audio file")
                     Button { showVoice = true } label: { Label("Voice-over", systemImage: "mic") }
@@ -161,9 +163,47 @@ struct ResizeHandle: View {
 
 // MARK: - Canvas
 
+/// Renders canvas frames on a background queue. Requests made while a frame is rendering are coalesced:
+/// only the latest one is drawn next, so a slow scene drops frames instead of stalling the UI.
+@Observable
+final class PreviewRenderer {
+    private(set) var image: CGImage?
+    @ObservationIgnored private let queue = DispatchQueue(label: "VeyMotion.preview", qos: .userInteractive)
+    @ObservationIgnored private let renderer = FrameRenderer() // only used on `queue`
+    @ObservationIgnored private var busy = false
+    @ObservationIgnored private var pending: (scene: MotionScene, time: Double, scale: Double)?
+
+    /// Call on the main thread.
+    func request(_ scene: MotionScene, at time: Double, scale: Double) {
+        pending = (scene, time, scale)
+        renderNext()
+    }
+
+    private func renderNext() {
+        guard !busy, let job = pending else { return }
+        pending = nil
+        busy = true
+        queue.async { [renderer] in
+            let img = renderer.makeImage(job.scene, at: job.time, scale: job.scale)
+            DispatchQueue.main.async {
+                self.image = img
+                self.busy = false
+                self.renderNext()
+            }
+        }
+    }
+}
+
 struct CanvasView: View {
     @Environment(SceneStore.self) private var store
     @Environment(\.displayScale) private var displayScale
+    @State private var preview = PreviewRenderer()
+
+    private struct FrameKey: Equatable {
+        var revision: Int
+        var time: Double
+        var scale: Double
+    }
 
     var body: some View {
         GeometryReader { geo in
@@ -173,9 +213,12 @@ struct CanvasView: View {
             let fit = avail.width / avail.height > aspect
                 ? CGSize(width: avail.height * aspect, height: avail.height)
                 : CGSize(width: avail.width, height: avail.width / aspect)
-            let scale = min(1, fit.width * displayScale / Double(scene.width))
+            // While playing, one pixel per point (a quarter of the pixels on Retina); full sharpness when paused.
+            let density = store.isPlaying ? 1 : displayScale
+            let scale = min(1, fit.width * density / Double(scene.width))
+            let key = FrameKey(revision: store.sceneRevision, time: store.time, scale: scale)
             ZStack {
-                if let img = store.renderer.makeImage(scene, at: store.time, scale: scale) {
+                if let img = preview.image {
                     Image(decorative: img, scale: 1)
                         .resizable()
                         .interpolation(.high)
@@ -189,6 +232,9 @@ struct CanvasView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .onChange(of: key, initial: true) { _, k in preview.request(store.scene, at: k.time, scale: k.scale) }
+            // An image file overwritten in place (e.g. by write_asset) leaves the scene unchanged.
+            .onChange(of: AssetLibrary.shared.assets) { preview.request(store.scene, at: key.time, scale: key.scale) }
         }
         .background(Color(nsColor: .underPageBackgroundColor))
         // Drop images/audio from the Assets panel or Finder to add them as layers.
@@ -212,8 +258,8 @@ struct SelectionBox: View {
             let x = v?.value(at: time) ?? 0
             return x > 0 ? x : fallback
         }
-        let w = layer.type == .image ? size(layer.width, 400) : layer.shapeWidth(at: time)
-        let h = layer.type == .image ? size(layer.height, 240) : layer.shapeHeight(at: time)
+        let w = layer.type.hasNaturalSize ? size(layer.width, 400) : layer.shapeWidth(at: time)
+        let h = layer.type.hasNaturalSize ? size(layer.height, 240) : layer.shapeHeight(at: time)
         if let screen = scene.screenTransform(of: layer, at: time) {
             Path(CGRect(x: -w / 2, y: -h / 2, width: w, height: h))
                 .applying(screen.concatenating(CGAffineTransform(scaleX: unit, y: unit)))
@@ -452,7 +498,7 @@ struct JSONEditorSheet: View {
     private func applyDraft() {
         do {
             var s = try SceneJSON.decode(MotionScene.self, from: Data(draft.utf8))
-            s.refreshAudioInfo()
+            s.refreshMediaInfo()
             store.apply("Edit JSON") { $0 = s }
             dismiss()
         } catch let e {

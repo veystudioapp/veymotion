@@ -1,10 +1,13 @@
 import Foundation
 
 public enum LayerType: String, Codable, CaseIterable, Sendable {
-    case rect, ellipse, text, image, audio, camera
+    case rect, ellipse, text, image, video, audio, camera
 
     /// Drawn in the frame (audio and camera layers are not).
     public var isVisual: Bool { self != .audio && self != .camera }
+
+    /// Images and videos: sized by their file unless width/height are set.
+    public var hasNaturalSize: Bool { self == .image || self == .video }
 }
 
 /// What an audio layer is, used for ducking (music dips under voice) and display.
@@ -180,20 +183,28 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
     /// Per-character / word / line animations (staggered entrances and exits).
     public var textAnimators: [TextAnimator]
 
-    // Image / audio file
+    // Image / video / audio file (a video can also be a folder of numbered images)
     public var path: String?
+
+    // Video
+    /// Playback rate (2 = twice as fast).
+    public var speed: Double
+    /// What happens after the last frame.
+    public var playback: VideoPlayback
+    /// Image sequences: frames per second of the images (set from the scene when the layer is added).
+    public var fps: Double?
 
     // Audio
     /// Gain (1 = original level), animatable.
     public var volume: AnimValue
     public var role: AudioRole
-    /// Seconds skipped at the beginning of the file.
+    /// Seconds skipped at the beginning of the file (audio and video).
     public var trimIn: Double
     public var fadeIn: Double
     public var fadeOut: Double
     /// Music only: gain while a voice layer is speaking (e.g. 0.25). nil = no ducking.
     public var duckTo: Double?
-    /// Length of the audio file in seconds (filled in when the layer is added).
+    /// Length of the audio/video source in seconds (filled in when the layer is added).
     public var sourceDuration: Double?
     /// Voice layers: the spoken text and per-word timings.
     public var transcript: String?
@@ -232,6 +243,9 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         maxWidth = nil
         textAnimators = []
         path = nil
+        speed = 1
+        playback = .once
+        fps = nil
         volume = .constant(1)
         role = .sfx
         trimIn = 0
@@ -253,8 +267,8 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
             case .opacity: return opacity
             case .reveal: return reveal
             case .volume: return volume
-            case .width: return width ?? .constant(type == .image ? 0 : p.defaultValue)
-            case .height: return height ?? .constant(type == .image ? 0 : p.defaultValue)
+            case .width: return width ?? .constant(type.hasNaturalSize ? 0 : p.defaultValue)
+            case .height: return height ?? .constant(type.hasNaturalSize ? 0 : p.defaultValue)
             case .cornerRadius: return cornerRadius
             case .strokeWidth: return strokeWidth
             default: return extra[p] ?? .constant(p.defaultValue)
@@ -269,8 +283,8 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
             case .opacity: opacity = newValue
             case .reveal: reveal = newValue
             case .volume: volume = newValue
-            case .width: width = (type == .image && newValue == .constant(0)) ? nil : newValue
-            case .height: height = (type == .image && newValue == .constant(0)) ? nil : newValue
+            case .width: width = (type.hasNaturalSize && newValue == .constant(0)) ? nil : newValue
+            case .height: height = (type.hasNaturalSize && newValue == .constant(0)) ? nil : newValue
             case .cornerRadius: cornerRadius = newValue
             case .strokeWidth: strokeWidth = newValue
             default: extra[p] = newValue == .constant(p.defaultValue) ? nil : newValue
@@ -323,7 +337,7 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         case .rect: list += [.width, .height, .cornerRadius, .strokeWidth, .trim]
         case .ellipse: list += [.width, .height, .strokeWidth, .trim]
         case .text: list += [.reveal, .letterSpacing]
-        case .image: list += [.width, .height]
+        case .image, .video: list += [.width, .height]
         case .audio, .camera: break
         }
         list += [.blur, .shadowX, .shadowY, .shadowBlur, .shadowOpacity]
@@ -341,6 +355,16 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
 
     /// Playable length of an audio layer's file after trimming.
     public var audioLength: Double? { sourceDuration.map { max(0, $0 - trimIn) } }
+
+    /// Scene seconds the layer can last before its source runs out: audio, and videos that play once.
+    /// nil when unknown or unlimited (videos that hold or loop).
+    public var mediaLength: Double? {
+        switch type {
+        case .audio: return audioLength
+        case .video where playback == .once: return sourceDuration.map { max(0, $0 - trimIn) / max(speed, 0.01) }
+        default: return nil
+        }
+    }
 
     public var animatedProperties: [AnimProperty] {
         AnimProperty.allCases.filter { self[$0].isAnimated }
@@ -435,10 +459,10 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         (Array(keyframeTimes.prefix(1)) + textAnimators.map(\.start)).min()
     }
 
-    /// Visual layers default to the scene end; audio layers to the end of their (trimmed) file.
+    /// Visual layers default to the scene end; audio layers and videos that play once to the end of their (trimmed) file.
     public func effectiveEnd(sceneDuration: Double) -> Double {
         if let end { return end }
-        if type == .audio, let len = audioLength { return start + len }
+        if let len = mediaLength { return start + len }
         return sceneDuration
     }
 
@@ -457,7 +481,7 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         case parent, motionPath, loop, wiggle, textAnimators
         case width, height, cornerRadius, fill, stroke, strokeWidth
         case text, fontSize, fontWeight, fontName, color, align, maxWidth
-        case path
+        case path, speed, playback, fps
         case volume, role, trimIn, fadeIn, fadeOut, duckTo, sourceDuration, transcript, words
     }
 
@@ -508,6 +532,12 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         maxWidth = try c.decodeIfPresent(Double.self, forKey: .maxWidth)
         textAnimators = try c.decodeIfPresent([TextAnimator].self, forKey: .textAnimators) ?? []
         path = try c.decodeIfPresent(String.self, forKey: .path)
+        speed = try c.decodeIfPresent(Double.self, forKey: .speed) ?? 1
+        guard speed > 0 else {
+            throw DecodingError.dataCorruptedError(forKey: .speed, in: c, debugDescription: "speed must be greater than 0")
+        }
+        playback = try c.decodeIfPresent(VideoPlayback.self, forKey: .playback) ?? .once
+        fps = try c.decodeIfPresent(Double.self, forKey: .fps).flatMap { $0 > 0 ? $0 : nil }
         volume = try c.decodeIfPresent(AnimValue.self, forKey: .volume) ?? volume
         role = try c.decodeIfPresent(AudioRole.self, forKey: .role) ?? role
         trimIn = max(0, try c.decodeIfPresent(Double.self, forKey: .trimIn) ?? 0)
@@ -595,6 +625,15 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
             try c.encodeIfPresent(path, forKey: .path)
             try c.encodeIfPresent(width, forKey: .width)
             try c.encodeIfPresent(height, forKey: .height)
+        case .video:
+            try c.encodeIfPresent(path, forKey: .path)
+            try c.encodeIfPresent(width, forKey: .width)
+            try c.encodeIfPresent(height, forKey: .height)
+            if trimIn > 0 { try c.encode(trimIn, forKey: .trimIn) }
+            if speed != 1 { try c.encode(speed, forKey: .speed) }
+            try c.encode(playback, forKey: .playback)
+            try c.encodeIfPresent(fps, forKey: .fps)
+            try c.encodeIfPresent(sourceDuration, forKey: .sourceDuration)
         }
     }
 }

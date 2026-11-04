@@ -56,8 +56,8 @@ extension MotionScene {
     public mutating func setTiming(_ id: String, start: Double?, end: Double?) throws {
         let i = try layerIndex(id)
         let minLen = 1.0 / Double(max(fps, 1))
-        if layers[i].type == .audio {
-            try setAudioTiming(i, start: start, end: end, minLen: minLen)
+        if layers[i].type == .audio || layers[i].type == .video {
+            try setMediaTiming(i, start: start, end: end, minLen: minLen)
             return
         }
         var s = max(0, start ?? layers[i].start)
@@ -71,21 +71,23 @@ extension MotionScene {
         layers[i].end = (end == nil && layers[i].end == nil) ? nil : e
     }
 
-    /// Audio trims like a video editor: moving the start also moves the in-point inside the file, so the
-    /// sound stays where it was; the end can't extend past the end of the file.
-    private mutating func setAudioTiming(_ i: Int, start: Double?, end: Double?, minLen: Double) throws {
+    /// Audio and video trim like a video editor: moving the start also moves the in-point inside the file, so the
+    /// content stays where it was; the end can't extend past the end of the file (videos that hold or loop can).
+    private mutating func setMediaTiming(_ i: Int, start: Double?, end: Double?, minLen: Double) throws {
         var l = layers[i]
         let oldStart = l.start
         let curEnd = l.effectiveEnd(sceneDuration: duration)
+        let rate = l.type == .video ? max(l.speed, 0.01) : 1 // source seconds per scene second
         if let start {
-            var s = max(0, start, oldStart - l.trimIn) // can't reveal audio before the file starts
+            var s = max(0, start, oldStart - l.trimIn / rate) // can't reveal media before the file starts
             s = min(s, curEnd - minLen)
-            l.trimIn = max(0, l.trimIn + (s - oldStart))
+            l.trimIn = max(0, l.trimIn + (s - oldStart) * rate)
             l.start = s
         }
         if let end {
             var e = max(end, l.start + minLen)
-            if let len = l.audioLength { e = min(e, l.start + len) }
+            if let len = l.mediaLength { e = min(e, l.start + len) }
+            if l.type == .video { e = min(e, duration) }
             l.end = e
         }
         layers[i] = l

@@ -92,7 +92,7 @@ public final class MCPServer {
         case "set_scene":
             guard let obj = a["scene"] as? [String: Any] else { throw ToolError("`scene` must be an object") }
             var scene = try SceneJSON.decode(MotionScene.self, fromObject: obj)
-            let problems = scene.refreshAudioInfo()
+            let problems = scene.refreshMediaInfo()
             try host.mutate("Set Scene") { $0 = scene }
             return text("Scene set: \(scene.width)x\(scene.height) @\(scene.fps)fps, \(scene.duration)s, \(scene.layers.count) layers: \(scene.layers.map(\.id).joined(separator: ", "))" + warnings(problems))
 
@@ -109,7 +109,7 @@ public final class MCPServer {
             var problems: [String] = []
             try host.mutate("Add Layer") {
                 newId = $0.addLayer(layer, at: a["index"] as? Int)
-                problems = $0.refreshAudioInfo()
+                problems = $0.refreshMediaInfo()
             }
             return text("Added layer '\(newId)'" + warnings(problems))
 
@@ -120,7 +120,7 @@ public final class MCPServer {
             var problems: [String] = []
             try host.mutate("Add \(layers.count) Layers") { s in
                 ids = layers.map { s.addLayer($0) }
-                problems = s.refreshAudioInfo()
+                problems = s.refreshMediaInfo()
             }
             return text("Added \(ids.count) layers: \(ids.joined(separator: ", ")) (scene now has \(host.currentScene().layers.count))" + warnings(problems))
 
@@ -130,10 +130,10 @@ public final class MCPServer {
             let newId = changes["id"] as? String ?? id
             try host.mutate("Update Layer") { s in
                 try s.updateLayer(id, patch: changes)
-                if changes["path"] != nil, let i = s.layers.firstIndex(where: { $0.id == newId }) {
-                    s.layers[i].sourceDuration = nil // new file: re-read its length
+                if changes["path"] != nil || changes["fps"] != nil, let i = s.layers.firstIndex(where: { $0.id == newId }) {
+                    s.layers[i].sourceDuration = nil // new file or image-sequence rate: re-read its length
                 }
-                s.refreshAudioInfo()
+                s.refreshMediaInfo()
             }
             return text(SceneJSON.string(try host.currentScene().layer(newId)))
 

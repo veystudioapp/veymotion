@@ -88,13 +88,21 @@ public enum AudioFileInfo {
 extension MotionScene {
     public var audioLayers: [MotionLayer] { layers.filter { $0.type == .audio && $0.path != nil } }
 
-    /// Fills `sourceDuration` for audio layers that don't have it yet. Returns problems (unreadable files).
+    /// Fills `sourceDuration` for audio and video layers that don't have it yet. Returns problems (unreadable files).
     @discardableResult
-    public mutating func refreshAudioInfo() -> [String] {
+    public mutating func refreshMediaInfo() -> [String] {
         var problems: [String] = []
-        for i in layers.indices where layers[i].type == .audio && layers[i].sourceDuration == nil {
+        for i in layers.indices where layers[i].sourceDuration == nil {
             guard let p = layers[i].path else { continue }
-            do { layers[i].sourceDuration = try AudioFileInfo.duration(of: p) } catch { problems.append(error.localizedDescription) }
+            do {
+                switch layers[i].type {
+                case .audio: layers[i].sourceDuration = try AudioFileInfo.duration(of: p)
+                case .video: try layers[i].loadVideoInfo(sceneFps: fps)
+                default: break
+                }
+            } catch {
+                problems.append(error.localizedDescription)
+            }
         }
         return problems
     }

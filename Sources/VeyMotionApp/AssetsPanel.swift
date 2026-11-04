@@ -226,7 +226,7 @@ struct AssetsPanel: View {
                 Button { copySceneCredits() } label: { Image(systemName: "text.quote") }
                     .help("Copy credits for the downloaded assets used in this scene")
                 Button { if let a = selectedFile { store.addFileLayer(a.path) } } label: { Image(systemName: "plus.rectangle.on.rectangle") }
-                    .disabled(selectedFile.map { $0.kind != .image && $0.kind != .audio } ?? true)
+                    .disabled(selectedFile.map { ![.image, .audio, .video].contains($0.kind) } ?? true)
                     .help("Add to scene (or drag onto the canvas)")
                 Button { NSWorkspace.shared.open(folder.isEmpty ? libRoot : libRoot.appendingPathComponent(folder)) } label: {
                     Image(systemName: "folder")
@@ -353,7 +353,7 @@ struct AssetsPanel: View {
 
     @ViewBuilder
     private func fileMenu(_ asset: AssetInfo) -> some View {
-        if asset.kind == .image || asset.kind == .audio {
+        if asset.kind == .image || asset.kind == .audio || asset.kind == .video {
             Button(readOnly ? "Add to Scene (copies into the project)" : "Add to Scene") { store.addFileLayer(asset.path) }
         }
         if readOnly {

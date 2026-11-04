@@ -223,6 +223,12 @@ extension AssetStore {
             }
         case .audio:
             a.duration = try? AudioFileInfo.duration(of: url.path)
+        case .video:
+            if let v = try? VideoSource.info(of: url.path) {
+                a.duration = v.duration
+                a.pixelWidth = v.width
+                a.pixelHeight = v.height
+            }
         default:
             break
         }

@@ -10,6 +10,8 @@ import UniformTypeIdentifiers
 /// Not thread-safe: use one instance per thread.
 public final class FrameRenderer {
     private var imageCache: [String: (image: CGImage, size: CGSize, modified: Double?)] = [:]
+    /// Open video decoders by path, reopened when the file (or sequence folder) changes. nil = unreadable.
+    private var videoCache: [String: (frames: VideoFrames?, modified: Double?)] = [:]
     public static let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
 
     public init() {}
@@ -83,7 +85,7 @@ public final class FrameRenderer {
         let blur = max(0, layer.value(.blur, at: t)) + camera.depthBlur(depth)
 
         ctx.saveGState()
-        let shadowed = applyShadow(layer, at: t, in: ctx)
+        let shadowReach = applyShadow(layer, at: t, in: ctx)
         ctx.setAlpha(opacity)
         if blur * pixelScale > 0.25 {
             // The blurred layer is a device-pixel image of part of the frame: draw it 1:1 at its place.
@@ -95,11 +97,18 @@ public final class FrameRenderer {
                 ctx.draw(blurred.image, in: CGRect(x: r.minX * sx, y: r.minY * sy, width: r.width * sx, height: r.height * sy))
             }
         } else {
+            // Shadow and partial opacity apply to the layer as a whole, through an offscreen layer that costs
+            // a pass over its area: skip it when neither is set, and bound it to what the layer can reach.
+            let grouped = shadowReach != nil || opacity < 1
+            if grouped {
+                if let local = contentBounds(layer, at: t) {
+                    let pad = (shadowReach ?? 0) + 2
+                    ctx.beginTransparencyLayer(in: local.applying(m).insetBy(dx: -pad, dy: -pad), auxiliaryInfo: nil)
+                } else {
+                    ctx.beginTransparencyLayer(auxiliaryInfo: nil)
+                }
+            }
             ctx.concatenate(m)
-            // Shadow and partial opacity apply to the layer as a whole. Without them, drawing directly
-            // gives the same pixels and skips an offscreen pass.
-            let grouped = shadowed || opacity < 1
-            if grouped { ctx.beginTransparencyLayer(auxiliaryInfo: nil) }
             drawContent(layer, at: t, in: ctx)
             if grouped { ctx.endTransparencyLayer() }
         }
@@ -110,22 +119,23 @@ public final class FrameRenderer {
         switch layer.type {
         case .rect, .ellipse: drawShape(layer, at: t, in: ctx)
         case .text: drawText(layer, at: t, in: ctx)
-        case .image: drawImage(layer, at: t, in: ctx)
+        case .image, .video: drawImage(layer, at: t, in: ctx)
         case .audio, .camera: break
         }
     }
 
     /// Drop shadow of the whole layer. Offsets are in scene pixels (y down), independent of rotation.
-    private func applyShadow(_ layer: MotionLayer, at t: Double, in ctx: CGContext) -> Bool {
+    /// Returns how far the shadow reaches beyond the layer, in scene pixels, or nil when there is none.
+    private func applyShadow(_ layer: MotionLayer, at t: Double, in ctx: CGContext) -> Double? {
         let amount = min(max(layer.value(.shadowOpacity, at: t), 0), 1)
-        guard amount > 0.001 else { return false }
+        guard amount > 0.001 else { return nil }
         var c = layer.shadowColor
         c.a *= amount
-        let dx = layer.value(.shadowX, at: t) * pixelScale
-        let dy = layer.value(.shadowY, at: t) * pixelScale
-        ctx.setShadow(offset: CGSize(width: dx, height: -dy), blur: max(0, layer.value(.shadowBlur, at: t)) * pixelScale,
+        let x = layer.value(.shadowX, at: t), y = layer.value(.shadowY, at: t)
+        let blur = max(0, layer.value(.shadowBlur, at: t))
+        ctx.setShadow(offset: CGSize(width: x * pixelScale, height: -y * pixelScale), blur: blur * pixelScale,
                       color: c.cgColor)
-        return true
+        return max(abs(x), abs(y)) + 2 * blur
     }
 
     /// Renders the layer alone and applies a gaussian blur (radius in scene pixels). Returns the blurred image and
@@ -163,7 +173,7 @@ public final class FrameRenderer {
             let w = max(layer.shapeWidth(at: t), 0), h = max(layer.shapeHeight(at: t), 0)
             let stroke = max(layer.value(.strokeWidth, at: t), 0) // covers half the line plus miter corners
             return CGRect(x: -w / 2, y: -h / 2, width: w, height: h).insetBy(dx: -stroke, dy: -stroke)
-        case .image:
+        case .image, .video:
             return imageFrame(layer, at: t).rect.insetBy(dx: -4, dy: -4) // placeholder outline
         case .text:
             guard layer.textAnimators.isEmpty, let box = textLayout(layer, at: t)?.box else { return nil }
@@ -398,13 +408,21 @@ public final class FrameRenderer {
         ctx.restoreGState()
     }
 
-    /// The image (nil if missing) and its layer-local rect: natural size unless width/height are set.
+    /// The image or video frame (nil if missing) and its layer-local rect: natural size unless width/height are set.
     private func imageFrame(_ layer: MotionLayer, at t: Double) -> (image: CGImage?, rect: CGRect) {
         let setW = layer.width.map { $0.value(at: t) }.flatMap { $0 > 0 ? $0 : nil }
         let setH = layer.height.map { $0.value(at: t) }.flatMap { $0 > 0 ? $0 : nil }
         var img: CGImage?
         var w = setW ?? 400, h = setH ?? 240
-        if let path = layer.path, let loaded = loadImage(path) {
+        let source: (CGImage?, CGSize)?
+        if layer.type == .video {
+            source = layer.path.flatMap(videoFrames).map { frames in
+                (layer.videoTime(at: t).flatMap { frames.image(at: $0, fps: layer.fps ?? 30) }, frames.size)
+            }
+        } else {
+            source = layer.path.flatMap(loadImage).map { ($0.0, $0.1) }
+        }
+        if let loaded = source, loaded.1.width > 0, loaded.1.height > 0 {
             img = loaded.0
             let iw = Double(loaded.1.width), ih = Double(loaded.1.height)
             w = setW ?? iw; h = setH ?? ih
@@ -425,13 +443,26 @@ public final class FrameRenderer {
         ctx.strokePath()
     }
 
+    /// Modification time of a file or folder (a folder changes when images are added or removed).
+    /// Checked every frame, so a bare stat(2) rather than FileManager's attribute dictionary.
+    private static func modificationTime(_ path: String) -> Double? {
+        var info = stat()
+        return stat(path, &info) == 0 ? Double(info.st_mtimespec.tv_sec) + Double(info.st_mtimespec.tv_nsec) / 1e9 : nil
+    }
+
+    private func videoFrames(_ path: String) -> VideoFrames? {
+        let expanded = (path as NSString).expandingTildeInPath
+        let modified = Self.modificationTime(expanded)
+        if let cached = videoCache[expanded], cached.modified == modified { return cached.frames }
+        let frames = modified == nil ? nil : VideoFramesFactory.open(expanded)
+        videoCache[expanded] = (frames, modified)
+        return frames
+    }
+
     private func loadImage(_ path: String) -> (CGImage, CGSize)? {
         let expanded = (path as NSString).expandingTildeInPath
         // Keyed by modification date too, so a file that is overwritten (e.g. by write_asset) reloads.
-        // Checked every frame, so a bare stat(2) rather than FileManager's attribute dictionary.
-        var info = stat()
-        let modified = stat(expanded, &info) == 0
-            ? Double(info.st_mtimespec.tv_sec) + Double(info.st_mtimespec.tv_nsec) / 1e9 : nil
+        let modified = Self.modificationTime(expanded)
         if let cached = imageCache[expanded], cached.modified == modified { return (cached.image, cached.size) }
         guard let loaded = AssetStore.loadImage(URL(fileURLWithPath: expanded)) else { return nil }
         imageCache[expanded] = (loaded.image, loaded.size, modified)

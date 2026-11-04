@@ -50,6 +50,7 @@ struct VeyMotionApp: App {
                 Button("Add Ellipse") { store.addLayer(.ellipse) }
                 Button("Add Text") { store.addLayer(.text) }.keyboardShortcut("t", modifiers: [.command, .shift])
                 Button("Add Image…") { store.addImageLayer() }
+                Button("Add Video or Image Sequence…") { store.addVideoLayer() }
                 Button("Add Audio File…") { store.addAudioLayer() }
                 Divider()
                 Button("Duplicate") { store.duplicateSelected() }.keyboardShortcut("d").disabled(store.selection == nil)
