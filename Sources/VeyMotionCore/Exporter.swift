@@ -56,23 +56,69 @@ public enum ExportQuality: String, Codable, CaseIterable, Sendable {
     }
 }
 
+public struct PixelSize: Hashable, Codable, Sendable {
+    public var width: Int
+    public var height: Int
+    public init(width: Int, height: Int) { self.width = width; self.height = height }
+}
+
+/// How the scene is placed in an output frame of a different aspect ratio.
+public enum ExportFit: String, Codable, CaseIterable, Sendable {
+    /// Whole scene visible, bars (scene background) on the sides.
+    case fit
+    /// Fills the frame, cropping the scene's edges (centered).
+    case fill
+}
+
 public struct ExportOptions: Sendable {
     /// nil = infer from the file extension.
     public var format: ExportFormat?
-    /// Output size relative to the scene size (0.5 = half resolution).
+    /// Output size relative to the scene size (0.5 = half resolution). Ignored when `size` is set.
     public var scale: Double = 1
+    /// Exact output size (e.g. a platform preset); the scene is fitted or cropped into it per `fit`.
+    public var size: PixelSize?
+    public var fit: ExportFit = .fit
     public var quality: ExportQuality = .medium
     /// Time range in scene seconds; nil = whole scene.
     public var start: Double?
     public var end: Double?
 
-    public init(format: ExportFormat? = nil, scale: Double = 1, quality: ExportQuality = .medium,
-                start: Double? = nil, end: Double? = nil) {
+    public init(format: ExportFormat? = nil, scale: Double = 1, size: PixelSize? = nil, fit: ExportFit = .fit,
+                quality: ExportQuality = .medium, start: Double? = nil, end: Double? = nil) {
         self.format = format
         self.scale = scale
+        self.size = size
+        self.fit = fit
         self.quality = quality
         self.start = start
         self.end = end
+    }
+
+    /// True when the output frame has a different aspect ratio than the scene (bars or cropping).
+    public func isReframed(for scene: MotionScene) -> Bool {
+        guard size != nil else { return false }
+        let (w, h) = pixelSize(for: scene)
+        let out = Double(w) / Double(h), src = Double(scene.width) / Double(max(scene.height, 1))
+        return abs(out / src - 1) > 0.005
+    }
+
+    /// Where the scene lands in the output frame, in output pixels. Larger than the frame with `.fill`.
+    public func contentRect(for scene: MotionScene) -> CGRect {
+        let (w, h) = pixelSize(for: scene)
+        guard isReframed(for: scene) else { return CGRect(x: 0, y: 0, width: w, height: h) }
+        let sx = Double(w) / Double(scene.width), sy = Double(h) / Double(scene.height)
+        let s = fit == .fit ? min(sx, sy) : max(sx, sy)
+        let cw = (Double(scene.width) * s).rounded(), ch = (Double(scene.height) * s).rounded()
+        return CGRect(x: ((Double(w) - cw) / 2).rounded(), y: ((Double(h) - ch) / 2).rounded(), width: cw, height: ch)
+    }
+
+    /// Rough H.264 file size (video bitrate + 192 kbps audio), for platform size warnings. nil for ProRes / audio.
+    public func estimatedBytes(for scene: MotionScene) -> Int64? {
+        guard (format ?? .mp4) == .mp4 else { return nil }
+        let (w, h) = pixelSize(for: scene)
+        let seconds = Double(frameRange(for: scene).count) / Double(scene.fps)
+        let bps = Double(w * h * scene.fps) * quality.bitsPerPixel + (AudioMixer.hasAudio(scene) ? 192_000 : 0)
+        return Int64(bps * seconds / 8)
     }
 
     /// Clamped frame range `[first, last)` for the scene.
@@ -85,6 +131,7 @@ public struct ExportOptions: Sendable {
 
     /// Even pixel size of the output video.
     public func pixelSize(for scene: MotionScene) -> (width: Int, height: Int) {
+        if let size { return (max(2, size.width & ~1), max(2, size.height & ~1)) }
         let s = scale > 0 ? scale : 1
         return (max(2, Int((Double(scene.width) * s).rounded()) & ~1),
                 max(2, Int((Double(scene.height) * s).rounded()) & ~1))
@@ -193,6 +240,16 @@ public enum VideoExporter {
         let failure = ErrorBox()
         let total = range.count
 
+        // A different output aspect: render the scene at its own aspect, then place it (bars or crop).
+        let content = options.contentRect(for: scene)
+        let reframed = options.isReframed(for: scene)
+        let sceneBitmap: CGContext? = reframed
+            ? CGContext(data: nil, width: Int(content.width), height: Int(content.height), bitsPerComponent: 8,
+                        bytesPerRow: 0, space: FrameRenderer.colorSpace,
+                        bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
+            : nil
+        if wantsVideo, reframed, sceneBitmap == nil { throw ExportError.setup("cannot allocate the reframing buffer") }
+
         if let videoInput, let adaptor {
             group.enter()
             let renderer = FrameRenderer()
@@ -222,7 +279,18 @@ public enum VideoExporter {
                         CVPixelBufferUnlockBaseAddress(buffer, [])
                         return finish("cannot create bitmap context")
                     }
-                    renderer.draw(scene, at: Double(range.lowerBound + frame) / fps, in: ctx, pixelWidth: w, pixelHeight: h)
+                    let t = Double(range.lowerBound + frame) / fps
+                    if let sceneBitmap {
+                        renderer.draw(scene, at: t, in: sceneBitmap, pixelWidth: sceneBitmap.width, pixelHeight: sceneBitmap.height)
+                        let frameRect = CGRect(x: 0, y: 0, width: w, height: h)
+                        ctx.clear(frameRect) // keeps alpha for ProRes 4444 with a transparent background
+                        ctx.setFillColor(scene.background.cgColor)
+                        ctx.fill(frameRect)
+                        ctx.interpolationQuality = .high
+                        if let image = sceneBitmap.makeImage() { ctx.draw(image, in: content) }
+                    } else {
+                        renderer.draw(scene, at: t, in: ctx, pixelWidth: w, pixelHeight: h)
+                    }
                     CVPixelBufferUnlockBaseAddress(buffer, [])
                     let time = CMTime(value: CMTimeValue(frame), timescale: CMTimeScale(scene.fps))
                     guard adaptor.append(buffer, withPresentationTime: time) else {

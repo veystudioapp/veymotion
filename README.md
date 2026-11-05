@@ -59,6 +59,26 @@ Same agent in the terminal: `vmotion chat "make the title bounce in"`.
   (`.mp4` AAC, `.mov` PCM, audio-only `.m4a` / `.wav`). Preview and export share one mixer (`AudioMixer`).
 - Generated voice files live in `~/Library/Application Support/VeyMotion/assets/`.
 
+## Social video: export sizes and publishing
+
+- **Platform sizes**: the Export sheet's **Size** menu has TikTok, YouTube Shorts, Reels (1080×1920), YouTube
+  (1920×1080), Facebook feed (1080×1350), X (1920×1080) and Square (1080×1080). A scene of another aspect
+  ratio is **fit** (bars in the background color) or **fill** (cropped), and the sheet warns when the video is
+  longer or (roughly) bigger than the platform accepts. Agents use `export_video` with `preset` / `fit`; the CLI
+  takes `vmotion render scene.json out.mp4 --preset tiktok --fit fill`.
+- **Publishing** (Export → **Publish…** after an export, or File → Publish Video… ⇧⌘E): upload to YouTube,
+  TikTok (to the creator's inbox, or a direct post), a Facebook Page, or X. **Connect** opens the platform's
+  sign-in in the browser. OAuth goes through the `server/` app, which holds the client secrets
+  (`/api/social/*`): create a developer app on each platform, register
+  `<server URL>/api/social/<platform>/callback` as its redirect URI, and put the client id/secret in
+  `server/.env` (see `.env.example`; platforms without credentials show as not set up). Tokens are kept in the
+  login keychain; videos upload straight from the app to the platform, not through the server.
+- Platform rules to know: Google only allows **private** uploads from API projects it has not verified, and
+  TikTok only allows **Only me** direct posts from apps it has not audited (inbox uploads work without the
+  audit). Facebook only lets apps post to Pages, not personal profiles. X needs MP4 (≤ 2:20, 512 MB) and an API
+  plan that allows posting. Agents cannot publish; only the user can, from the app.
+- Platform logos come from [svgl](https://svgl.app).
+
 ## Projects
 
 The **Projects** screen fills the window when the app starts (and with **File ▸ Projects…**, ⇧⌘P, or the grid button

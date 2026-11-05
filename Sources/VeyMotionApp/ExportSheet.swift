@@ -2,13 +2,18 @@ import AppKit
 import SwiftUI
 import VeyMotionCore
 
-/// Export options (format, resolution, quality, range), then live progress with Cancel.
+/// Export options (format, platform size, resolution, quality, range), then live progress with Cancel,
+/// then an optional Publish step.
 struct ExportSheet: View {
     @Environment(SceneStore.self) private var store
     @Environment(\.dismiss) private var dismiss
     @AppStorage("export.format") private var format = ExportFormat.mp4
     @AppStorage("export.scale") private var scale = 1.0
     @AppStorage("export.quality") private var quality = ExportQuality.medium
+    /// A `PlatformPreset` id, or "" for the scene's own size.
+    @AppStorage("export.preset") private var presetId = ""
+    @AppStorage("export.fit") private var fit = ExportFit.fit
+    @State private var publishing: URL?
     @State private var useRange = false
     @State private var start = 0.0
     @State private var end = 0.0
@@ -17,7 +22,24 @@ struct ExportSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Export").font(.headline)
+            if let publishing {
+                PublishView(file: publishing, suggested: preset?.platform, defaultTitle: store.defaultExportName,
+                            onBack: { self.publishing = nil }, onClose: { dismiss() })
+            } else {
+                Text("Export").font(.headline)
+                exportContent
+            }
+        }
+        .padding(16)
+        .frame(width: publishing == nil ? 440 : 500)
+        .onAppear {
+            start = 0
+            end = scene.duration
+        }
+    }
+
+    @ViewBuilder
+    private var exportContent: some View {
             if let p = store.exportProgress {
                 progressView(p)
             } else if let result = store.exportResult {
@@ -25,14 +47,9 @@ struct ExportSheet: View {
             } else {
                 optionsView
             }
-        }
-        .padding(16)
-        .frame(width: 440)
-        .onAppear {
-            start = 0
-            end = scene.duration
-        }
     }
+
+    private var preset: PlatformPreset? { PlatformPreset.named(presetId) }
 
     // MARK: Options
 
@@ -47,6 +64,21 @@ struct ExportSheet: View {
                     Text("WAV — audio only").tag(ExportFormat.wav)
                 }
                 if !format.isAudioOnly {
+                    Picker("Size", selection: $presetId) {
+                        Text("Scene — \(scene.width)×\(scene.height)").tag("")
+                        Divider()
+                        ForEach(PlatformPreset.all) { p in
+                            Text("\(p.name) — \(p.width)×\(p.height) (\(p.aspectLabel))").tag(p.id)
+                        }
+                    }
+                    if preset != nil, options.isReframed(for: scene) {
+                        Picker("Framing", selection: $fit) {
+                            Text("Fit — whole scene, with bars").tag(ExportFit.fit)
+                            Text("Fill — crop the edges").tag(ExportFit.fill)
+                        }
+                    }
+                }
+                if !format.isAudioOnly, preset == nil {
                     Picker("Resolution", selection: $scale) {
                         ForEach([0.25, 0.5, 1, 2], id: \.self) { s in
                             let size = ExportOptions(scale: s).pixelSize(for: scene)
@@ -79,6 +111,9 @@ struct ExportSheet: View {
             .scrollDisabled(true)
 
             Text(summary).font(.caption).foregroundStyle(.secondary)
+            ForEach(presetWarnings, id: \.self) { w in
+                Label(w, systemImage: "exclamationmark.triangle.fill").font(.caption).foregroundStyle(.orange)
+            }
             if format.isAudioOnly && !AudioMixer.hasAudio(scene) {
                 Text("This scene has no audio layers.").font(.caption).foregroundStyle(.red)
             }
@@ -93,8 +128,23 @@ struct ExportSheet: View {
     }
 
     private var options: ExportOptions {
-        ExportOptions(format: format, scale: format.isAudioOnly ? 1 : scale, quality: quality,
+        ExportOptions(format: format, scale: format.isAudioOnly ? 1 : scale,
+                      size: format.isAudioOnly ? nil : preset?.size, fit: fit, quality: quality,
                       start: useRange ? start : nil, end: useRange ? end : nil)
+    }
+
+    private var presetWarnings: [String] {
+        guard let preset, !format.isAudioOnly else { return [] }
+        let o = options
+        var out = preset.warnings(for: scene, duration: Double(o.frameRange(for: scene).count) / Double(scene.fps),
+                                  estimatedBytes: o.estimatedBytes(for: scene))
+        if o.isReframed(for: scene) {
+            out.append("The scene is \(scene.width)×\(scene.height); it will be \(fit == .fit ? "letterboxed" : "cropped") to \(preset.aspectLabel). For the best result, make the scene \(preset.width)×\(preset.height).")
+        }
+        if format == .mov, preset.platform != nil {
+            out.append("Platforms re-encode ProRes uploads and X does not accept MOV; MP4 is smaller and faster to upload.")
+        }
+        return out
     }
 
     private var rangeValid: Bool { !useRange || (start >= 0 && end > start) }
@@ -104,7 +154,8 @@ struct ExportSheet: View {
         let seconds = Double(frames.count) / Double(scene.fps)
         let length = String(format: "%.2fs", seconds)
         if format.isAudioOnly { return "\(length) of audio" }
-        return "\(frames.count) frames · \(length) · \(scene.fps) fps"
+        let (w, h) = options.pixelSize(for: scene)
+        return "\(w)×\(h) · \(frames.count) frames · \(length) · \(scene.fps) fps"
             + (AudioMixer.hasAudio(scene) ? " · with audio" : "")
     }
 
@@ -149,6 +200,12 @@ struct ExportSheet: View {
             HStack {
                 Spacer()
                 Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+                if !ExportFormat.infer(from: url).isAudioOnly {
+                    Button("Publish…") {
+                        PublishStore.shared.lastExport = url
+                        publishing = url
+                    }
+                }
                 Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
             }
         case let .failed(msg):

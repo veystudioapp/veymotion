@@ -462,9 +462,27 @@ public final class MCPServer {
             guard path.hasPrefix("/") else { throw ToolError("`path` must be absolute") }
             let url = URL(fileURLWithPath: path)
             let scene = host.currentScene()
+            var options = ExportOptions()
+            var note = ""
+            if let id = a["preset"] as? String, !id.isEmpty {
+                guard let preset = PlatformPreset.named(id) else {
+                    throw ToolError("Unknown preset '\(id)'. Presets: \(PlatformPreset.all.map(\.id).joined(separator: ", "))")
+                }
+                options.size = preset.size
+                if let f = a["fit"] as? String {
+                    guard let fit = ExportFit(rawValue: f) else { throw ToolError("`fit` is fit or fill") }
+                    options.fit = fit
+                }
+                let (w, h) = options.pixelSize(for: scene)
+                note = " at \(w)×\(h) for \(preset.name)"
+                    + (options.isReframed(for: scene) ? " (\(options.fit == .fit ? "letterboxed" : "cropped") from \(scene.width)×\(scene.height))" : "")
+                let warnings = preset.warnings(for: scene, duration: Double(options.frameRange(for: scene).count) / Double(scene.fps),
+                                               estimatedBytes: options.estimatedBytes(for: scene))
+                if !warnings.isEmpty { note += ". Warning: " + warnings.joined(separator: " ") }
+            }
             let started = Date()
-            try VideoExporter.export(scene, to: url)
-            return text(String(format: "Exported %@ (%d frames) in %.1fs", url.path, scene.frameCount, Date().timeIntervalSince(started)))
+            try VideoExporter.export(scene, to: url, options: options)
+            return text(String(format: "Exported %@ (%d frames) in %.1fs", url.path, scene.frameCount, Date().timeIntervalSince(started)) + note)
 
         default:
             throw RPCError.invalidParams("Unknown tool: \(name)")

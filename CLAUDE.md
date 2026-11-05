@@ -74,4 +74,12 @@ The same `MCPServer` is served three ways: HTTP on `127.0.0.1:19790/mcp` (`Trans
   `server/` (`/api/tts/*`; it holds the VieNeu key) at `BASE_API_URL` (env, else a `.env` in the working dir /
   next to the binary / Application Support). VieNeu gives no word timings, so `VoiceSynth.estimateTimings` fills them.
   Short text uses `/api/tts/speech` (WAV); text over 1500 characters goes through `/api/tts/jobs` and polling.
+- Social video (`Platforms.swift`, `Publish.swift`): `PlatformPreset` sizes feed `ExportOptions.size`; when the
+  aspect differs, `VideoExporter` renders the scene into its own bitmap and places it per `ExportFit` (bars or crop).
+  Publishing: OAuth is brokered by `server/server/api/social/*` (secrets stay there; the app opens `/connect` with a
+  random state + sha256 challenge and polls `/session` with the secret), tokens live in the keychain
+  (`SocialKeychain`), and `SocialPublisher` uploads straight to YouTube (resumable), TikTok (Content Posting API),
+  Facebook Pages (resumable upload API) and X (media upload v2). Publishing is UI-only on purpose: no MCP tool posts.
+  Logos are svgl.app SVGs embedded as strings in `SocialLogos.swift` (the app has no resource bundle).
+  Sandboxed runs cannot encode video at all, and the Nitro server cannot read `server/.env` or listen there.
 - Layer ids are unique: `addLayer` / `duplicateLayer` auto-suffix them (`title-2`), and renaming to a taken id throws.

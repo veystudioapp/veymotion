@@ -8,6 +8,10 @@ enum Docs {
     { "width":1920, "height":1080, "fps":30, "duration":6, "background":"#0E0E12", "layers":[ ... ] }
     - Coordinates: scene pixels, origin top-left, y grows downward. A layer's x/y is its CENTER.
     - layers[0] is drawn first (bottom); the last layer is on top.
+    - For social video, size the scene for the platform: TikTok / YouTube Shorts / Reels 1080×1920 (9:16, Shorts and
+      Reels up to 3 min), YouTube 1920×1080, Facebook feed 1080×1350 (4:5), X 1920×1080 (up to 2:20), square 1080×1080.
+      Keep text and faces out of the bottom ~20% and right edge of 9:16 videos (platform buttons and captions cover them).
+      Publishing is done by the user from the app (Export → Publish); you cannot post.
 
     LAYER
     Common: id, name, type ("rect" | "ellipse" | "text" | "image" | "video" | "audio"), start, end (seconds, end optional = scene end),
@@ -495,7 +499,11 @@ enum Docs {
         "description": "Render the whole scene (picture + mixed audio) to a file. .mp4 = H.264/AAC, .mov = ProRes 4444 (keeps alpha with a transparent background such as #00000000), .m4a = audio only.",
         "inputSchema": {
           "type": "object",
-          "properties": { "path": { "type": "string", "description": "Absolute output path ending in .mp4 or .mov." } },
+          "properties": {
+            "path": { "type": "string", "description": "Absolute output path ending in .mp4 or .mov." },
+            "preset": { "type": "string", "enum": ["tiktok", "shorts", "reels", "youtube", "facebook", "x", "square"], "description": "Export at a social platform's size: tiktok/shorts/reels 1080×1920, youtube 1920×1080, facebook 1080×1350, x 1920×1080, square 1080×1080. A scene of another aspect ratio is letterboxed or cropped (see fit); prefer making the scene that size with update_scene. The result warns about the platform's length/size limits." },
+            "fit": { "type": "string", "enum": ["fit", "fill"], "default": "fit", "description": "With a preset of another aspect ratio: fit = whole scene with bars in the background color, fill = crop the edges." }
+          },
           "required": ["path"]
         }
       }

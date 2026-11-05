@@ -16,7 +16,7 @@ EDIT A SCENE (talks to the running VeyMotion app, or edits a file with --scene)
 FILES
   vmotion sample <scene.json>                     Write the demo scene
   vmotion frame  <scene.json> <time> <out.png> [scale]
-  vmotion render <scene.json> <out.mp4|out.mov>
+  vmotion render <scene.json> <out.mp4|out.mov> [--preset tiktok|shorts|reels|youtube|facebook|x|square] [--fit fit|fill]
 
 AGENT
   vmotion chat [--model m] "prompt"               One Claude Code turn in the terminal (edits the app's scene)
@@ -172,10 +172,28 @@ case "render":
     guard args.count >= 2 else { fail(usage) }
     let scene = loadScene(args[0])
     let url = URL(fileURLWithPath: args[1])
+    var options = ExportOptions()
+    var j = 2
+    while j < args.count {
+        guard j + 1 < args.count else { fail("\(args[j]) needs a value") }
+        switch args[j] {
+        case "--preset":
+            guard let p = PlatformPreset.named(args[j + 1]) else {
+                fail("Unknown preset '\(args[j + 1])'. Presets: \(PlatformPreset.all.map(\.id).joined(separator: ", "))")
+            }
+            options.size = p.size
+        case "--fit":
+            guard let f = ExportFit(rawValue: args[j + 1]) else { fail("--fit is fit or fill") }
+            options.fit = f
+        default:
+            fail(usage)
+        }
+        j += 2
+    }
     let started = Date()
     var lastPct = -1
     do {
-        try VideoExporter.export(scene, to: url) { p in
+        try VideoExporter.export(scene, to: url, options: options) { p in
             let pct = Int(p * 100)
             if pct / 10 != lastPct / 10 { lastPct = pct; FileHandle.standardError.write(Data("\(pct)%\n".utf8)) }
         }

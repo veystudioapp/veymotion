@@ -121,6 +121,8 @@ struct ContentView: View {
                 .keyboardShortcut("l")
                 Button { store.exportVideo() } label: { Label("Export", systemImage: "square.and.arrow.up") }
                     .help("Export video (⌘E)")
+                Button { store.showPublish = true } label: { Label("Publish", systemImage: "paperplane") }
+                    .help("Connect YouTube, TikTok, Facebook or X and publish a video (⇧⌘E)")
                 Button { withAnimation(.easeOut(duration: 0.2)) { showInspector.toggle() } } label: {
                     Label("Inspector", systemImage: "sidebar.right")
                 }
@@ -134,6 +136,7 @@ struct ContentView: View {
         .sheet(isPresented: $showJSON) { JSONEditorSheet() }
         .sheet(isPresented: $showVoice) { VoiceOverSheet() }
         .sheet(isPresented: Bindable(store).showExport) { ExportSheet() }
+        .sheet(isPresented: Bindable(store).showPublish) { PublishSheet() }
     }
 }
 

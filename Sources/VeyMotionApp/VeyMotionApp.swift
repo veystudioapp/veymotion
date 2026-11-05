@@ -36,6 +36,7 @@ struct VeyMotionApp: App {
                 Button("Save As…") { store.save(as: true) }.keyboardShortcut("s", modifiers: [.command, .shift])
                 Divider()
                 Button("Export Video…") { store.exportVideo() }.keyboardShortcut("e")
+                Button("Publish Video…") { store.showPublish = true }.keyboardShortcut("e", modifiers: [.command, .shift])
             }
             CommandGroup(replacing: .undoRedo) {
                 Button(store.undoStack.last.map { "Undo \($0.label)" } ?? "Undo") { store.undo() }
