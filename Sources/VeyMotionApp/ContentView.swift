@@ -96,8 +96,6 @@ struct ContentView: View {
                         .help("Add audio file")
                     Button { showVoice = true } label: { Label("Voice-over", systemImage: "mic") }
                         .help("Generate a voice-over")
-                    Button { store.addLayer(.camera) } label: { Label("Camera", systemImage: "video") }
-                        .help("Add a camera (give layers a Z depth for parallax and depth of field)")
                 }
                 .controlGroupStyle(.navigation)
             }
@@ -268,12 +266,11 @@ struct SelectionBox: View {
         }
         let w = layer.type.hasNaturalSize ? size(layer.width, 400) : layer.shapeWidth(at: time)
         let h = layer.type.hasNaturalSize ? size(layer.height, 240) : layer.shapeHeight(at: time)
-        if let screen = scene.screenTransform(of: layer, at: time) {
-            Path(CGRect(x: -w / 2, y: -h / 2, width: w, height: h))
-                .applying(screen.concatenating(CGAffineTransform(scaleX: unit, y: unit)))
-                .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 1.5, dash: [5, 3]))
-                .allowsHitTesting(false)
-        }
+        let screen = scene.worldTransform(of: layer, at: time)
+        Path(CGRect(x: -w / 2, y: -h / 2, width: w, height: h))
+            .applying(screen.concatenating(CGAffineTransform(scaleX: unit, y: unit)))
+            .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 1.5, dash: [5, 3]))
+            .allowsHitTesting(false)
     }
 }
 

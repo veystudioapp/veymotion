@@ -147,7 +147,6 @@ extension MotionLayer {
         case .rect, .ellipse: hex = 0x3B82F6  // blue
         case .image: hex = 0xEC4899           // pink
         case .video: hex = 0xE11D48           // rose
-        case .camera: hex = 0xEAB308          // yellow
         case .audio:
             switch role {
             case .voice: hex = 0x06B6D4       // cyan
@@ -165,7 +164,7 @@ extension MotionLayer {
         case .text: return text.split(separator: "\n").first.map(String.init)
         case .image, .video: return path.map { ($0 as NSString).lastPathComponent }
         case .audio: return transcript ?? path.map { ($0 as NSString).lastPathComponent }
-        case .rect, .ellipse, .camera: return nil
+        case .rect, .ellipse: return nil
         }
     }
 
@@ -398,7 +397,6 @@ struct TimelinePanel: View {
         case .text: return "textformat"
         case .image: return "photo"
         case .video: return "film"
-        case .camera: return "video.fill"
         case .audio:
             switch l.role {
             case .voice: return "person.wave.2.fill"

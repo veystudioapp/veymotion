@@ -109,20 +109,12 @@ struct LayerInspector: View {
         }
         if layer.type == .audio {
             AudioInspector(layer: layer)
-        } else if layer.type == .camera {
-            CameraInspector(layer: layer)
-            MotionSection(layer: layer)
         } else {
             InspectorSection("Transform") {
                 Grid(horizontalSpacing: 8, verticalSpacing: 6) {
                     GridRow {
                         AnimField(layer: layer, property: .x, label: "X")
                         AnimField(layer: layer, property: .y, label: "Y")
-                    }
-                    GridRow {
-                        AnimField(layer: layer, property: .z, label: "Z")
-                            .help("Depth for the camera: positive = farther away (smaller, less parallax)")
-                        Color.clear.frame(height: 1)
                     }
                     GridRow {
                         AnimField(layer: layer, property: .scale, label: "Scale")
@@ -272,7 +264,7 @@ struct LayerInspector: View {
                 .controlSize(.small)
             }
             .help("Stop: the layer ends with the clip. Hold: the last frame stays. Loop: the clip starts over.")
-        case .audio, .camera:
+        case .audio:
             EmptyView()
         }
     }
@@ -301,46 +293,6 @@ struct LayerInspector: View {
     }
 }
 
-/// Camera layer: framing, dolly/perspective and depth of field.
-struct CameraInspector: View {
-    @Environment(SceneStore.self) private var store
-    let layer: MotionLayer
-
-    var body: some View {
-        let active = store.scene.activeCamera(at: store.panelTime)?.id == layer.id
-        InspectorSection("Camera") {
-            Grid(horizontalSpacing: 8, verticalSpacing: 6) {
-                GridRow {
-                    AnimField(layer: layer, property: .x, label: "X")
-                    AnimField(layer: layer, property: .y, label: "Y")
-                }
-                GridRow {
-                    AnimField(layer: layer, property: .z, label: "Dolly")
-                        .help("Moves the camera along its axis: positive pushes in toward the layers")
-                    AnimField(layer: layer, property: .scale, label: "Zoom")
-                        .help("Lens zoom: magnifies everything without changing perspective")
-                }
-                GridRow {
-                    AnimField(layer: layer, property: .rotation, label: "Roll", unit: "°")
-                    AnimField(layer: layer, property: .perspective, label: "Persp")
-                        .help("Distance to the Z = 0 plane: smaller = stronger depth effect")
-                }
-            }
-            Text(active ? "Active at the playhead." : "Not active at the playhead (another camera is on top, or it is outside its time range).")
-                .font(.caption).foregroundStyle(.secondary)
-        }
-        InspectorSection("Depth of Field") {
-            Grid(horizontalSpacing: 8, verticalSpacing: 6) {
-                GridRow {
-                    AnimField(layer: layer, property: .focus, label: "Focus")
-                        .help("Depth (Z) that stays sharp")
-                    AnimField(layer: layer, property: .aperture, label: "Aperture")
-                        .help("Blur of a layer 1000 px of depth away from the focus (0 = off)")
-                }
-            }
-        }
-    }
-}
 
 /// Parent picker: the layer follows another layer's transform.
 struct ParentRow: View {

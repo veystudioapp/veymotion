@@ -1,10 +1,10 @@
 import Foundation
 
 public enum LayerType: String, Codable, CaseIterable, Sendable {
-    case rect, ellipse, text, image, video, audio, camera
+    case rect, ellipse, text, image, video, audio
 
-    /// Drawn in the frame (audio and camera layers are not).
-    public var isVisual: Bool { self != .audio && self != .camera }
+    /// Drawn in the frame (audio layers are not).
+    public var isVisual: Bool { self != .audio }
 
     /// Images and videos: sized by their file unless width/height are set.
     public var hasNaturalSize: Bool { self == .image || self == .video }
@@ -27,14 +27,12 @@ public enum TextAlign: String, Codable, CaseIterable, Sendable {
 }
 
 public enum AnimProperty: String, Codable, CaseIterable, Sendable {
-    case x, y, z, scale, scaleX, scaleY, rotation, skewX, skewY, anchorX, anchorY, opacity
+    case x, y, scale, scaleX, scaleY, rotation, skewX, skewY, anchorX, anchorY, opacity
     case width, height, cornerRadius, strokeWidth, trim
     case reveal, letterSpacing
     case blur, shadowX, shadowY, shadowBlur, shadowOpacity
     case pathProgress
     case volume
-    // Camera
-    case perspective, focus, aperture
 
     /// Value a layer has when the property is not set.
     public var defaultValue: Double {
@@ -46,24 +44,18 @@ public enum AnimProperty: String, Codable, CaseIterable, Sendable {
         case .height: return 240
         case .shadowY: return 8
         case .shadowBlur: return 16
-        case .perspective: return CameraView.defaultPerspective
         default: return 0
         }
     }
 
     /// Properties kept in `MotionLayer.extra` (written to JSON only when set).
-    static let extras: [AnimProperty] = [.z, .scaleX, .scaleY, .skewX, .skewY, .anchorX, .anchorY, .trim, .letterSpacing,
-                                         .blur, .shadowX, .shadowY, .shadowBlur, .shadowOpacity, .pathProgress,
-                                         .perspective, .focus, .aperture]
+    static let extras: [AnimProperty] = [.scaleX, .scaleY, .skewX, .skewY, .anchorX, .anchorY, .trim, .letterSpacing,
+                                         .blur, .shadowX, .shadowY, .shadowBlur, .shadowOpacity, .pathProgress]
 
     public var title: String {
         switch self {
         case .x: return "X"
         case .y: return "Y"
-        case .z: return "Z"
-        case .perspective: return "Perspective"
-        case .focus: return "Focus"
-        case .aperture: return "Aperture"
         case .scale: return "Scale"
         case .scaleX: return "Scale X"
         case .scaleY: return "Scale Y"
@@ -336,18 +328,13 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
     /// Properties that make sense for this layer type (inspector, timeline).
     public var applicableProperties: [AnimProperty] {
         if type == .audio { return [.volume] }
-        if type == .camera {
-            var list: [AnimProperty] = [.x, .y, .z, .scale, .rotation, .perspective, .focus, .aperture]
-            if motionPath != nil { list.append(.pathProgress) }
-            return list
-        }
-        var list: [AnimProperty] = [.x, .y, .z, .scale, .scaleX, .scaleY, .rotation, .skewX, .skewY, .anchorX, .anchorY, .opacity]
+        var list: [AnimProperty] = [.x, .y, .scale, .scaleX, .scaleY, .rotation, .skewX, .skewY, .anchorX, .anchorY, .opacity]
         switch type {
         case .rect: list += [.width, .height, .cornerRadius, .strokeWidth, .trim]
         case .ellipse: list += [.width, .height, .strokeWidth, .trim]
         case .text: list += [.reveal, .letterSpacing]
         case .image, .video: list += [.width, .height]
-        case .audio, .camera: break
+        case .audio: break
         }
         list += [.blur, .shadowX, .shadowY, .shadowBlur, .shadowOpacity]
         if motionPath != nil { list.append(.pathProgress) }
@@ -483,10 +470,9 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
     public func shapeHeight(at t: Double) -> Double { value(.height, at: t) }
 
     enum CodingKeys: String, CodingKey {
-        case id, name, type, start, end, x, y, z, scale, rotation, opacity, reveal
+        case id, name, type, start, end, x, y, scale, rotation, opacity, reveal
         case scaleX, scaleY, skewX, skewY, anchorX, anchorY, trim, letterSpacing
         case blur, shadowX, shadowY, shadowBlur, shadowOpacity, shadowColor, pathProgress
-        case perspective, focus, aperture
         case parent, motionPath, loop, wiggle, audioReact, textAnimators
         case width, height, cornerRadius, fill, stroke, strokeWidth
         case text, fontSize, fontWeight, fontName, color, align, maxWidth
@@ -512,8 +498,7 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
             guard let key = CodingKeys(rawValue: p.rawValue) else { continue }
             if let v = try c.decodeIfPresent(AnimValue.self, forKey: key) { self[p] = v }
         }
-        // A camera cannot be linked to a parent (it is placed in scene coordinates).
-        parent = type == .camera ? nil : try c.decodeIfPresent(String.self, forKey: .parent).flatMap { $0.isEmpty ? nil : $0 }
+        parent = try c.decodeIfPresent(String.self, forKey: .parent).flatMap { $0.isEmpty ? nil : $0 }
         motionPath = try c.decodeIfPresent(MotionPath.self, forKey: .motionPath)
         loop = try c.decodeIfPresent([String: LoopMode].self, forKey: .loop) ?? [:]
         for k in loop.keys where KeyTrack(name: k) == nil {
@@ -586,22 +571,6 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
             if wiggle["volume"] != nil { try c.encode(wiggle, forKey: .wiggle) }
             return
         }
-        if type == .camera {
-            // Opacity, shadow and parent do not apply to a camera.
-            try c.encode(x, forKey: .x)
-            try c.encode(y, forKey: .y)
-            try c.encode(scale, forKey: .scale)
-            try c.encode(rotation, forKey: .rotation)
-            for p in applicableProperties where AnimProperty.extras.contains(p) {
-                guard let v = extra[p], v != .constant(p.defaultValue), let key = CodingKeys(rawValue: p.rawValue) else { continue }
-                try c.encode(v, forKey: key)
-            }
-            try c.encodeIfPresent(motionPath, forKey: .motionPath)
-            if !loop.isEmpty { try c.encode(loop, forKey: .loop) }
-            if !wiggle.isEmpty { try c.encode(wiggle, forKey: .wiggle) }
-            if !audioReact.isEmpty { try c.encode(audioReact, forKey: .audioReact) }
-            return
-        }
         try c.encode(x, forKey: .x)
         try c.encode(y, forKey: .y)
         try c.encode(scale, forKey: .scale)
@@ -618,7 +587,7 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         if !wiggle.isEmpty { try c.encode(wiggle, forKey: .wiggle) }
         if !audioReact.isEmpty { try c.encode(audioReact, forKey: .audioReact) }
         switch type {
-        case .audio, .camera:
+        case .audio:
             break
         case .rect, .ellipse:
             try c.encode(self[.width], forKey: .width)

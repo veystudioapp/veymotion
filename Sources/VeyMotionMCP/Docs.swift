@@ -10,7 +10,7 @@ enum Docs {
     - layers[0] is drawn first (bottom); the last layer is on top.
 
     LAYER
-    Common: id, name, type ("rect" | "ellipse" | "text" | "image" | "video" | "audio" | "camera"), start, end (seconds, end optional = scene end),
+    Common: id, name, type ("rect" | "ellipse" | "text" | "image" | "video" | "audio"), start, end (seconds, end optional = scene end),
             x, y, scale, rotation (degrees), opacity (0..1)
     rect/ellipse: width, height, cornerRadius (rect), fill "#RRGGBB[AA]", stroke, strokeWidth, trim (0..1: part of the
           stroke drawn, for "draw on" line animations)
@@ -24,15 +24,15 @@ enum Docs {
           fps (image sequences only: frames per second of the images; set to the render's rate, Blender's default is 24).
           The video's own sound is not played. sourceDuration is filled in by the app.
     Optional on every visual layer (omit when unused):
-      z (depth in px, default 0; positive = farther from the camera, see CAMERA), scaleX, scaleY (multiply scale; flip effects), skewX, skewY (degrees), anchorX, anchorY (pivot for rotation/scale/
+      scaleX, scaleY (multiply scale; flip effects), skewX, skewY (degrees), anchorX, anchorY (pivot for rotation/scale/
       skew as an offset from the center in layer px, e.g. anchorX = -width/2 spins around the left edge; does not move the
       layer), blur (px), shadowOpacity (0..1, shadow off when 0), shadowX, shadowY (px, default 0/8), shadowBlur (default 16),
       shadowColor ("#000000"), parent, motionPath, pathProgress, loop, wiggle, audioReact (see below)
 
     ANIMATION
-    Every number above and in CAMERA (x, y, z, scale, scaleX, scaleY, rotation, skewX, skewY, anchorX, anchorY, opacity,
+    Every number above (x, y, scale, scaleX, scaleY, rotation, skewX, skewY, anchorX, anchorY, opacity,
     width, height, cornerRadius, strokeWidth, trim, reveal, letterSpacing, blur, shadowX, shadowY, shadowBlur,
-    shadowOpacity, pathProgress, volume, perspective, focus, aperture) and the colors fill, stroke and color can be a
+    shadowOpacity, pathProgress, volume) and the colors fill, stroke and color can be a
     plain value or
       {"keyframes":[{"t":0.5,"v":0},{"t":1.2,"v":1,"easing":"easeOut"}]}     (colors: "v":"#FF5500")
     - Never write the same key twice in one object (e.g. "y": 500 and "y": {"keyframes": ...}); only one would be used.
@@ -52,30 +52,13 @@ enum Docs {
       property follow the music: it adds amount × the sound's level (0..1) on top of the property's value/keyframes.
       band: level (overall loudness) | bass | mid | treble | beat (pulse on every beat) | downbeat (pulse on every bar).
       release = seconds to fall back after a peak (default 0.2; 0.1 punchy, 0.5 smooth). source = audio layer id
-      (default: the music layer). Negative amount pushes the other way. Works on every number property and on
-      cameras; keep it subtle (scale 0.05–0.2, x/y 10–30 px, rotation 2–5°).
+      (default: the music layer). Negative amount pushes the other way. Works on every number property;
+      keep it subtle (scale 0.05–0.2, x/y 10–30 px, rotation 2–5°).
     - parent: id of another layer. The layer then moves, rotates and scales with it, and its x/y become relative to the
       parent's center. Use set_parent to link without the layer jumping. Opacity and timing are not inherited.
     - motionPath: {"points":[[200,800],[960,300],[1700,800]],"smooth":true,"closed":false,"orient":false} — the layer's
       center follows the path (x/y are then ignored); animate pathProgress 0→1 to move along it at even speed;
       orient = true turns the layer to face the direction of travel.
-
-    CAMERA (2.5D: layers stay flat and face the camera, placed at different depths)
-    - Give visual layers a depth z (px): 0 = normal size, positive = farther (smaller, moves less), negative = closer.
-      A child's depth adds its parent's z. Layers are drawn farthest first (list order only breaks ties), and a layer
-      at z = 1000 with the default perspective looks 2/3 its size, so scale far backgrounds up to still fill the frame.
-    - Camera layer: {"id":"cam","type":"camera","x":960,"y":540,"z":0,"scale":1,"rotation":0,
-                     "perspective":2000,"focus":0,"aperture":0}
-      x, y = the scene point the camera looks at (shown at the frame center; set it to the scene center when the scene
-      is not 1920x1080); animate x/y to pan with parallax. z = dolly (positive moves toward the layers: push-in).
-      scale = lens zoom (magnifies everything, no parallax). rotation = roll (degrees). perspective = distance from
-      the camera to the z = 0 plane (default 2000; smaller = stronger depth effect; animate it against z for a dolly
-      zoom). focus = depth z that is sharp; aperture = blur in px for layers 1000 px of depth from focus (0 = off,
-      try 20–60); animate focus for a rack focus.
-    - Camera layers are not drawn, cannot have a parent, and support motionPath/pathProgress, loop and wiggle
-      (wiggle x/y/rotation = handheld shake). The topmost camera layer visible at time t is used, so cameras with
-      start/end make cuts. Without a camera, a default one is used (z still works).
-    - Layers that end up behind the camera (z − camera z < −perspective) are not drawn.
 
     TEXT ANIMATORS (per character / word / line, staggered)
     "textAnimators":[{"unit":"char","mode":"in","start":0.5,"duration":0.5,"stagger":0.04,"order":"forward",
@@ -88,7 +71,7 @@ enum Docs {
     3D MODELS / RENDERS
     3D content comes in as rendered video: render in Blender (or any 3D app) to a PNG sequence with a transparent
     background (Film → Transparent, output PNG RGBA) or ProRes 4444 .mov with alpha, then add a video layer pointing at
-    the folder or file. It composites like any layer (position, scale, z, blur, shadow, presets).
+    the folder or file. It composites like any layer (position, scale, blur, shadow, presets).
 
     AUDIO
     audio layers: type "audio", path, start, end (optional; default = end of file), role ("voice"|"music"|"sfx"),
@@ -105,7 +88,7 @@ enum Docs {
     - Cut to the music: call analyze_audio once the music layer is in (it returns scene times). Start entrances and
       scene changes on downbeats, land keyframes and apply_preset starts on beats (e.g. a list item per beat), and
       put the biggest moment on the loudest part or a strong onset. For continuous motion with the music use
-      audioReact (e.g. a logo pulsing on bass, a background breathing with level, a camera kick on every beat).
+      audioReact (e.g. a logo pulsing on bass, a background breathing with level).
 
     ASSETS
     The asset library is one shared folder of files (images, audio, …); generated voice-overs are stored there too.
@@ -157,9 +140,7 @@ enum Docs {
       (~80px from edges), and give the viewer time to read (about 1s per 4 words).
     - apply_preset is a quick way to add common entrances/exits/emphasis; pass `ids` + `stagger` to cascade one preset
       over several layers (e.g. list items 0.12s apart). Combine with easings like easeOutBack / easeOutExpo for polish,
-      and use loop/wiggle for ambient motion (floating shapes, subtle camera-like drift).
-    - For depth, spread layers over z (e.g. background 1500, mid 600, title 0, foreground particles −300) and add a
-      camera that slowly pans or pushes in; a little aperture with focus on the title adds a cinematic look.
+      and use loop/wiggle for ambient motion (floating shapes, subtle drift).
     """#
 
     static let toolsJSON = #"""
@@ -238,7 +219,7 @@ enum Docs {
           "type": "object",
           "properties": {
             "id": { "type": "string" },
-            "property": { "type": "string", "enum": ["x", "y", "z", "scale", "scaleX", "scaleY", "rotation", "skewX", "skewY", "anchorX", "anchorY", "opacity", "width", "height", "cornerRadius", "strokeWidth", "trim", "reveal", "letterSpacing", "blur", "shadowX", "shadowY", "shadowBlur", "shadowOpacity", "pathProgress", "volume", "perspective", "focus", "aperture", "fill", "stroke", "color"] },
+            "property": { "type": "string", "enum": ["x", "y", "scale", "scaleX", "scaleY", "rotation", "skewX", "skewY", "anchorX", "anchorY", "opacity", "width", "height", "cornerRadius", "strokeWidth", "trim", "reveal", "letterSpacing", "blur", "shadowX", "shadowY", "shadowBlur", "shadowOpacity", "pathProgress", "volume", "fill", "stroke", "color"] },
             "keyframes": {
               "type": "array",
               "items": {

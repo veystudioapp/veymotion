@@ -157,9 +157,6 @@ extension MotionScene {
         if let p = updated.parent, p == updated.id || !layers.contains(where: { $0.id == p }) || isAncestor(layers[i].id, of: p) {
             throw SceneError.invalid("parent '\(p)' must be another existing layer that is not a child of '\(updated.id)'")
         }
-        if let p = updated.parent, layers.first(where: { $0.id == p })?.type == .camera {
-            throw SceneError.invalid("a camera cannot be a parent")
-        }
         let oldId = layers[i].id
         layers[i] = updated
         if updated.id != oldId {
@@ -358,12 +355,9 @@ extension MotionScene {
         let i = try layerIndex(id)
         let parent = parent.flatMap { $0.isEmpty ? nil : $0 }
         if let p = parent {
-            let pi = try layerIndex(p)
+            _ = try layerIndex(p)
             guard p != id, !isAncestor(id, of: p) else {
                 throw SceneError.invalid("'\(p)' cannot be the parent of '\(id)' (that would make a loop)")
-            }
-            guard layers[i].type != .camera, layers[pi].type != .camera else {
-                throw SceneError.invalid("cameras cannot be linked to a parent or be a parent")
             }
         }
         if keepPosition {

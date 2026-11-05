@@ -219,7 +219,6 @@ final class SceneStore: SceneHost {
                 l.width = .constant((Double(info.width) * fit).rounded())
                 l.height = .constant((Double(info.height) * fit).rounded())
             }
-        case .camera: l.id = "camera"
         case .audio:
             l.path = path
             l.start = time

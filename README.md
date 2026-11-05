@@ -171,7 +171,7 @@ vmotion render scene.json out.mp4
 - Scene pixels, origin top-left; `x`/`y` is the layer center. First layer = bottom.
 - Animatable: `x`, `y`, `scale`, `scaleX`, `scaleY`, `rotation` (deg), `skewX`, `skewY`, `anchorX`, `anchorY`, `opacity`,
   `width`, `height`, `cornerRadius`, `strokeWidth`, `trim` (stroke draw-on), `reveal` (typewriter), `letterSpacing`,
-  `blur`, `shadowX/Y/Blur/Opacity`, `pathProgress`, `z` (depth), and the colors `fill`, `stroke`, `color`.
+  `blur`, `shadowX/Y/Blur/Opacity`, `pathProgress`, and the colors `fill`, `stroke`, `color`.
   Each is a value or `{"keyframes": [...]}` (color keyframes use `"v": "#RRGGBB"`).
 - Keyframe `t` is absolute seconds; `easing` shapes the segment *arriving* at that keyframe:
   `linear | easeIn | easeOut | easeInOut (default) | hold | spring | spring(damping,frequency) | steps(n) |
@@ -185,10 +185,6 @@ vmotion render scene.json out.mp4
 - **3D**: render in Blender (or any 3D app) to a PNG sequence with a transparent background, or ProRes 4444 with
   alpha, and add the folder/file as a `video` layer. It composites like any other layer. The video's own sound is
   not played.
-- **Camera (2.5D)**: give layers a depth `z` (positive = farther) and add a `camera` layer: `x`/`y` pan with
-  parallax, `z` dollies in, `scale` zooms the lens, `rotation` rolls, `perspective` sets the depth strength, and
-  `focus` + `aperture` add depth of field. Layers stay flat and face the camera (no X/Y rotation). Several cameras
-  with start/end make cuts; without one, a default camera is used.
 
 The full reference the agent sees is in `Sources/VeyMotionMCP/Docs.swift`.
 
