@@ -86,4 +86,13 @@ The same `MCPServer` is served three ways: HTTP on `127.0.0.1:19790/mcp` (`Trans
   (`claude -p --tools "" --json-schema`).
   Logos are svgl.app SVGs embedded as strings in `SocialLogos.swift` (the app has no resource bundle).
   Sandboxed runs cannot encode video at all, and the Nitro server cannot read `server/.env` or listen there.
+- Particles (`Particles.swift`): a `particles` layer is an emitter (width/height = its area) with a `ParticleSystem`
+  (preset + overrides; only fields that differ from the preset are encoded). Nothing is carried between frames:
+  births sit on a fixed 1/240 s grid with per-tick random counts, each particle's random numbers come from its key,
+  and its state at age a is a closed form, or a fixed 1/48 s walk from birth when it has turbulence (curl of 3D value
+  noise) or a floor. So any frame renders alone and preview matches export. World-space particles are drawn without
+  the layer transform. Emitting `from` a text uses the glyph outlines from `FrameRenderer.glyphOutline`. A sprite
+  image is the layer's `path`. `emission`/`particleSpeed`/`particleSize` are multipliers read at each birth.
+- `blendMode` applies to every visual layer (set on the context before drawing; particles skip the opacity
+  transparency layer and take opacity per particle, so they keep adding up).
 - Layer ids are unique: `addLayer` / `duplicateLayer` auto-suffix them (`title-2`), and renaming to a taken id throws.

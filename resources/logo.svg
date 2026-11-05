@@ -1,0 +1,18 @@
+<svg width="100" height="100" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+<!--
+  The app's icon: resources/mark.svg in white on Vey's black plate (rx 22.5,
+  a 30% grey hairline rim so it keeps an edge on a dark Dock). The transform
+  scales the mark's 96-unit ink to ~75 units, centred, so it stands the same
+  optical size as Vey's icon beside it.
+-->
+<rect width="100" height="100" rx="22.5" fill="#000000"/>
+<g transform="translate(11 11) scale(0.78)">
+  <path d="M66 18L98 50L66 82L34 50Z" fill="#FFFFFF"/>
+  <g stroke="#FFFFFF" stroke-width="11">
+    <path d="M10 30H34"/>
+    <path d="M2 50H26"/>
+    <path d="M14 70H34"/>
+  </g>
+</g>
+<rect x="0.5" y="0.5" width="99" height="99" rx="22" stroke="#808080" stroke-opacity="0.3"/>
+</svg>

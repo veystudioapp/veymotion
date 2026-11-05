@@ -203,7 +203,16 @@ final class SceneStore: SceneHost {
         }
     }
 
+    func addParticles(_ preset: ParticlePreset) {
+        var l = MotionLayer.makeParticles(preset, sceneWidth: scene.width, sceneHeight: scene.height)
+        l.start = time
+        var id = ""
+        apply("Add \(preset.title)") { id = $0.addLayer(l) }
+        selection = id
+    }
+
     func addLayer(_ type: LayerType, path: String? = nil) {
+        if type == .particles { return addParticles(.fire) }
         var l = MotionLayer(type: type, x: Double(scene.width) / 2, y: Double(scene.height) / 2)
         switch type {
         case .rect: l.width = 400; l.height = 240; l.cornerRadius = 24; l.fill = .constant(RGBA(hex: "#6C5CE7")!)
@@ -228,6 +237,7 @@ final class SceneStore: SceneHost {
             l.sourceDuration = path.flatMap { try? AudioFileInfo.duration(of: $0) }
             l.role = (l.sourceDuration ?? 0) > 20 ? .music : .sfx
             if l.role == .music { l.duckTo = 0.3; l.fadeOut = 1.5 }
+        case .particles: break
         }
         var id = ""
         apply("Add Layer") { id = $0.addLayer(l) }

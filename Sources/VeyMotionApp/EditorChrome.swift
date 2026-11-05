@@ -462,6 +462,7 @@ extension LayerType {
         case .image: return "photo"
         case .video: return "film"
         case .audio: return "waveform"
+        case .particles: return "sparkles"
         }
     }
 }

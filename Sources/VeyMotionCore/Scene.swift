@@ -1,7 +1,7 @@
 import Foundation
 
 public enum LayerType: String, Codable, CaseIterable, Sendable {
-    case rect, ellipse, text, image, video, audio
+    case rect, ellipse, text, image, video, audio, particles
 
     /// Drawn in the frame (audio layers are not).
     public var isVisual: Bool { self != .audio }
@@ -26,6 +26,13 @@ public enum TextAlign: String, Codable, CaseIterable, Sendable {
     case left, center, right
 }
 
+/// How a layer's pixels combine with what is below it.
+public enum BlendMode: String, Codable, CaseIterable, Sendable {
+    case normal, add, screen, multiply, overlay, lighten, darken
+
+    public var title: String { rawValue.capitalized }
+}
+
 public enum AnimProperty: String, Codable, CaseIterable, Sendable {
     case x, y, scale, scaleX, scaleY, rotation, skewX, skewY, anchorX, anchorY, opacity
     case width, height, cornerRadius, strokeWidth, trim
@@ -33,11 +40,13 @@ public enum AnimProperty: String, Codable, CaseIterable, Sendable {
     case blur, shadowX, shadowY, shadowBlur, shadowOpacity
     case pathProgress
     case volume
+    /// Particles: multipliers on the system's rate, speed and size, read when each particle is born.
+    case emission, particleSpeed, particleSize
 
     /// Value a layer has when the property is not set.
     public var defaultValue: Double {
         switch self {
-        case .scale, .scaleX, .scaleY, .opacity, .reveal, .trim, .volume: return 1
+        case .scale, .scaleX, .scaleY, .opacity, .reveal, .trim, .volume, .emission, .particleSpeed, .particleSize: return 1
         case .x: return 960
         case .y: return 540
         case .width: return 400
@@ -50,7 +59,8 @@ public enum AnimProperty: String, Codable, CaseIterable, Sendable {
 
     /// Properties kept in `MotionLayer.extra` (written to JSON only when set).
     static let extras: [AnimProperty] = [.scaleX, .scaleY, .skewX, .skewY, .anchorX, .anchorY, .trim, .letterSpacing,
-                                         .blur, .shadowX, .shadowY, .shadowBlur, .shadowOpacity, .pathProgress]
+                                         .blur, .shadowX, .shadowY, .shadowBlur, .shadowOpacity, .pathProgress,
+                                         .emission, .particleSpeed, .particleSize]
 
     public var title: String {
         switch self {
@@ -79,13 +89,17 @@ public enum AnimProperty: String, Codable, CaseIterable, Sendable {
         case .shadowOpacity: return "Shadow Opacity"
         case .pathProgress: return "Path Progress"
         case .volume: return "Volume"
+        case .emission: return "Emission"
+        case .particleSpeed: return "Particle Speed"
+        case .particleSize: return "Particle Size"
         }
     }
 
     /// Shown with two decimals rather than as whole pixels/degrees.
     public var isFractional: Bool {
         switch self {
-        case .scale, .scaleX, .scaleY, .opacity, .trim, .reveal, .shadowOpacity, .pathProgress, .volume: return true
+        case .scale, .scaleX, .scaleY, .opacity, .trim, .reveal, .shadowOpacity, .pathProgress, .volume,
+             .emission, .particleSpeed, .particleSize: return true
         default: return false
         }
     }
@@ -157,6 +171,7 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
     /// Offsets driven by the music's loudness or beat, keyed by property name.
     public var audioReact: [String: AudioReact]
     public var shadowColor: RGBA
+    public var blendMode: BlendMode
 
     // Shape (rect/ellipse) and image size. Image defaults to its natural size.
     public var width: AnimValue?
@@ -177,8 +192,11 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
     /// Per-character / word / line animations (staggered entrances and exits).
     public var textAnimators: [TextAnimator]
 
-    // Image / video / audio file (a video can also be a folder of numbered images)
+    // Image / video / audio file (a video can also be a folder of numbered images; particles: the sprite image)
     public var path: String?
+
+    // Particles (width/height are the emitter's size)
+    public var particles: ParticleSystem
 
     // Video
     /// Playback rate (2 = twice as fast).
@@ -223,6 +241,7 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         wiggle = [:]
         audioReact = [:]
         shadowColor = RGBA(r: 0, g: 0, b: 0, a: 0.6)
+        blendMode = .normal
         width = nil
         height = nil
         cornerRadius = .constant(0)
@@ -238,6 +257,7 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         maxWidth = nil
         textAnimators = []
         path = nil
+        particles = ParticleSystem()
         speed = 1
         playback = .once
         fps = nil
@@ -334,6 +354,7 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         case .ellipse: list += [.width, .height, .strokeWidth, .trim]
         case .text: list += [.reveal, .letterSpacing]
         case .image, .video: list += [.width, .height]
+        case .particles: list += [.width, .height, .emission, .particleSpeed, .particleSize]
         case .audio: break
         }
         list += [.blur, .shadowX, .shadowY, .shadowBlur, .shadowOpacity]
@@ -448,11 +469,12 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         for p in AnimProperty.allCases where self[p].isAnimated { self[p] = self[p].shifted(by: d) }
         for c in ColorProperty.allCases where self[c].isAnimated { self[c] = self[c].shifted(by: d) }
         for i in textAnimators.indices { textAnimators[i].start += d }
+        for i in particles.bursts.indices { particles.bursts[i].t += d }
     }
 
-    /// Earliest keyframe or text-animator time, if any.
+    /// Earliest keyframe, text-animator or particle-burst time, if any.
     public var earliestKeyTime: Double? {
-        (Array(keyframeTimes.prefix(1)) + textAnimators.map(\.start)).min()
+        (Array(keyframeTimes.prefix(1)) + textAnimators.map(\.start) + particles.bursts.map(\.t)).min()
     }
 
     /// Visual layers default to the scene end; audio layers and videos that play once to the end of their (trimmed) file.
@@ -472,7 +494,8 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
     enum CodingKeys: String, CodingKey {
         case id, name, type, start, end, x, y, scale, rotation, opacity, reveal
         case scaleX, scaleY, skewX, skewY, anchorX, anchorY, trim, letterSpacing
-        case blur, shadowX, shadowY, shadowBlur, shadowOpacity, shadowColor, pathProgress
+        case blur, shadowX, shadowY, shadowBlur, shadowOpacity, shadowColor, pathProgress, blendMode
+        case emission, particleSpeed, particleSize, particles
         case parent, motionPath, loop, wiggle, audioReact, textAnimators
         case width, height, cornerRadius, fill, stroke, strokeWidth
         case text, fontSize, fontWeight, fontName, color, align, maxWidth
@@ -516,6 +539,9 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
                 debugDescription: "Unknown property '\(k)' in audioReact. Use one of \(AnimProperty.allCases.map(\.rawValue)).")
         }
         shadowColor = try c.decodeIfPresent(RGBA.self, forKey: .shadowColor) ?? shadowColor
+        particles = try c.decodeIfPresent(ParticleSystem.self, forKey: .particles) ?? particles
+        blendMode = try c.decodeIfPresent(BlendMode.self, forKey: .blendMode)
+            ?? (type == .particles ? particles.preset?.defaultBlendMode ?? .normal : .normal)
         width = try c.decodeIfPresent(AnimValue.self, forKey: .width)
         height = try c.decodeIfPresent(AnimValue.self, forKey: .height)
         cornerRadius = try c.decodeIfPresent(AnimValue.self, forKey: .cornerRadius) ?? cornerRadius
@@ -581,6 +607,8 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
             try c.encode(v, forKey: key)
         }
         if extra[.shadowOpacity] != nil { try c.encode(shadowColor, forKey: .shadowColor) }
+        // Particles always write it: a missing blendMode takes the preset's default.
+        if blendMode != .normal || type == .particles { try c.encode(blendMode, forKey: .blendMode) }
         try c.encodeIfPresent(parent, forKey: .parent)
         try c.encodeIfPresent(motionPath, forKey: .motionPath)
         if !loop.isEmpty { try c.encode(loop, forKey: .loop) }
@@ -619,6 +647,11 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
             try c.encode(playback, forKey: .playback)
             try c.encodeIfPresent(fps, forKey: .fps)
             try c.encodeIfPresent(sourceDuration, forKey: .sourceDuration)
+        case .particles:
+            try c.encode(self[.width], forKey: .width)
+            try c.encode(self[.height], forKey: .height)
+            try c.encode(particles, forKey: .particles)
+            try c.encodeIfPresent(path, forKey: .path)
         }
     }
 }
@@ -651,16 +684,21 @@ public struct MotionScene: Codable, Equatable, Sendable {
         guard layers.contains(where: { !$0.audioReact.isEmpty }) else { return }
         let audio = audioLayers
         let fallback = defaultReactSource
-        for i in layers.indices where !layers[i].audioReact.isEmpty {
-            for key in Array(layers[i].audioReact.keys) {
-                guard let react = layers[i].audioReact[key] else { continue }
+        // Resolved on a copy and assigned once: writing `layers` here re-enters this through `didSet`, and nesting
+        // once per reaction overflowed the 512 KB stacks of background threads (project thumbnails).
+        var resolved = layers
+        var changed = false
+        for i in resolved.indices where !resolved[i].audioReact.isEmpty {
+            for key in Array(resolved[i].audioReact.keys) {
+                guard let react = resolved[i].audioReact[key] else { continue }
                 let src = react.source.map { id in audio.first { $0.id == id } } ?? fallback
                 let link = src.flatMap { s in
                     s.path.map { AudioLink(path: $0, start: s.start, trimIn: s.trimIn, end: s.effectiveEnd(sceneDuration: duration)) }
                 }
-                if react.link != link { layers[i].audioReact[key]?.link = link }
+                if react.link != link { resolved[i].audioReact[key]?.link = link; changed = true }
             }
         }
+        if changed { layers = resolved }
     }
 
     enum CodingKeys: String, CodingKey { case width, height, fps, duration, background, layers }

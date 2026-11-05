@@ -150,6 +150,7 @@ struct LayerInspector: View {
         case .text: return "Text"
         case .image: return "Image"
         case .video: return "Video"
+        case .particles: return "Particles"
         default: return "Shape"
         }
     }
@@ -264,6 +265,8 @@ struct LayerInspector: View {
                 .controlSize(.small)
             }
             .help("Stop: the layer ends with the clip. Hold: the last frame stays. Loop: the clip starts over.")
+        case .particles:
+            ParticlesEditor(layer: layer)
         case .audio:
             EmptyView()
         }
@@ -334,6 +337,16 @@ struct EffectsSection: View {
                     Color.clear.frame(height: 1)
                 }
             }
+            HStack(spacing: 6) {
+                RowLabel("Blend")
+                Picker("", selection: Binding(get: { layer.blendMode },
+                                              set: { v in store.updateLayer(layer.id, "Blend Mode") { $0.blendMode = v } })) {
+                    ForEach(BlendMode.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+                .labelsHidden()
+                .controlSize(.small)
+            }
+            .help("Add and Screen brighten what is below and drop dark areas (fire, glows, footage shot on black)")
             AnimSlider(layer: layer, property: .shadowOpacity, label: "Shadow")
             if layer.value(.shadowOpacity, at: store.panelTime) > 0 || layer[.shadowOpacity].isAnimated {
                 Grid(horizontalSpacing: 8, verticalSpacing: 6) {

@@ -92,6 +92,14 @@ struct ContentView: View {
                         .help("Add image from a file")
                     Button { store.addVideoLayer() } label: { Label("Video", systemImage: "film") }
                         .help("Add a movie or an image sequence (e.g. a 3D render from Blender)")
+                    Menu {
+                        ForEach(ParticlePreset.allCases, id: \.self) { p in
+                            Button(p.title) { store.addParticles(p) }
+                        }
+                    } label: {
+                        Label("Particles", systemImage: "sparkles")
+                    }
+                    .help("Add particles: fire, smoke, dust, sparks, snow…")
                     Button { store.addAudioLayer() } label: { Label("Audio", systemImage: "music.note") }
                         .help("Add audio file")
                     Button { showVoice = true } label: { Label("Voice-over", systemImage: "mic") }
@@ -263,17 +271,22 @@ struct SelectionBox: View {
     let unit: Double
 
     var body: some View {
-        let size = { (v: AnimValue?, fallback: Double) -> Double in
-            let x = v?.value(at: time) ?? 0
-            return x > 0 ? x : fallback
-        }
-        let w = layer.type.hasNaturalSize ? size(layer.width, 400) : layer.shapeWidth(at: time)
-        let h = layer.type.hasNaturalSize ? size(layer.height, 240) : layer.shapeHeight(at: time)
+        let (w, h) = boxSize
         let screen = scene.worldTransform(of: layer, at: time)
         Path(CGRect(x: -w / 2, y: -h / 2, width: w, height: h))
             .applying(screen.concatenating(CGAffineTransform(scaleX: unit, y: unit)))
             .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 1.5, dash: [5, 3]))
             .allowsHitTesting(false)
+    }
+
+    private var boxSize: (Double, Double) {
+        if layer.type == .particles && layer.particles.emitter == .point && layer.particles.from == nil { return (24, 24) }
+        let size = { (v: AnimValue?, fallback: Double) -> Double in
+            let x = v?.value(at: time) ?? 0
+            return x > 0 ? x : fallback
+        }
+        return (layer.type.hasNaturalSize ? size(layer.width, 400) : layer.shapeWidth(at: time),
+                layer.type.hasNaturalSize ? size(layer.height, 240) : layer.shapeHeight(at: time))
     }
 }
 

@@ -10,6 +10,12 @@ import UniformTypeIdentifiers
 /// Not thread-safe: use one instance per thread.
 public final class FrameRenderer {
     private var imageCache: [String: (image: CGImage, size: CGSize, modified: Double?)] = [:]
+    /// Alpha of image sprites as grayscale masks (for tinted particles), keyed like `imageCache`.
+    private var maskCache: [String: (mask: CGImage, modified: Double?)] = [:]
+    /// Text outlines particles are emitted from, keyed by everything that changes the outline.
+    private var glyphCache: [String: GlyphOutline] = [:]
+    /// Particles of the layer being drawn (simulated once per layer and frame).
+    private var currentParticles: [Particle] = []
     /// Open video decoders by path, reopened when the file (or sequence folder) changes. nil = unreadable.
     private var videoCache: [String: (frames: VideoFrames?, modified: Double?)] = [:]
     public static let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
@@ -19,6 +25,8 @@ public final class FrameRenderer {
     /// Drops every cached image and open video decoder (e.g. when another project is opened).
     public func clearCaches() {
         imageCache.removeAll()
+        maskCache.removeAll()
+        glyphCache.removeAll()
         videoCache.removeAll()
     }
 
@@ -79,11 +87,20 @@ public final class FrameRenderer {
     private func drawLayer(_ layer: MotionLayer, scene: MotionScene, at t: Double, in ctx: CGContext) {
         let opacity = min(max(layer.value(.opacity, at: t), 0), 1)
         guard opacity > 0.001 else { return }
-        let m = scene.worldTransform(of: layer, at: t)
+        var m = scene.worldTransform(of: layer, at: t)
+        if layer.type == .particles {
+            currentParticles = scene.particles(of: layer, at: t) { [unowned self] src, tb, r1, r2, edge in
+                self.emitPoint(on: src, at: tb, r1, r2, edge)
+            }
+            guard !currentParticles.isEmpty else { return }
+            // World-space particles are already in scene pixels.
+            if layer.particles.usesWorldSpace { m = .identity }
+        }
         guard abs(m.a * m.d - m.b * m.c) > 1e-8 else { return } // scaled to nothing
         let blur = max(0, layer.value(.blur, at: t))
 
         ctx.saveGState()
+        ctx.setBlendMode(layer.blendMode.cgBlendMode)
         let shadowReach = applyShadow(layer, at: t, in: ctx)
         ctx.setAlpha(opacity)
         if blur * pixelScale > 0.25 {
@@ -98,7 +115,8 @@ public final class FrameRenderer {
         } else {
             // Shadow and partial opacity apply to the layer as a whole, through an offscreen layer that costs
             // a pass over its area: skip it when neither is set, and bound it to what the layer can reach.
-            let grouped = shadowReach != nil || opacity < 1
+            // Particles take the opacity one by one instead, so they keep blending with each other and the background.
+            let grouped = shadowReach != nil || (opacity < 1 && layer.type != .particles)
             if grouped {
                 if let local = contentBounds(layer, at: t) {
                     let pad = (shadowReach ?? 0) + 2
@@ -108,17 +126,19 @@ public final class FrameRenderer {
                 }
             }
             ctx.concatenate(m)
-            drawContent(layer, at: t, in: ctx)
+            drawContent(layer, at: t, in: ctx, alpha: grouped ? 1 : opacity)
             if grouped { ctx.endTransparencyLayer() }
         }
         ctx.restoreGState()
     }
 
-    private func drawContent(_ layer: MotionLayer, at t: Double, in ctx: CGContext) {
+    /// `alpha`: opacity particles apply themselves (the context's alpha is replaced per particle).
+    private func drawContent(_ layer: MotionLayer, at t: Double, in ctx: CGContext, alpha: Double = 1) {
         switch layer.type {
         case .rect, .ellipse: drawShape(layer, at: t, in: ctx)
         case .text: drawText(layer, at: t, in: ctx)
         case .image, .video: drawImage(layer, at: t, in: ctx)
+        case .particles: drawParticles(layer, alpha: alpha, in: ctx)
         case .audio: break
         }
     }
@@ -159,6 +179,8 @@ public final class FrameRenderer {
         off.translateBy(x: -area.minX, y: -area.minY)
         Self.applySceneSpace(off, scene: scene, pixelWidth: w, pixelHeight: h)
         off.concatenate(m)
+        // Particles add up among themselves before the blurred result is blended with the frame.
+        if layer.type == .particles { off.setBlendMode(layer.blendMode.cgBlendMode) }
         drawContent(layer, at: t, in: off)
         Self.boxBlur(off, sigma: sigma)
         guard let image = off.makeImage() else { return nil }
@@ -179,6 +201,8 @@ public final class FrameRenderer {
             let pad = max(layer.fontSize, 1) // glyph overhang outside the line box (italics, accents)
             return CGRect(x: -box.width / 2, y: -box.height / 2, width: box.width, height: box.height)
                 .insetBy(dx: -pad, dy: -pad)
+        case .particles:
+            return particleBounds(layer)
         case .audio:
             return nil
         }
@@ -484,5 +508,266 @@ public final class FrameRenderer {
         default: weight = .bold
         }
         return NSFont.systemFont(ofSize: size, weight: weight)
+    }
+}
+
+// MARK: - Particles
+
+extension BlendMode {
+    var cgBlendMode: CGBlendMode {
+        switch self {
+        case .normal: return .normal
+        case .add: return .plusLighter
+        case .screen: return .screen
+        case .multiply: return .multiply
+        case .overlay: return .overlay
+        case .lighten: return .lighten
+        case .darken: return .darken
+        }
+    }
+}
+
+/// A text's letters as a path plus its flattened outline, for emitting particles from text.
+struct GlyphOutline {
+    let path: CGPath
+    let bounds: CGRect
+    let segments: [(a: CGPoint, b: CGPoint)]
+    /// Running length at the end of each segment.
+    let lengths: [Double]
+
+    init(path: CGPath) {
+        self.path = path
+        bounds = path.boundingBoxOfPath
+        var segs: [(a: CGPoint, b: CGPoint)] = []
+        var start = CGPoint.zero, cur = CGPoint.zero
+        path.applyWithBlock { el in
+            let e = el.pointee, p = e.points
+            func curve(_ n: Int, _ at: (Double) -> CGPoint) {
+                var last = cur
+                for i in 1...n {
+                    let q = at(Double(i) / Double(n))
+                    segs.append((last, q)); last = q
+                }
+                cur = last
+            }
+            switch e.type {
+            case .moveToPoint: start = p[0]; cur = p[0]
+            case .addLineToPoint: segs.append((cur, p[0])); cur = p[0]
+            case .addQuadCurveToPoint:
+                let p0 = cur, c = p[0], p1 = p[1]
+                curve(6) { t in
+                    let u = 1 - t
+                    return CGPoint(x: u * u * p0.x + 2 * u * t * c.x + t * t * p1.x, y: u * u * p0.y + 2 * u * t * c.y + t * t * p1.y)
+                }
+            case .addCurveToPoint:
+                let p0 = cur, c1 = p[0], c2 = p[1], p1 = p[2]
+                curve(8) { t in
+                    let u = 1 - t
+                    let a = u * u * u, b = 3 * u * u * t, c = 3 * u * t * t, d = t * t * t
+                    return CGPoint(x: a * p0.x + b * c1.x + c * c2.x + d * p1.x, y: a * p0.y + b * c1.y + c * c2.y + d * p1.y)
+                }
+            case .closeSubpath: segs.append((cur, start)); cur = start
+            @unknown default: break
+            }
+        }
+        segments = segs
+        var total = 0.0
+        lengths = segs.map { s in total += hypot(s.b.x - s.a.x, s.b.y - s.a.y); return total }
+    }
+
+    func pointOnOutline(_ r: Double) -> CGPoint? {
+        guard let total = lengths.last, total > 0 else { return nil }
+        let target = r * total
+        var lo = 0, hi = lengths.count - 1
+        while lo < hi {
+            let mid = (lo + hi) / 2
+            if lengths[mid] < target { lo = mid + 1 } else { hi = mid }
+        }
+        let s = segments[lo]
+        let segStart = lo > 0 ? lengths[lo - 1] : 0
+        let len = lengths[lo] - segStart
+        let f = len > 0 ? (target - segStart) / len : 0
+        return CGPoint(x: s.a.x + (s.b.x - s.a.x) * f, y: s.a.y + (s.b.y - s.a.y) * f)
+    }
+}
+
+extension FrameRenderer {
+    /// White-centered disc fading to black at its edge, used as a mask for soft particles.
+    static let softMask: CGImage = {
+        let n = 64
+        let ctx = CGContext(data: nil, width: n, height: n, bitsPerComponent: 8, bytesPerRow: n,
+                            space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue)!
+        let px = ctx.data!.assumingMemoryBound(to: UInt8.self)
+        let c = Double(n - 1) / 2
+        for y in 0..<n {
+            for x in 0..<n {
+                let dx = (Double(x) - c) / c, dy = (Double(y) - c) / c
+                let f = max(0, 1 - (dx * dx + dy * dy))
+                px[y * n + x] = UInt8((f * f * 255).rounded())
+            }
+        }
+        return ctx.makeImage()!
+    }()
+
+    fileprivate func drawParticles(_ layer: MotionLayer, alpha: Double, in ctx: CGContext) {
+        let sys = layer.particles
+        let sprite = sys.shape == .image ? layer.path.flatMap(loadImage) : nil
+        let mask = sys.shape == .image && sys.tint ? layer.path.flatMap(imageMask) : nil
+        if sys.shape == .spark { ctx.setLineCap(.round) }
+        for p in currentParticles {
+            let a = alpha * p.color.a
+            guard a > 0.002 else { continue }
+            ctx.setAlpha(a)
+            let color = CGColor(srgbRed: p.color.r, green: p.color.g, blue: p.color.b, alpha: 1)
+            let s = p.size
+            switch sys.shape {
+            case .circle:
+                ctx.setFillColor(color)
+                ctx.fillEllipse(in: CGRect(x: p.x - s / 2, y: p.y - s / 2, width: s, height: s))
+            case .soft:
+                let r = CGRect(x: p.x - s / 2, y: p.y - s / 2, width: s, height: s)
+                ctx.saveGState()
+                ctx.clip(to: r, mask: Self.softMask)
+                ctx.setFillColor(color)
+                ctx.fill(r)
+                ctx.restoreGState()
+            case .square:
+                ctx.saveGState()
+                ctx.translateBy(x: p.x, y: p.y)
+                ctx.rotate(by: p.rotation * .pi / 180)
+                ctx.scaleBy(x: 1, y: p.scaleY)
+                ctx.setFillColor(color)
+                ctx.fill(CGRect(x: -s / 2, y: -s / 2, width: s, height: s))
+                ctx.restoreGState()
+            case .spark:
+                let v = hypot(p.vx, p.vy)
+                let len = max(v * sys.streak, 0.01)
+                let (ux, uy) = v > 1e-6 ? (p.vx / v, p.vy / v) : (0.0, -1.0)
+                ctx.setStrokeColor(color)
+                ctx.setLineWidth(s)
+                ctx.move(to: CGPoint(x: p.x - ux * len, y: p.y - uy * len))
+                ctx.addLine(to: CGPoint(x: p.x, y: p.y))
+                ctx.strokePath()
+            case .image:
+                guard let (img, size) = sprite, size.width > 0 else { continue }
+                let h = s * size.height / size.width
+                let r = CGRect(x: -s / 2, y: -h / 2, width: s, height: h)
+                ctx.saveGState()
+                ctx.translateBy(x: p.x, y: p.y)
+                ctx.rotate(by: p.rotation * .pi / 180)
+                ctx.scaleBy(x: 1, y: -p.scaleY) // images are drawn y-up
+                if let mask {
+                    ctx.clip(to: r, mask: mask)
+                    ctx.setFillColor(color)
+                    ctx.fill(r)
+                } else {
+                    ctx.draw(img, in: r)
+                }
+                ctx.restoreGState()
+            }
+        }
+    }
+
+    /// Area the current particles cover, in the space they are drawn in.
+    fileprivate func particleBounds(_ layer: MotionLayer) -> CGRect {
+        let sys = layer.particles
+        var minX = Double.infinity, minY = Double.infinity, maxX = -Double.infinity, maxY = -Double.infinity
+        let k = sys.shape == .image ? 1.5 : 0.75
+        for p in currentParticles {
+            let r = p.size * k
+            var x0 = p.x, x1 = p.x, y0 = p.y, y1 = p.y
+            if sys.shape == .spark {
+                let tx = p.x - p.vx * sys.streak, ty = p.y - p.vy * sys.streak
+                x0 = min(x0, tx); x1 = max(x1, tx); y0 = min(y0, ty); y1 = max(y1, ty)
+            }
+            minX = min(minX, x0 - r); maxX = max(maxX, x1 + r)
+            minY = min(minY, y0 - r); maxY = max(maxY, y1 + r)
+        }
+        guard minX <= maxX else { return .zero }
+        return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+    }
+
+    /// Birth point on a text (its letters) or an image/video (its frame); nil for shapes (Core samples those).
+    fileprivate func emitPoint(on src: MotionLayer, at t: Double, _ r1: Double, _ r2: Double, _ edge: Bool) -> CGPoint? {
+        switch src.type {
+        case .text:
+            guard let outline = glyphOutline(src, at: t) else { return nil }
+            if !edge {
+                let seed = Noise.mix(UInt64(r1 * 9_007_199_254_740_992) ^ (UInt64(r2 * 9_007_199_254_740_992) << 1))
+                let b = outline.bounds
+                for i in 0..<24 {
+                    let q = CGPoint(x: b.minX + Noise.unit(2 * i, seed) * b.width, y: b.minY + Noise.unit(2 * i + 1, seed) * b.height)
+                    if outline.path.contains(q, using: .winding) { return q }
+                }
+            }
+            return outline.pointOnOutline(r1)
+        case .image, .video:
+            let r = imageFrame(src, at: t).rect
+            return MotionScene.rectPoint(r.width, r.height, r1, r2, edge)
+        default:
+            return nil
+        }
+    }
+
+    /// Outline of a text layer's letters in layer-local px (centered, y down), as `drawText` lays them out.
+    private func glyphOutline(_ layer: MotionLayer, at t: Double) -> GlyphOutline? {
+        let spacing = layer.value(.letterSpacing, at: t)
+        let key = [layer.text, "\(layer.fontSize)", layer.fontWeight, layer.fontName ?? "", "\(layer.maxWidth ?? -1)",
+                   layer.align.rawValue, String(format: "%.2f", spacing)].joined(separator: "|")
+        if let cached = glyphCache[key] { return cached }
+        guard let layout = textLayout(layer, at: t) else { return nil }
+        let (bw, bh) = (layout.box.width, layout.box.height)
+        let frame = CTFramesetterCreateFrame(layout.setter, CFRange(location: 0, length: 0),
+                                             CGPath(rect: CGRect(x: 0, y: 0, width: bw, height: bh), transform: nil), nil)
+        let lines = CTFrameGetLines(frame) as? [CTLine] ?? []
+        var origins = [CGPoint](repeating: .zero, count: lines.count)
+        CTFrameGetLineOrigins(frame, CFRange(location: 0, length: 0), &origins)
+        let path = CGMutablePath()
+        for (li, line) in lines.enumerated() {
+            for run in CTLineGetGlyphRuns(line) as? [CTRun] ?? [] {
+                let n = CTRunGetGlyphCount(run)
+                guard n > 0 else { continue }
+                var glyphs = [CGGlyph](repeating: 0, count: n)
+                var positions = [CGPoint](repeating: .zero, count: n)
+                CTRunGetGlyphs(run, CFRange(location: 0, length: 0), &glyphs)
+                CTRunGetPositions(run, CFRange(location: 0, length: 0), &positions)
+                let attrs = CTRunGetAttributes(run) as NSDictionary
+                let font = attrs[kCTFontAttributeName as String].map { $0 as! CTFont } ?? Self.font(for: layer)
+                for g in 0..<n {
+                    // Glyph space is y-up from the text box's bottom-left; layer space is y-down from its center.
+                    var m = CGAffineTransform(a: 1, b: 0, c: 0, d: -1, tx: origins[li].x + positions[g].x - bw / 2,
+                                              ty: bh / 2 - origins[li].y - positions[g].y)
+                    if let gp = CTFontCreatePathForGlyph(font, glyphs[g], &m) { path.addPath(gp) }
+                }
+            }
+        }
+        guard !path.isEmpty else { return nil }
+        if glyphCache.count > 64 { glyphCache.removeAll() }
+        let outline = GlyphOutline(path: path)
+        glyphCache[key] = outline
+        return outline
+    }
+
+    /// The image's alpha as a grayscale mask (at most 256 px), so it can be painted in any color.
+    private func imageMask(_ path: String) -> CGImage? {
+        let expanded = (path as NSString).expandingTildeInPath
+        let modified = Self.modificationTime(expanded)
+        if let cached = maskCache[expanded], cached.modified == modified { return cached.mask }
+        guard let (img, size) = loadImage(path), size.width > 0, size.height > 0 else { return nil }
+        let k = min(1, 256 / max(size.width, size.height))
+        let w = max(1, Int(size.width * k)), h = max(1, Int(size.height * k))
+        guard let rgba = Self.bitmap(w, h),
+              let gray = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w,
+                                   space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue),
+              let src = rgba.data?.assumingMemoryBound(to: UInt8.self),
+              let dst = gray.data?.assumingMemoryBound(to: UInt8.self) else { return nil }
+        rgba.draw(img, in: CGRect(x: 0, y: 0, width: w, height: h))
+        let rowBytes = rgba.bytesPerRow
+        for y in 0..<h {
+            for x in 0..<w { dst[y * w + x] = src[y * rowBytes + x * 4 + 3] }
+        }
+        guard let mask = gray.makeImage() else { return nil }
+        maskCache[expanded] = (mask, modified)
+        return mask
     }
 }

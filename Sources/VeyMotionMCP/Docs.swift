@@ -14,7 +14,7 @@ enum Docs {
       Publishing is done by the user from the app (Export → Publish); you cannot post.
 
     LAYER
-    Common: id, name, type ("rect" | "ellipse" | "text" | "image" | "video" | "audio"), start, end (seconds, end optional = scene end),
+    Common: id, name, type ("rect" | "ellipse" | "text" | "image" | "video" | "audio" | "particles"), start, end (seconds, end optional = scene end),
             x, y, scale, rotation (degrees), opacity (0..1)
     rect/ellipse: width, height, cornerRadius (rect), fill "#RRGGBB[AA]", stroke, strokeWidth, trim (0..1: part of the
           stroke drawn, for "draw on" line animations)
@@ -27,16 +27,19 @@ enum Docs {
           playback ("once": the layer ends with the clip, default | "hold": last frame stays | "loop": starts over),
           fps (image sequences only: frames per second of the images; set to the render's rate, Blender's default is 24).
           The video's own sound is not played. sourceDuration is filled in by the app.
+    particles: see PARTICLES.
     Optional on every visual layer (omit when unused):
       scaleX, scaleY (multiply scale; flip effects), skewX, skewY (degrees), anchorX, anchorY (pivot for rotation/scale/
       skew as an offset from the center in layer px, e.g. anchorX = -width/2 spins around the left edge; does not move the
       layer), blur (px), shadowOpacity (0..1, shadow off when 0), shadowX, shadowY (px, default 0/8), shadowBlur (default 16),
-      shadowColor ("#000000"), parent, motionPath, pathProgress, loop, wiggle, audioReact (see below)
+      shadowColor ("#000000"), parent, motionPath, pathProgress, loop, wiggle, audioReact (see below),
+      blendMode ("normal" | "add" | "screen" | "multiply" | "overlay" | "lighten" | "darken"; "add"/"screen" make dark
+      areas see-through, e.g. fire or smoke footage on black)
 
     ANIMATION
     Every number above (x, y, scale, scaleX, scaleY, rotation, skewX, skewY, anchorX, anchorY, opacity,
     width, height, cornerRadius, strokeWidth, trim, reveal, letterSpacing, blur, shadowX, shadowY, shadowBlur,
-    shadowOpacity, pathProgress, volume) and the colors fill, stroke and color can be a
+    shadowOpacity, pathProgress, volume, emission, particleSpeed, particleSize) and the colors fill, stroke and color can be a
     plain value or
       {"keyframes":[{"t":0.5,"v":0},{"t":1.2,"v":1,"easing":"easeOut"}]}     (colors: "v":"#FF5500")
     - Never write the same key twice in one object (e.g. "y": 500 and "y": {"keyframes": ...}); only one would be used.
@@ -71,6 +74,42 @@ enum Docs {
     - opacity/x/y/scale/rotation describe the AWAY state (x/y in px, y down); units animate between it and normal.
     - Unit i starts at start + rank·stagger; order: forward | reverse | center | edges | random (seed).
     - Use one "in" and optionally one "out" animator. The text*/typewriter presets create them for you.
+
+    PARTICLES (fire, smoke, dust, sparks, snow, rain, confetti, bokeh, magic trails, explosions, text breaking apart)
+    {"id":"fire","type":"particles","x":960,"y":900,"width":220,"height":0,"blur":3,"particles":{"preset":"fire"}}
+    - preset: fire | smoke | dust | sparks | snow | rain | confetti | bokeh | magic | explosion. Its values are the
+      starting point; any field you set overrides it, e.g. {"preset":"snow","rate":80,"size":14}. A preset also picks
+      blendMode (add for fire, sparks, magic, explosion, bokeh, dust) unless you set it.
+    - The layer is the emitter: x/y place it, width/height size it, rotation turns the emission direction. Particles
+      are born there and keep their own life, so a moving emitter (keyframes, motionPath) leaves a trail.
+    - Sizing per preset: fire/smoke: a line ~10–15% of the scene wide at the base (y ~85%); snow/confetti/rain: a line
+      wider than the scene just above the top (y -40); dust/bokeh: width/height = the whole scene, centered.
+    - Fields (angles in degrees, 0 = right, 90 = down, -90 = up; px and seconds):
+      emission: rate (per second), bursts [{"t":1.2,"count":300}] (all at once, explosions), prewarm (seconds simulated
+        before the layer starts, so snow/dust are already there), lifetime, lifetimeRandom (0..1),
+        emitter (point|line|rect|ellipse, sized by width/height), edge (outline only), seed (another random layout)
+      motion: speed, speedRandom (0..1), direction, spread (cone width; 360 = every way), inherit (0..1 of the emitter's
+        own velocity), gravity (px/s², negative rises), wind (px/s²), drag (1/s), turbulence (swirl strength px/s),
+        turbulenceScale (swirl size px), turbulenceSpeed (how fast swirls change), floor (scene y to bounce on), bounce,
+        friction
+      look: shape (soft | circle | square | spark | image), size (diameter px), sizeRandom, grow (size at death ×; 0 shrinks
+        away, 3 spreads like smoke), streak (spark length in seconds of travel), orient (face direction of travel),
+        angleRandom, spin (deg/s), spinRandom, flutter (flips/s, confetti), colors ["#FFE9A050","#FF541048",...]
+        (gradient over the life; #RRGGBBAA alpha matters with add), colorMode (life | random: one color each),
+        fadeIn, fadeOut (fractions of the life)
+      space: world (default, trail stays behind) | local (particles move with the layer)
+    - shape "image": the layer's path is the sprite (PNG with alpha, e.g. a smoke puff from search_stock); tint true paints
+      it with colors.
+    - from: another layer's id: particles are born on that layer instead: inside a text's letters (or on their
+      outline with edge true), inside a rect/ellipse, or an image's frame. Text turning to dust: fade the text out
+      quickly at T and add {"type":"particles","blendMode":"add","particles":{"from":"title","rate":0,
+      "bursts":[{"t":T,"count":3000}],"size":5,"speed":60,"spread":90,"direction":-20,"turbulence":80,
+      "turbulenceScale":120,"lifetime":2.5,"fadeOut":0.5}}. Text forming from sparkles: rate on, emission keyframes.
+    - Animatable multipliers (read at each particle's birth): emission (×rate; keyframe to 0 to stop the flow; works
+      with audioReact for particles on the beat), particleSpeed, particleSize.
+    - The layer's end cuts every particle: to let them die out, set emission to 0 a lifetime before the end.
+    - Cost: keep live particles under ~5000 (rate × lifetime + bursts). Large soft particles with add saturate to
+      white: lower the colors' alpha or the rate rather than the size. A small blur (2–4) softens fire and smoke.
 
     3D MODELS / RENDERS
     3D content comes in as rendered video: render in Blender (or any 3D app) to a PNG sequence with a transparent
@@ -223,7 +262,7 @@ enum Docs {
           "type": "object",
           "properties": {
             "id": { "type": "string" },
-            "property": { "type": "string", "enum": ["x", "y", "scale", "scaleX", "scaleY", "rotation", "skewX", "skewY", "anchorX", "anchorY", "opacity", "width", "height", "cornerRadius", "strokeWidth", "trim", "reveal", "letterSpacing", "blur", "shadowX", "shadowY", "shadowBlur", "shadowOpacity", "pathProgress", "volume", "fill", "stroke", "color"] },
+            "property": { "type": "string", "enum": ["x", "y", "scale", "scaleX", "scaleY", "rotation", "skewX", "skewY", "anchorX", "anchorY", "opacity", "width", "height", "cornerRadius", "strokeWidth", "trim", "reveal", "letterSpacing", "blur", "shadowX", "shadowY", "shadowBlur", "shadowOpacity", "pathProgress", "volume", "emission", "particleSpeed", "particleSize", "fill", "stroke", "color"] },
             "keyframes": {
               "type": "array",
               "items": {

@@ -203,17 +203,23 @@ vmotion render scene.json out.mp4
 - Scene pixels, origin top-left; `x`/`y` is the layer center. First layer = bottom.
 - Animatable: `x`, `y`, `scale`, `scaleX`, `scaleY`, `rotation` (deg), `skewX`, `skewY`, `anchorX`, `anchorY`, `opacity`,
   `width`, `height`, `cornerRadius`, `strokeWidth`, `trim` (stroke draw-on), `reveal` (typewriter), `letterSpacing`,
-  `blur`, `shadowX/Y/Blur/Opacity`, `pathProgress`, and the colors `fill`, `stroke`, `color`.
+  `blur`, `shadowX/Y/Blur/Opacity`, `pathProgress`, `emission`/`particleSpeed`/`particleSize` (particles), and the
+  colors `fill`, `stroke`, `color`.
   Each is a value or `{"keyframes": [...]}` (color keyframes use `"v": "#RRGGBB"`).
 - Keyframe `t` is absolute seconds; `easing` shapes the segment *arriving* at that keyframe:
   `linear | easeIn | easeOut | easeInOut (default) | hold | spring | spring(damping,frequency) | steps(n) |
   cubicBezier(x1,y1,x2,y2)` and `ease<In|Out|InOut><Sine|Quad|Cubic|Quart|Quint|Expo|Circ|Back|Elastic|Bounce>`.
-- Per layer: `loop` (`cycle`/`pingpong`/`offset` after the last key), `wiggle` (smooth noise), `audioReact` (follows the music), `parent`,
+- Per layer: `blendMode` (`normal`, `add`, `screen`, `multiply`, `overlay`, `lighten`, `darken`), `loop` (`cycle`/`pingpong`/`offset` after the last key), `wiggle` (smooth noise), `audioReact` (follows the music), `parent`,
   `motionPath` (curve the layer follows, driven by `pathProgress`), `textAnimators` (staggered per char/word/line).
 - Layer types: `rect` (width, height, cornerRadius, fill, stroke, strokeWidth), `ellipse`,
   `text` (text, fontSize, fontWeight, fontName, color, align, maxWidth), `image` (path, width, height),
   `video` (path to a .mov/.mp4 or a folder of numbered images, width, height, trimIn, speed,
-  playback `once`/`hold`/`loop`, fps for image sequences).
+  playback `once`/`hold`/`loop`, fps for image sequences), `particles` (see below).
+- **Particles**: `{"type": "particles", "x": 960, "y": 900, "width": 220, "height": 0, "particles": {"preset": "fire"}}`.
+  Presets: `fire`, `smoke`, `dust`, `sparks`, `snow`, `rain`, `confetti`, `bokeh`, `magic`, `explosion`; any field
+  overrides the preset (rate, bursts, lifetime, speed, direction, spread, gravity, wind, drag, turbulence, floor/bounce,
+  shape `soft`/`circle`/`square`/`spark`/`image`, size, grow, colors over life…). The layer is the emitter (width/height
+  size it); `from` emits from another layer instead, e.g. inside a text's letters to make it break into dust.
 - **3D**: render in Blender (or any 3D app) to a PNG sequence with a transparent background, or ProRes 4444 with
   alpha, and add the folder/file as a `video` layer. It composites like any other layer. The video's own sound is
   not played.
