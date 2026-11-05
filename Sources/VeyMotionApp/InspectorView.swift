@@ -479,7 +479,70 @@ struct MotionSection: View {
             }
             .controlSize(.small)
             .fixedSize()
+            audioReactRows
         }
+    }
+
+    /// Properties driven by the music (audioReact).
+    @ViewBuilder private var audioReactRows: some View {
+        let id = layer.id
+        let audio = store.scene.audioLayers
+        ForEach(layer.audioReact.keys.sorted(), id: \.self) { key in
+            if let r = layer.audioReact[key], let p = AnimProperty(rawValue: key) {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 6) {
+                        Text("♪ \(p.title)").font(.caption).foregroundStyle(.secondary).frame(width: 64, alignment: .leading)
+                            .lineLimit(1)
+                        Picker("", selection: Binding(get: { r.band }, set: { b in
+                            store.updateLayer(id, "Audio React") { $0.audioReact[key]?.band = b }
+                        })) {
+                            ForEach(AudioBand.allCases, id: \.self) { Text($0.title).tag($0) }
+                        }
+                        .labelsHidden()
+                        .help("What the property follows: loudness (overall or a band), or a pulse on every beat / bar")
+                        if audio.count > 1 {
+                            Picker("", selection: Binding(get: { r.source }, set: { s in
+                                store.updateLayer(id, "Audio React") { $0.audioReact[key]?.source = s }
+                            })) {
+                                Text("Music").tag(String?.none)
+                                ForEach(audio) { Text($0.name).tag(String?.some($0.id)) }
+                            }
+                            .labelsHidden()
+                            .help("Audio layer to follow")
+                        }
+                        Button { store.updateLayer(id, "Remove Audio React") { $0.audioReact[key] = nil } } label: {
+                            Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .controlSize(.small)
+                    HStack(spacing: 6) {
+                        Color.clear.frame(width: 64, height: 1)
+                        NumberField("Amt", r.amount, digits: p.isFractional ? 2 : 1) { v in
+                            store.updateLayer(id, "Audio React") { $0.audioReact[key]?.amount = v }
+                        }
+                        .help("Added at full level, in the property's unit (negative = the other way)")
+                        NumberField("Release", r.release, unit: "s", digits: 2) { v in
+                            store.updateLayer(id, "Audio React") { $0.audioReact[key]?.release = max(0.01, v) }
+                        }
+                        .help("How long it takes to fall back after a peak")
+                    }
+                }
+            }
+        }
+        Menu("Add Audio React") {
+            ForEach(layer.applicableProperties.filter { layer.audioReact[$0.rawValue] == nil }, id: \.self) { p in
+                Button(p.title) {
+                    let amount: Double = p.isFractional ? 0.15 : (p == .rotation || p == .skewX || p == .skewY) ? 5 : 20
+                    let band: AudioBand = [.scale, .scaleX, .scaleY].contains(p) ? .bass : p.isFractional ? .level : .beat
+                    store.updateLayer(id, "Add Audio React") { $0.audioReact[p.rawValue] = AudioReact(amount: amount, band: band) }
+                }
+            }
+        }
+        .controlSize(.small)
+        .fixedSize()
+        .disabled(audio.isEmpty)
+        .help(audio.isEmpty ? "Add music (an audio layer) first" : "Make a property move with the music")
     }
 
     private func pathBinding(_ kp: WritableKeyPath<MotionPath, Bool>) -> Binding<Bool> {

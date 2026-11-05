@@ -214,6 +214,9 @@ public final class MCPServer {
             let path = try string(a, "path")
             return text(String(format: "%.3f seconds", try AudioFileInfo.duration(of: path)))
 
+        case "analyze_audio":
+            return text(try analyzeAudio(a))
+
         case "add_captions":
             let id = try string(a, "id")
             var style = CaptionStyle()
@@ -456,6 +459,60 @@ public final class MCPServer {
         default:
             throw RPCError.invalidParams("Unknown tool: \(name)")
         }
+    }
+
+    /// Beats, downbeats, onsets and loudness of an audio layer (scene seconds) or a file (file seconds), as JSON.
+    private func analyzeAudio(_ a: [String: Any]) throws -> String {
+        let scene = host.currentScene()
+        var layer: MotionLayer?
+        let path: String
+        if let p = a["path"] as? String, !p.isEmpty, (a["id"] as? String ?? "").isEmpty {
+            path = (p as NSString).expandingTildeInPath
+        } else {
+            if let id = a["id"] as? String, !id.isEmpty { layer = try scene.layer(id) } else { layer = scene.defaultReactSource }
+            guard let l = layer else { throw ToolError("The scene has no audio layer: pass an audio layer `id` or a file `path`.") }
+            guard l.type == .audio, let p = l.path else { throw ToolError("'\(l.id)' is not an audio layer with a file") }
+            path = p
+        }
+        let an = try AudioAnalysisCache.analysis(path: path)
+        // File time + offset = scene time (for a file: offset 0, the whole file).
+        let offset = layer.map { $0.start - $0.trimIn } ?? 0
+        let lo = layer?.start ?? 0
+        let hi = layer.map { min($0.effectiveEnd(sceneDuration: scene.duration), scene.duration) } ?? an.duration
+        let from = max(lo, number(a["from"]) ?? lo), to = min(hi, number(a["to"]) ?? hi)
+        guard to > from else { throw ToolError(String(format: "Nothing to analyze: the audio plays %.2f–%.2fs", lo, hi)) }
+        let minStrength = min(max(number(a["minStrength"]) ?? 0.4, 0), 1)
+
+        func fmt(_ v: Double, _ digits: Int = 3) -> String {
+            var s = String(format: "%.\(digits)f", v)
+            while s.contains(".") && (s.hasSuffix("0") || s.hasSuffix(".")) { s.removeLast() }
+            return s == "-0" ? "0" : s
+        }
+        func times(_ ts: [Double]) -> String {
+            "[" + ts.map { $0 + offset }.filter { $0 >= from - 0.01 && $0 <= to + 0.01 }.map { fmt($0) }.joined(separator: ",") + "]"
+        }
+        let onsets = an.onsets.filter { $0.strength >= minStrength && $0.t + offset >= from - 0.01 && $0.t + offset <= to + 0.01 }
+        let loudness = an.loudness(from: from - offset, to: to - offset)
+        func quoted(_ s: String) -> String {
+            let data = try? JSONSerialization.data(withJSONObject: [s], options: [.withoutEscapingSlashes])
+            return data.flatMap { String(data: $0, encoding: .utf8) }.map { String($0.dropFirst().dropLast()) } ?? "\"\""
+        }
+        var fields: [String] = []
+        fields.append(layer.map { "\"layer\":\(quoted($0.id))" } ?? "\"file\":\(quoted(path))")
+        fields.append("\"timesAre\":\"\(layer == nil ? "file seconds" : "scene seconds")\"")
+        fields.append("\"range\":[\(fmt(from)),\(fmt(to))]")
+        if let bpm = an.bpm {
+            fields.append("\"bpm\":\(fmt(bpm, 1))")
+            fields.append("\"beatInterval\":\(fmt(60 / bpm))")
+        } else {
+            fields.append("\"bpm\":null")
+            fields.append("\"note\":\"No steady beat found: time things to onsets and loudness instead.\"")
+        }
+        fields.append("\"beats\":\(times(an.beats))")
+        fields.append("\"downbeats\":\(times(an.downbeats))")
+        fields.append("\"onsets\":[" + onsets.map { "[\(fmt($0.t + offset)),\(fmt($0.strength, 2))]" }.joined(separator: ",") + "]")
+        fields.append("\"loudness\":{\"from\":\(fmt(from)),\"step\":1,\"values\":[" + loudness.map { fmt($0, 2) }.joined(separator: ",") + "]}")
+        return "{" + fields.joined(separator: ",") + "}"
     }
 
     private func warnings(_ problems: [String]) -> String {

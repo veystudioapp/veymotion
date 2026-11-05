@@ -27,7 +27,7 @@ enum Docs {
       z (depth in px, default 0; positive = farther from the camera, see CAMERA), scaleX, scaleY (multiply scale; flip effects), skewX, skewY (degrees), anchorX, anchorY (pivot for rotation/scale/
       skew as an offset from the center in layer px, e.g. anchorX = -width/2 spins around the left edge; does not move the
       layer), blur (px), shadowOpacity (0..1, shadow off when 0), shadowX, shadowY (px, default 0/8), shadowBlur (default 16),
-      shadowColor ("#000000"), parent, motionPath, pathProgress, loop, wiggle (see below)
+      shadowColor ("#000000"), parent, motionPath, pathProgress, loop, wiggle, audioReact (see below)
 
     ANIMATION
     Every number above and in CAMERA (x, y, z, scale, scaleX, scaleY, rotation, skewX, skewY, anchorX, anchorY, opacity,
@@ -48,6 +48,12 @@ enum Docs {
       cycle = start over, pingpong = back and forth, offset = keep adding the change (endless spin: rotation 0→360 + offset).
     - wiggle: {"x":{"amount":12,"frequency":2},"rotation":{"amount":4,"frequency":1.5,"seed":2}} adds smooth random
       motion (amount in the property's unit, frequency = wobbles/second). Works on constant or animated properties.
+    - audioReact: {"scale":{"amount":0.12,"band":"bass"},"opacity":{"amount":-0.4,"band":"beat","release":0.3}} makes a
+      property follow the music: it adds amount × the sound's level (0..1) on top of the property's value/keyframes.
+      band: level (overall loudness) | bass | mid | treble | beat (pulse on every beat) | downbeat (pulse on every bar).
+      release = seconds to fall back after a peak (default 0.2; 0.1 punchy, 0.5 smooth). source = audio layer id
+      (default: the music layer). Negative amount pushes the other way. Works on every number property and on
+      cameras; keep it subtle (scale 0.05–0.2, x/y 10–30 px, rotation 2–5°).
     - parent: id of another layer. The layer then moves, rotates and scales with it, and its x/y become relative to the
       parent's center. Use set_parent to link without the layer jumping. Opacity and timing are not inherited.
     - motionPath: {"points":[[200,800],[960,300],[1700,800]],"smooth":true,"closed":false,"orient":false} — the layer's
@@ -93,6 +99,10 @@ enum Docs {
       to make key text/visuals appear as they are spoken. Extend the scene duration if the narration is longer.
     - Captions: add_captions on each voice layer when the user wants subtitles.
     - Music: add_audio with role "music", duckTo ≈ 0.25 and a fadeOut of 1–2s at the end.
+    - Cut to the music: call analyze_audio once the music layer is in (it returns scene times). Start entrances and
+      scene changes on downbeats, land keyframes and apply_preset starts on beats (e.g. a list item per beat), and
+      put the biggest moment on the loudest part or a strong onset. For continuous motion with the music use
+      audioReact (e.g. a logo pulsing on bass, a background breathing with level, a camera kick on every beat).
 
     ASSETS
     The asset library is one shared folder of files (images, audio, …); generated voice-overs are stored there too.
@@ -313,6 +323,20 @@ enum Docs {
         "name": "get_audio_info",
         "description": "Duration of an audio file in seconds.",
         "inputSchema": { "type": "object", "properties": { "path": { "type": "string" } }, "required": ["path"] }
+      },
+      {
+        "name": "analyze_audio",
+        "description": "Find the rhythm of the music: tempo (bpm), beat times, downbeats (first beat of each bar), strong hits (onsets, [time, strength 0..1]) and loudness per second (0..1). Times are scene seconds for a layer. Use it to land entrances, cuts and accents on the beat and big moments on loud parts.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "id": { "type": "string", "description": "Audio layer id. Default: the music layer (else the first audio layer)." },
+            "path": { "type": "string", "description": "Analyze an audio file instead of a layer (times are then file seconds)." },
+            "from": { "type": "number", "description": "Only report times from here (scene seconds)." },
+            "to": { "type": "number", "description": "Only report times up to here (scene seconds)." },
+            "minStrength": { "type": "number", "description": "Leave out onsets weaker than this (0..1, default 0.4)." }
+          }
+        }
       },
       {
         "name": "add_captions",

@@ -81,3 +81,48 @@ final class WaveformCache {
         return nil
     }
 }
+
+/// Beats and downbeats of a file (file seconds).
+struct BeatGrid {
+    var beats: [Double]
+    var downbeats: [Double]
+    static let empty = BeatGrid(beats: [], downbeats: [])
+}
+
+/// Beat grids per file, analyzed in the background. This also warms `AudioAnalysisCache`, so audio-reactive
+/// layers don't stall the first frame that needs them.
+@Observable
+final class BeatCache {
+    static let shared = BeatCache()
+    private(set) var grids: [String: BeatGrid] = [:]
+    @ObservationIgnored private var pending = Set<String>()
+
+    func grid(for path: String) -> BeatGrid? {
+        if let g = grids[path] { return g }
+        if !pending.contains(path) {
+            pending.insert(path)
+            DispatchQueue.global(qos: .utility).async {
+                let a = try? AudioAnalysisCache.analysis(path: path)
+                let grid = a.map { BeatGrid(beats: $0.beats, downbeats: $0.downbeats) } ?? .empty
+                DispatchQueue.main.async {
+                    self.grids[path] = grid
+                    self.pending.remove(path)
+                }
+            }
+        }
+        return nil
+    }
+
+    /// Beats of the scene's music (and sfx) layers in scene seconds, while they play. Starts analyses as needed.
+    func sceneBeats(_ scene: MotionScene, excluding: Set<String> = []) -> (beats: [Double], downbeats: [Double]) {
+        var beats: [Double] = [], downbeats: [Double] = []
+        for l in scene.audioLayers where l.role != .voice && !excluding.contains(l.id) {
+            guard let path = l.path, let g = grid(for: path) else { continue }
+            let end = min(l.effectiveEnd(sceneDuration: scene.duration), scene.duration)
+            func place(_ ts: [Double]) -> [Double] { ts.map { l.start + $0 - l.trimIn }.filter { $0 >= l.start - 0.01 && $0 < end } }
+            beats += place(g.beats)
+            downbeats += place(g.downbeats)
+        }
+        return (beats.sorted(), downbeats.sorted())
+    }
+}

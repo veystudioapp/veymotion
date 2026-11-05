@@ -70,6 +70,64 @@ public struct Wiggle: Codable, Equatable, Hashable, Sendable {
     }
 }
 
+// MARK: - Audio react
+
+/// Where an audio layer's file plays in the scene. Filled in by `MotionScene.resolveAudioLinks`, not saved.
+public struct AudioLink: Equatable, Hashable, Sendable {
+    public var path: String
+    public var start: Double
+    public var trimIn: Double
+    public var end: Double
+
+    /// File time playing at scene time t, or nil when the layer is silent then.
+    public func fileTime(at t: Double) -> Double? {
+        t >= start && t < end ? t - start + trimIn : nil
+    }
+}
+
+/// Adds `amount` × the music's level (0…1) in a band to a property: the layer moves with the sound.
+public struct AudioReact: Codable, Equatable, Hashable, Sendable {
+    public static let defaultRelease = 0.2
+
+    /// Offset at full level, in the property's unit (negative = the other way).
+    public var amount: Double
+    public var band: AudioBand
+    /// Seconds the reaction takes to fall back after a peak.
+    public var release: Double
+    /// Audio layer id; nil = the scene's music layer (or its first audio layer).
+    public var source: String?
+    /// The source as resolved by the scene.
+    public var link: AudioLink?
+
+    public init(amount: Double, band: AudioBand = .bass, release: Double = defaultRelease, source: String? = nil) {
+        self.amount = amount; self.band = band; self.release = release; self.source = source
+    }
+
+    enum CodingKeys: String, CodingKey { case amount, band, release, source }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        amount = try c.decodeIfPresent(Double.self, forKey: .amount) ?? 0.1
+        band = try c.decodeIfPresent(AudioBand.self, forKey: .band) ?? .level
+        release = max(0.01, try c.decodeIfPresent(Double.self, forKey: .release) ?? Self.defaultRelease)
+        source = try c.decodeIfPresent(String.self, forKey: .source).flatMap { $0.isEmpty ? nil : $0 }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(amount, forKey: .amount)
+        try c.encode(band, forKey: .band)
+        try c.encode(release, forKey: .release)
+        try c.encodeIfPresent(source, forKey: .source)
+    }
+
+    public func offset(at t: Double) -> Double {
+        guard amount != 0, let link, let ft = link.fileTime(at: t),
+              let env = AudioAnalysisCache.envelope(path: link.path, band: band, release: release) else { return 0 }
+        return amount * AudioAnalysis.sample(env, at: ft)
+    }
+}
+
 // MARK: - Motion path
 
 public struct PathPoint: Codable, Equatable, Hashable, Sendable {
@@ -350,9 +408,8 @@ extension MotionLayer {
     public func position(at t: Double) -> (point: CGPoint, pathAngle: Double) {
         if let mp = motionPath, !mp.points.isEmpty {
             let s = mp.sample(value(.pathProgress, at: t))
-            let wx = wiggle["x"].map { $0.offset(at: t, salt: Noise.hash("\(id).x")) } ?? 0
-            let wy = wiggle["y"].map { $0.offset(at: t, salt: Noise.hash("\(id).y")) } ?? 0
-            return (CGPoint(x: s.point.x + wx, y: s.point.y + wy), mp.orient ? s.angle : 0)
+            return (CGPoint(x: s.point.x + proceduralOffset(.x, at: t), y: s.point.y + proceduralOffset(.y, at: t)),
+                    mp.orient ? s.angle : 0)
         }
         return (CGPoint(x: value(.x, at: t), y: value(.y, at: t)), 0)
     }

@@ -164,6 +164,9 @@ extension MotionScene {
         layers[i] = updated
         if updated.id != oldId {
             for j in layers.indices where layers[j].parent == oldId { layers[j].parent = updated.id }
+            for j in layers.indices {
+                for (k, r) in layers[j].audioReact where r.source == oldId { layers[j].audioReact[k]?.source = updated.id }
+            }
         }
     }
 

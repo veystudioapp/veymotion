@@ -211,6 +211,7 @@ struct TimelinePanel: View {
     @Environment(SceneStore.self) private var store
     @State private var tl = TimelineState()
     @AppStorage("timelineShowKeys") private var showKeys = true
+    @AppStorage("timelineSnapBeats") private var snapBeats = true
     private let nameWidth: CGFloat = 200
 
     var body: some View {
@@ -300,6 +301,12 @@ struct TimelinePanel: View {
                 Label("Keyframes", systemImage: showKeys ? "diamond.fill" : "diamond").font(.caption)
             }
             .help(showKeys ? "Hide keyframes on clips" : "Show keyframes on clips")
+            if scene.audioLayers.contains(where: { $0.role != .voice }) {
+                Button { snapBeats.toggle() } label: {
+                    Label("Beats", systemImage: snapBeats ? "metronome.fill" : "metronome").font(.caption)
+                }
+                .help(snapBeats ? "Hide the music's beats and stop snapping to them" : "Show the music's beats and snap to them")
+            }
             Spacer()
             Text("⌘-scroll or pinch to zoom").font(.caption2).foregroundStyle(.tertiary)
             Button { tl.setZoom(tl.zoom / 1.5, anchorX: playheadAnchor) } label: { Image(systemName: "minus.magnifyingglass") }
@@ -475,6 +482,12 @@ struct TimelinePanel: View {
                     .offset(y: 5)
                     .allowsHitTesting(false)
             }
+            if snapBeats, l.type == .audio, l.role != .voice, let path = l.path, let grid = BeatCache.shared.grid(for: path) {
+                BeatStrip(marks: beatMarks(grid, layer: l, end: end))
+                    .frame(height: height - 6)
+                    .offset(y: 3)
+                    .allowsHitTesting(false)
+            }
             ForEach(Array((showKeys ? times : []).enumerated()), id: \.offset) { _, t in
                 KeyDiamond(x: tl.x(t), y: height - 8, easing: commonEasing(l, at: t), onClip: true,
                            selected: tl.selectedKey == KeySelection(layerId: l.id, property: nil, t: t),
@@ -483,6 +496,19 @@ struct TimelinePanel: View {
                            onEasing: { e in try? store.apply("Change Easing") { try $0.setEasing(l.id, track: nil, at: t, easing: e) } },
                            onDelete: { try? store.apply("Delete Keyframes") { try $0.deleteKeyframes(l.id, track: nil, at: t) } })
             }
+        }
+    }
+
+    /// x positions of an audio layer's beats inside the visible track (only downbeats when beats would crowd).
+    private func beatMarks(_ grid: BeatGrid, layer l: MotionLayer, end: Double) -> [BeatStrip.Mark] {
+        let interval = grid.beats.count > 1 ? (grid.beats.last! - grid.beats.first!) / Double(grid.beats.count - 1) : 1
+        let downs = Set(grid.downbeats)
+        let source = interval * tl.pps < 6 ? grid.downbeats : grid.beats
+        return source.compactMap { b in
+            let t = l.start + b - l.trimIn
+            guard t >= l.start - 0.01, t < end else { return nil }
+            let x = tl.x(t)
+            return (-2...tl.trackWidth + 2).contains(x) ? BeatStrip.Mark(x: x, downbeat: downs.contains(b)) : nil
         }
     }
 
@@ -547,11 +573,20 @@ struct TimelinePanel: View {
 
     // MARK: Interactions
 
-    /// Rounds to whole frames and snaps to the playhead when within 6px.
-    private func snap(_ t: Double) -> Double {
+    /// Rounds to whole frames and snaps to the playhead or a beat of the music when within 6px
+    /// (`moving`: layers being dragged, whose own beats move with them).
+    private func snap(_ t: Double, moving: Set<String> = []) -> Double {
         let fps = Double(max(store.scene.fps, 1))
         var s = (t * fps).rounded() / fps
-        if abs(tl.x(t) - tl.x(store.time)) < 6 { s = store.time }
+        var best = 6.0
+        var targets = [store.time]
+        if snapBeats {
+            targets += BeatCache.shared.sceneBeats(store.scene, excluding: moving).beats.map { ($0 * fps).rounded() / fps }
+        }
+        for target in targets {
+            let d = abs(tl.x(t) - tl.x(target))
+            if d < best { best = d; s = target }
+        }
         return min(max(s, 0), store.scene.duration)
     }
 
@@ -580,12 +615,13 @@ struct TimelinePanel: View {
 
     private func shift(_ ids: [String], dx: Double, ended: Bool, label: String) {
         if tl.dragOrigin == nil {
-            tl.dragOrigin = 0
+            // The earliest start among the moved layers: it is what snaps to the playhead or a beat.
+            tl.dragOrigin = store.scene.layers.filter { ids.contains($0.id) }.map(\.start).min() ?? 0
             store.beginInteractive(label)
             if ids.count == 1 { store.selection = ids[0] }
         }
-        let fps = Double(max(store.scene.fps, 1))
-        let dt = (dx / tl.pps * fps).rounded() / fps
+        let origin = tl.dragOrigin ?? 0
+        let dt = snap(origin + dx / tl.pps, moving: Set(ids)) - origin
         store.updateInteractive { try $0.shiftLayers(ids, by: dt) }
         if ended {
             store.endInteractive()
@@ -929,6 +965,27 @@ struct WaveformStrip: View {
                 px += 2
             }
             ctx.fill(path, with: .color(color.opacity(0.75)))
+        }
+    }
+}
+
+/// The music's beats over an audio clip: thin ticks, with taller, brighter ones on downbeats (bar starts).
+struct BeatStrip: View {
+    struct Mark { let x: Double; let downbeat: Bool }
+    let marks: [Mark]
+
+    var body: some View {
+        Canvas { ctx, size in
+            var beats = Path(), bars = Path()
+            for m in marks {
+                if m.downbeat {
+                    bars.addRect(CGRect(x: m.x - 0.75, y: 0, width: 1.5, height: size.height))
+                } else {
+                    beats.addRect(CGRect(x: m.x - 0.5, y: size.height * 0.55, width: 1, height: size.height * 0.45))
+                }
+            }
+            ctx.fill(beats, with: .color(.yellow.opacity(0.55)))
+            ctx.fill(bars, with: .color(.yellow.opacity(0.9)))
         }
     }
 }

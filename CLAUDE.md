@@ -64,4 +64,10 @@ The same `MCPServer` is served three ways: HTTP on `127.0.0.1:19790/mcp` (`Trans
   or `SequenceFrames`. `refreshMediaInfo` fills `sourceDuration` (and a sequence's fps). Movie decoding fails in
   sandboxed processes (`-12911`), so `vmotion frame` there draws the placeholder: test movies in the app, or test
   with image sequences.
+- Music sync (`AudioAnalysis.swift`): one FFT pass gives band envelopes, an onset curve (flux over log-spaced bands, so
+  kicks are not drowned by hi-hats), tempo (autocorrelation) and beats (dynamic programming). `AudioAnalysisCache`
+  caches per path (failures too) and is shared by `analyze_audio`, the timeline (`BeatCache` warms it) and the
+  renderer. `audioReact` is evaluated inside `MotionLayer.value`, which has no scene: `MotionScene.layers`/`duration`
+  `didSet` call `resolveAudioLinks`, which stores each reaction's source file and timing in `AudioReact.link`
+  (not saved). Renaming an audio layer repoints `source` in `updateLayer`.
 - Layer ids are unique: `addLayer` / `duplicateLayer` auto-suffix them (`title-2`), and renaming to a taken id throws.

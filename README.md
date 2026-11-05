@@ -43,6 +43,10 @@ Same agent in the terminal: `vmotion chat "make the title bounce in"`.
 - **Audio layers** (`type: "audio"`): music, sound effects or recorded voice. Volume is animatable;
   `trimIn`, `fadeIn`/`fadeOut`, and `duckTo` (music dips while a voice speaks). Waveforms show in the timeline;
   dragging the left edge trims the file like a video editor.
+- **Music sync**: the music's beats show on its clip (bars brighter); keyframes, layers and trims snap to them
+  (toggle with **Beats** in the timeline header). `analyze_audio` gives agents the tempo, beat/downbeat times,
+  strong hits and loudness, and `audioReact` makes any number property follow the music (loudness, bass/mid/treble,
+  or a pulse on every beat/bar) — set it in the Inspector's Motion section.
 - **Voice-over** (Add Layer → Voice-over…, or the `generate_voice` tool): macOS text-to-speech, offline and free.
   Returns per-word timings, used for **captions** (`add_captions`) and so Claude can time visuals to the narration.
   Better voices: System Settings → Accessibility → Spoken Content → System Voice → Manage Voices.
@@ -120,6 +124,7 @@ claude mcp add veymotion -- /path/to/vmotion mcp /path/to/scene.json
 | `add_layer` / `update_layer` / `remove_layer` / `reorder_layer` | layer edits (`update_layer` is a JSON merge patch) |
 | `set_keyframes` | replace keyframes of one property (numbers or the colors `fill`/`stroke`/`color`) |
 | `apply_preset` | 34 presets: entrances (fade, slide, pop, zoom, blur, bounce, drop, flip, rotate), exits, emphasis (spin, pulse, heartbeat, shake, wobble, jello), `drawOn` for shapes, per-letter/word/line text presets; `ids` + `stagger` cascades over several layers |
+| `analyze_audio` | tempo, beats, downbeats, strong hits and loudness of the music, in scene seconds |
 | `set_parent` | make a layer follow another one (keeps its on-screen position) |
 | `render_frame` | PNG of one frame, so the agent can check its work |
 | `list_assets` / `read_asset` | browse the asset library; image preview / text content |
@@ -166,7 +171,7 @@ vmotion render scene.json out.mp4
 - Keyframe `t` is absolute seconds; `easing` shapes the segment *arriving* at that keyframe:
   `linear | easeIn | easeOut | easeInOut (default) | hold | spring | spring(damping,frequency) | steps(n) |
   cubicBezier(x1,y1,x2,y2)` and `ease<In|Out|InOut><Sine|Quad|Cubic|Quart|Quint|Expo|Circ|Back|Elastic|Bounce>`.
-- Per layer: `loop` (`cycle`/`pingpong`/`offset` after the last key), `wiggle` (smooth noise), `parent`,
+- Per layer: `loop` (`cycle`/`pingpong`/`offset` after the last key), `wiggle` (smooth noise), `audioReact` (follows the music), `parent`,
   `motionPath` (curve the layer follows, driven by `pathProgress`), `textAnimators` (staggered per char/word/line).
 - Layer types: `rect` (width, height, cornerRadius, fill, stroke, strokeWidth), `ellipse`,
   `text` (text, fontSize, fontWeight, fontName, color, align, maxWidth), `image` (path, width, height),

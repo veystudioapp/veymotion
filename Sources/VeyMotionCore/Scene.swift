@@ -162,6 +162,8 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
     public var loop: [String: LoopMode]
     /// Procedural noise added to numeric properties, keyed by property name.
     public var wiggle: [String: Wiggle]
+    /// Offsets driven by the music's loudness or beat, keyed by property name.
+    public var audioReact: [String: AudioReact]
     public var shadowColor: RGBA
 
     // Shape (rect/ellipse) and image size. Image defaults to its natural size.
@@ -227,6 +229,7 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         motionPath = nil
         loop = [:]
         wiggle = [:]
+        audioReact = [:]
         shadowColor = RGBA(r: 0, g: 0, b: 0, a: 0.6)
         width = nil
         height = nil
@@ -309,12 +312,18 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         }
     }
 
-    /// Value of a property at time t, including loops and wiggle.
+    /// Value of a property at time t, including loops, wiggle and audio react.
     public func value(_ p: AnimProperty, at t: Double) -> Double {
-        var v = self[p].value(at: t, loop: loop[p.rawValue])
+        self[p].value(at: t, loop: loop[p.rawValue]) + proceduralOffset(p, at: t)
+    }
+
+    /// What wiggle and audio react add to a property at time t.
+    public func proceduralOffset(_ p: AnimProperty, at t: Double) -> Double {
+        var v = 0.0
         if let w = wiggle[p.rawValue], w.amount != 0 {
             v += w.offset(at: t, salt: Noise.hash("\(id).\(p.rawValue)"))
         }
+        if let r = audioReact[p.rawValue] { v += r.offset(at: t) }
         return v
     }
 
@@ -478,7 +487,7 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         case scaleX, scaleY, skewX, skewY, anchorX, anchorY, trim, letterSpacing
         case blur, shadowX, shadowY, shadowBlur, shadowOpacity, shadowColor, pathProgress
         case perspective, focus, aperture
-        case parent, motionPath, loop, wiggle, textAnimators
+        case parent, motionPath, loop, wiggle, audioReact, textAnimators
         case width, height, cornerRadius, fill, stroke, strokeWidth
         case text, fontSize, fontWeight, fontName, color, align, maxWidth
         case path, speed, playback, fps
@@ -515,6 +524,11 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         for k in wiggle.keys where AnimProperty(rawValue: k) == nil {
             throw DecodingError.dataCorruptedError(forKey: .wiggle, in: c,
                 debugDescription: "Unknown property '\(k)' in wiggle. Use one of \(AnimProperty.allCases.map(\.rawValue)).")
+        }
+        audioReact = try c.decodeIfPresent([String: AudioReact].self, forKey: .audioReact) ?? [:]
+        for k in audioReact.keys where AnimProperty(rawValue: k) == nil {
+            throw DecodingError.dataCorruptedError(forKey: .audioReact, in: c,
+                debugDescription: "Unknown property '\(k)' in audioReact. Use one of \(AnimProperty.allCases.map(\.rawValue)).")
         }
         shadowColor = try c.decodeIfPresent(RGBA.self, forKey: .shadowColor) ?? shadowColor
         width = try c.decodeIfPresent(AnimValue.self, forKey: .width)
@@ -585,6 +599,7 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
             try c.encodeIfPresent(motionPath, forKey: .motionPath)
             if !loop.isEmpty { try c.encode(loop, forKey: .loop) }
             if !wiggle.isEmpty { try c.encode(wiggle, forKey: .wiggle) }
+            if !audioReact.isEmpty { try c.encode(audioReact, forKey: .audioReact) }
             return
         }
         try c.encode(x, forKey: .x)
@@ -601,6 +616,7 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         try c.encodeIfPresent(motionPath, forKey: .motionPath)
         if !loop.isEmpty { try c.encode(loop, forKey: .loop) }
         if !wiggle.isEmpty { try c.encode(wiggle, forKey: .wiggle) }
+        if !audioReact.isEmpty { try c.encode(audioReact, forKey: .audioReact) }
         switch type {
         case .audio, .camera:
             break
@@ -642,15 +658,40 @@ public struct MotionScene: Codable, Equatable, Sendable {
     public var width: Int
     public var height: Int
     public var fps: Int
-    public var duration: Double
+    public var duration: Double { didSet { resolveAudioLinks() } }
     public var background: RGBA
     /// Draw order: first is bottom-most.
-    public var layers: [MotionLayer]
+    /// Every change re-links `audioReact` to its audio layer, so `MotionLayer.value` can follow the music on its own.
+    public var layers: [MotionLayer] { didSet { resolveAudioLinks() } }
 
     public init(width: Int = 1920, height: Int = 1080, fps: Int = 30, duration: Double = 5,
                 background: RGBA = RGBA(hex: "#0E0E12")!, layers: [MotionLayer] = []) {
         self.width = width; self.height = height; self.fps = fps
         self.duration = duration; self.background = background; self.layers = layers
+        resolveAudioLinks()
+    }
+
+    /// The audio layer an `audioReact` follows when it names no source: the music, else the first audio layer.
+    public var defaultReactSource: MotionLayer? {
+        let audio = audioLayers
+        return audio.first { $0.role == .music } ?? audio.first
+    }
+
+    /// Points every `audioReact` at its source audio layer's file and timing (nil when the source is missing).
+    mutating func resolveAudioLinks() {
+        guard layers.contains(where: { !$0.audioReact.isEmpty }) else { return }
+        let audio = audioLayers
+        let fallback = defaultReactSource
+        for i in layers.indices where !layers[i].audioReact.isEmpty {
+            for key in Array(layers[i].audioReact.keys) {
+                guard let react = layers[i].audioReact[key] else { continue }
+                let src = react.source.map { id in audio.first { $0.id == id } } ?? fallback
+                let link = src.flatMap { s in
+                    s.path.map { AudioLink(path: $0, start: s.start, trimIn: s.trimIn, end: s.effectiveEnd(sceneDuration: duration)) }
+                }
+                if react.link != link { layers[i].audioReact[key]?.link = link }
+            }
+        }
     }
 
     enum CodingKeys: String, CodingKey { case width, height, fps, duration, background, layers }
@@ -666,6 +707,7 @@ public struct MotionScene: Codable, Equatable, Sendable {
         layers = try c.decodeIfPresent([MotionLayer].self, forKey: .layers) ?? []
         try validate()
         normalizeIds()
+        resolveAudioLinks()
     }
 
     public func validate() throws {
