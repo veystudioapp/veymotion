@@ -172,7 +172,8 @@ export function authorizeUrl(platform: Platform, cfg: ProviderConfig, state: str
       q.set("response_type", "code");
       q.set("scope", cfg.scopes);
       q.set("access_type", "offline");
-      q.set("prompt", "consent");
+      // Always show the account / channel chooser, so "Add account" can pick another channel (Brand Account).
+      q.set("prompt", "select_account consent");
       q.set("include_granted_scopes", "true");
       q.set("code_challenge", pkceChallenge(entry.verifier));
       q.set("code_challenge_method", "S256");

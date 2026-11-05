@@ -78,8 +78,12 @@ The same `MCPServer` is served three ways: HTTP on `127.0.0.1:19790/mcp` (`Trans
   aspect differs, `VideoExporter` renders the scene into its own bitmap and places it per `ExportFit` (bars or crop).
   Publishing: OAuth is brokered by `server/server/api/social/*` (secrets stay there; the app opens `/connect` with a
   random state + sha256 challenge and polls `/session` with the secret), tokens live in the keychain
-  (`SocialKeychain`), and `SocialPublisher` uploads straight to YouTube (resumable), TikTok (Content Posting API),
+  (`SocialKeychain`, one item per account keyed `platform:userId`; the active one per platform is in UserDefaults), and `SocialPublisher` uploads straight to YouTube (resumable), TikTok (Content Posting API),
   Facebook Pages (resumable upload API) and X (media upload v2). Publishing is UI-only on purpose: no MCP tool posts.
+  The sheet goes Edit → Preview (`PublishStore.prepare` renders the scene once, reused while unchanged) → Publish.
+  Thumbnails (`PublishThumbnail`, JPEG ≤ 2 MB) are set after the upload and never fail the post; TikTok gets
+  `video_cover_timestamp_ms` instead. "Write with Claude" (`PublishCopy.swift`) runs `ClaudeCodeAgent.structured`
+  (`claude -p --tools "" --json-schema`).
   Logos are svgl.app SVGs embedded as strings in `SocialLogos.swift` (the app has no resource bundle).
   Sandboxed runs cannot encode video at all, and the Nitro server cannot read `server/.env` or listen there.
 - Layer ids are unique: `addLayer` / `duplicateLayer` auto-suffix them (`title-2`), and renaming to a taken id throws.

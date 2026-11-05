@@ -12,7 +12,9 @@ let package = Package(
     targets: [
         .target(name: "VeyMotionCore"),
         .target(name: "VeyMotionMCP", dependencies: ["VeyMotionCore"]),
-        .executableTarget(name: "VeyMotionApp", dependencies: ["VeyMotionCore", "VeyMotionMCP"]),
+        .executableTarget(name: "VeyMotionApp", dependencies: ["VeyMotionCore", "VeyMotionMCP"],
+                          // The publish preview uses AVPlayerView; link AVKit explicitly.
+                          linkerSettings: [.linkedFramework("AVKit")]),
         .executableTarget(name: "vmotion", dependencies: ["VeyMotionCore", "VeyMotionMCP"]),
     ]
 )

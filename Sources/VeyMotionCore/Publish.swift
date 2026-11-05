@@ -1,5 +1,7 @@
+import AVFoundation
 import CryptoKit
 import Foundation
+import ImageIO
 import Security
 
 // Publishing exported videos to YouTube, TikTok, Facebook Pages and X.
@@ -39,6 +41,9 @@ public struct SocialAccount: Codable, Sendable {
 
     var isExpiring: Bool { expiresAt.map { $0 < Date().addingTimeInterval(120) } ?? false }
 
+    /// Keychain key: one item per platform user (a YouTube channel, a TikTok / X / Facebook user).
+    public var key: String { "\(platform.rawValue):\(userId ?? "default")" }
+
     /// Whether the user granted `scope` (TikTok scopes are comma-separated, the others space-separated).
     public func hasScope(_ s: String) -> Bool {
         (scope ?? "").split(whereSeparator: { $0 == "," || $0 == " " }).contains { $0 == s }
@@ -47,17 +52,19 @@ public struct SocialAccount: Codable, Sendable {
 
 // MARK: - Keychain
 
+/// Connected accounts in the login keychain, one generic-password item per account (`SocialAccount.key`),
+/// so several YouTube channels (or TikTok / X / Facebook users) can stay connected and be switched between.
 public enum SocialKeychain {
     static let service = "dev.veymotion.social"
 
-    private static func query(_ platform: SocialPlatform) -> [String: Any] {
+    private static func query(_ key: String) -> [String: Any] {
         [kSecClass as String: kSecClassGenericPassword,
          kSecAttrService as String: service,
-         kSecAttrAccount as String: platform.rawValue]
+         kSecAttrAccount as String: key]
     }
 
-    public static func load(_ platform: SocialPlatform) -> SocialAccount? {
-        var q = query(platform)
+    public static func load(key: String) -> SocialAccount? {
+        var q = query(key)
         q[kSecReturnData as String] = true
         q[kSecMatchLimit as String] = kSecMatchLimitOne
         var out: CFTypeRef?
@@ -65,15 +72,33 @@ public enum SocialKeychain {
         return try? JSONDecoder().decode(SocialAccount.self, from: data)
     }
 
+    /// Every connected account of `platform`, oldest connection first.
+    public static func accounts(_ platform: SocialPlatform) -> [SocialAccount] {
+        migrateLegacy(platform)
+        // macOS keychains cannot return data for several items at once: list the keys, then load each.
+        let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
+                                kSecAttrService as String: service,
+                                kSecReturnAttributes as String: true,
+                                kSecMatchLimit as String: kSecMatchLimitAll]
+        var out: CFTypeRef?
+        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess,
+              let items = out as? [[String: Any]] else { return [] }
+        let prefix = "\(platform.rawValue):"
+        return items.compactMap { $0[kSecAttrAccount as String] as? String }
+            .filter { $0.hasPrefix(prefix) }
+            .compactMap { load(key: $0) }
+            .sorted { $0.connectedAt < $1.connectedAt }
+    }
+
     public static func save(_ account: SocialAccount) throws {
         let data = try JSONEncoder().encode(account)
-        let q = query(account.platform)
+        let q = query(account.key)
         var status = SecItemUpdate(q as CFDictionary, [kSecValueData as String: data] as CFDictionary)
         if status == errSecItemNotFound {
             var add = q
             add[kSecValueData as String] = data
             add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-            add[kSecAttrLabel as String] = "VeyMotion — \(account.platform.name)"
+            add[kSecAttrLabel as String] = "VeyMotion — \(account.platform.name) — \(account.displayName ?? account.userId ?? "")"
             status = SecItemAdd(add as CFDictionary, nil)
         }
         guard status == errSecSuccess else {
@@ -82,8 +107,14 @@ public enum SocialKeychain {
         }
     }
 
-    public static func delete(_ platform: SocialPlatform) {
-        SecItemDelete(query(platform) as CFDictionary)
+    public static func delete(key: String) {
+        SecItemDelete(query(key) as CFDictionary)
+    }
+
+    /// Earlier versions kept one item per platform, keyed by the platform name.
+    private static func migrateLegacy(_ platform: SocialPlatform) {
+        guard let old = load(key: platform.rawValue) else { return }
+        if (try? save(old)) != nil { delete(key: platform.rawValue) }
     }
 }
 
@@ -232,15 +263,18 @@ public enum SocialAuth {
                                     expiresAt: t.expiresIn.map { Date().addingTimeInterval($0) },
                                     scope: t.scope, userId: t.userId)
         try SocialPublisher.loadProfile(&account)
+        // Reconnecting an account that is already saved keeps its place in the list.
+        if let existing = SocialKeychain.load(key: account.key) { account.connectedAt = existing.connectedAt }
         try SocialKeychain.save(account)
         return account
     }
 
     /// The stored account with a fresh access token (refreshed through the server when it is about to expire).
-    public static func validAccount(_ platform: SocialPlatform) throws -> SocialAccount {
-        guard var account = SocialKeychain.load(platform) else {
-            throw PublishError("Connect your \(platform.name) account first.")
+    public static func validAccount(key: String) throws -> SocialAccount {
+        guard var account = SocialKeychain.load(key: key) else {
+            throw PublishError("This account is no longer connected. Connect it again.")
         }
+        let platform = account.platform
         guard account.isExpiring else { return account }
         guard let refreshToken = account.refreshToken else {
             throw PublishError("The \(platform.name) login has expired. Connect the account again.")
@@ -254,8 +288,8 @@ public enum SocialAuth {
         return account
     }
 
-    public static func disconnect(_ platform: SocialPlatform) {
-        SocialKeychain.delete(platform)
+    public static func disconnect(_ account: SocialAccount) {
+        SocialKeychain.delete(key: account.key)
     }
 }
 
@@ -284,6 +318,10 @@ public struct PublishRequest: Sendable {
     public var disableDuet = false
     public var disableStitch = false
     public var facebookPageId: String?
+    /// Custom thumbnail (JPEG, see `PublishThumbnail`), set on YouTube and Facebook after the upload.
+    public var thumbnail: Data?
+    /// TikTok direct posts: the frame used as the cover, in seconds into the video.
+    public var coverTime: Double?
 
     public init(file: URL, title: String) {
         self.file = file
@@ -313,7 +351,7 @@ public struct TikTokCreatorInfo: Sendable {
 
 public enum SocialPublisher {
     /// Uploads and publishes `req.file`. `progress` gets 0…1 and a short status line. Blocking.
-    public static func publish(_ platform: SocialPlatform, _ req: PublishRequest,
+    public static func publish(_ platform: SocialPlatform, account accountKey: String, _ req: PublishRequest,
                                isCancelled: @escaping @Sendable () -> Bool = { false },
                                progress: @escaping (Double, String) -> Void) throws -> PublishResult {
         guard platform.accepts(req.file) else {
@@ -324,7 +362,7 @@ public enum SocialPublisher {
         guard size <= platform.maxBytes else {
             throw PublishError("\(platform.name) accepts files up to \(ByteCountFormatter().string(fromByteCount: platform.maxBytes)).")
         }
-        let account = try SocialAuth.validAccount(platform)
+        let account = try SocialAuth.validAccount(key: accountKey)
         let up = Uploader(file: req.file, size: size, isCancelled: isCancelled, progress: progress)
         switch platform {
         case .youtube: return try youtube(req, account, up)
@@ -424,15 +462,24 @@ public enum SocialPublisher {
             }
         }
         guard let id = final?["id"] as? String else { throw PublishError("YouTube did not return a video id.") }
+        var note = "YouTube is processing the video; it may take a few minutes before it plays in full quality."
+        if let thumb = req.thumbnail {
+            up.status(0.99, "Setting the thumbnail…")
+            do {
+                _ = try PublishHTTP.call("POST", "https://www.googleapis.com/upload/youtube/v3/thumbnails/set?videoId=\(id)&uploadType=media",
+                                         bearer: a.accessToken, body: thumb, contentType: "image/jpeg")
+            } catch {
+                note += " The thumbnail was not set (\(error.localizedDescription)). Custom thumbnails need a verified channel: youtube.com/verify."
+            }
+        }
         up.status(1, "Uploaded")
-        return PublishResult(platform: .youtube, id: id, url: URL(string: "https://youtu.be/\(id)"),
-                             note: "YouTube is processing the video; it may take a few minutes before it plays in full quality.")
+        return PublishResult(platform: .youtube, id: id, url: URL(string: "https://youtu.be/\(id)"), note: note)
     }
 
     // MARK: TikTok (Content Posting API)
 
-    public static func tiktokCreatorInfo() throws -> TikTokCreatorInfo {
-        let a = try SocialAuth.validAccount(.tiktok)
+    public static func tiktokCreatorInfo(account key: String) throws -> TikTokCreatorInfo {
+        let a = try SocialAuth.validAccount(key: key)
         let obj = try PublishHTTP.call("POST", "https://open.tiktokapis.com/v2/post/publish/creator_info/query/",
                                        bearer: a.accessToken, json: [:]).json
         try tiktokCheck(obj)
@@ -461,7 +508,8 @@ public enum SocialPublisher {
             guard let privacy = req.tiktokPrivacy else { throw PublishError("Choose who can see the TikTok post.") }
             body["post_info"] = ["title": String(req.title.prefix(SocialPlatform.tiktok.titleLimit)),
                                  "privacy_level": privacy, "disable_comment": req.disableComments,
-                                 "disable_duet": req.disableDuet, "disable_stitch": req.disableStitch]
+                                 "disable_duet": req.disableDuet, "disable_stitch": req.disableStitch,
+                                 "video_cover_timestamp_ms": Int(((req.coverTime ?? 0) * 1000).rounded())]
         }
         let initURL = direct ? "https://open.tiktokapis.com/v2/post/publish/video/init/"
                              : "https://open.tiktokapis.com/v2/post/publish/inbox/video/init/"
@@ -507,7 +555,7 @@ public enum SocialPublisher {
             case "PUBLISH_COMPLETE":
                 up.status(1, "Posted")
                 let postId = (d["publicaly_available_post_id"] as? [Any])?.first.map { "\($0)" }
-                let user = (try? tiktokCreatorInfo())?.username
+                let user = (try? tiktokCreatorInfo(account: a.key))?.username
                 let url = postId.flatMap { id in user.flatMap { URL(string: "https://www.tiktok.com/@\($0)/video/\(id)") } }
                 return PublishResult(platform: .tiktok, id: postId ?? publishId, url: url,
                                      note: postId == nil ? "Posted. Unaudited TikTok apps can only post privately (Only me)." : nil)
@@ -561,9 +609,20 @@ public enum SocialPublisher {
         if !req.title.isEmpty { fields["title"] = String(req.title.prefix(SocialPlatform.facebook.titleLimit)) }
         let post = try PublishHTTP.call("POST", "https://graph-video.facebook.com/\(v)/\(page.id)/videos", form: fields).json
         guard let id = post["id"] as? String else { throw PublishError("Facebook did not return a video id.") }
+        var note = "Facebook is processing the video; it appears on \(page.name) when it is ready."
+        if let thumb = req.thumbnail {
+            up.status(0.99, "Setting the thumbnail…")
+            do {
+                let (body, type) = multipart(fields: ["access_token": page.accessToken, "is_preferred": "true"],
+                                             file: ("source", "thumbnail.jpg", "image/jpeg", thumb))
+                _ = try PublishHTTP.call("POST", "https://graph.facebook.com/\(v)/\(id)/thumbnails", body: body, contentType: type)
+            } catch {
+                note += " The thumbnail was not set (\(error.localizedDescription)); you can change it on the video's page."
+            }
+        }
         up.status(1, "Posted")
         return PublishResult(platform: .facebook, id: id, url: URL(string: "https://www.facebook.com/\(page.id)/videos/\(id)"),
-                             note: "Facebook is processing the video; it appears on \(page.name) when it is ready.")
+                             note: note)
     }
 
     private static func graphVersion() throws -> String {
@@ -632,6 +691,21 @@ public enum SocialPublisher {
         return PublishResult(platform: .x, id: id, url: URL(string: "https://x.com/\(user)/status/\(id)"), note: nil)
     }
 
+    /// multipart/form-data body with text fields and one file; returns (body, Content-Type).
+    private static func multipart(fields: [String: String], file: (name: String, filename: String, type: String, data: Data))
+        -> (Data, String) {
+        let boundary = "veymotion-\(UUID().uuidString)"
+        var body = Data()
+        for (k, v) in fields.sorted(by: { $0.key < $1.key }) {
+            body.append("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(k)\"\r\n\r\n\(v)\r\n")
+        }
+        body.append("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(file.name)\"; filename=\"\(file.filename)\"\r\n"
+            + "Content-Type: \(file.type)\r\n\r\n")
+        body.append(file.data)
+        body.append("\r\n--\(boundary)--\r\n")
+        return (body, "multipart/form-data; boundary=\(boundary)")
+    }
+
     private static func xMediaId(_ obj: [String: Any]) -> String? {
         let d = obj["data"] as? [String: Any] ?? obj
         return d["id"] as? String ?? d["media_id_string"] as? String ?? (d["media_id"] as? NSNumber)?.stringValue
@@ -686,6 +760,86 @@ private extension Data {
     mutating func append(_ s: String) { append(Data(s.utf8)) }
 }
 
+// MARK: - Thumbnails
+
+/// Thumbnail images for posts: a frame of the scene or video, or an image file, as a JPEG under 2 MB
+/// (YouTube's limit) with the longer side at most 1280 px.
+public enum PublishThumbnail {
+    public static let maxSide = 1280
+    public static let maxBytes = 2_000_000
+
+    public static func frame(of scene: MotionScene, at t: Double) -> CGImage? {
+        let scale = min(1, Double(maxSide) / Double(max(scene.width, scene.height, 1)))
+        return FrameRenderer().makeImage(scene, at: min(max(t, 0), scene.duration), scale: scale)
+    }
+
+    /// A frame as it appears in a video exported with `options` (bars or cropping when the size is reframed).
+    public static func frame(of scene: MotionScene, at t: Double, options: ExportOptions) -> CGImage? {
+        guard options.isReframed(for: scene) else { return frame(of: scene, at: t) }
+        let (w, h) = options.pixelSize(for: scene)
+        let s = min(1, Double(maxSide) / Double(max(w, h)))
+        let ow = Int(Double(w) * s), oh = Int(Double(h) * s)
+        let c = options.contentRect(for: scene)
+        let content = CGRect(x: c.minX * s, y: c.minY * s, width: c.width * s, height: c.height * s)
+        guard let img = FrameRenderer().makeImage(scene, at: min(max(t, 0), scene.duration),
+                                                  scale: Double(content.width) / Double(max(scene.width, 1))),
+              let ctx = CGContext(data: nil, width: ow, height: oh, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: FrameRenderer.colorSpace, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return nil }
+        ctx.setFillColor(scene.background.cgColor)
+        ctx.fill(CGRect(x: 0, y: 0, width: ow, height: oh))
+        ctx.interpolationQuality = .high
+        ctx.draw(img, in: content)
+        return ctx.makeImage()
+    }
+
+    /// A frame of a movie file. Blocking.
+    public static func frame(ofVideo url: URL, at t: Double) -> CGImage? {
+        let gen = AVAssetImageGenerator(asset: AVURLAsset(url: url))
+        gen.appliesPreferredTrackTransform = true
+        gen.maximumSize = CGSize(width: maxSide, height: maxSide)
+        gen.requestedTimeToleranceBefore = CMTime(value: 1, timescale: 10)
+        gen.requestedTimeToleranceAfter = CMTime(value: 1, timescale: 10)
+        let done = DispatchSemaphore(value: 0)
+        var image: CGImage?
+        gen.generateCGImageAsynchronously(for: CMTime(seconds: max(t, 0), preferredTimescale: 600)) { img, _, _ in
+            image = img
+            done.signal()
+        }
+        _ = done.wait(timeout: .now() + 10)
+        return image
+    }
+
+    public static func image(at url: URL) -> CGImage? {
+        AssetStore.loadImage(url, vectorPixels: Double(maxSide))?.image
+    }
+
+    /// JPEG data, downscaled to `maxSide` and compressed until it is under `maxBytes`.
+    public static func jpeg(_ image: CGImage) -> Data? {
+        var img = image
+        let longest = max(image.width, image.height)
+        if longest > maxSide {
+            let s = Double(maxSide) / Double(longest)
+            let w = Int(Double(image.width) * s), h = Int(Double(image.height) * s)
+            guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: FrameRenderer.colorSpace,
+                                      bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return nil }
+            ctx.interpolationQuality = .high
+            ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+            guard let scaled = ctx.makeImage() else { return nil }
+            img = scaled
+        }
+        for quality in [0.9, 0.8, 0.65, 0.5, 0.35] {
+            let data = NSMutableData()
+            guard let dest = CGImageDestinationCreateWithData(data, "public.jpeg" as CFString, 1, nil) else { return nil }
+            CGImageDestinationAddImage(dest, img, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
+            guard CGImageDestinationFinalize(dest) else { return nil }
+            if data.length <= maxBytes { return data as Data }
+        }
+        return nil
+    }
+}
+
 // MARK: - HTTP for platform APIs
 
 enum PublishHTTP {
@@ -698,7 +852,8 @@ enum PublishHTTP {
 
     /// JSON / form API call; non-2xx statuses throw with the platform's error message.
     static func call(_ method: String, _ url: String, bearer: String? = nil, json: [String: Any]? = nil,
-                     form: [String: String]? = nil, headers: [String: String] = [:]) throws -> Result {
+                     form: [String: String]? = nil, body: Data? = nil, contentType: String? = nil,
+                     headers: [String: String] = [:]) throws -> Result {
         guard let u = URL(string: url) else { throw PublishError("Invalid URL \(url)") }
         var r = HTTP.request(u, timeout: 60)
         r.httpMethod = method
@@ -712,6 +867,9 @@ enum PublishHTTP {
             c.queryItems = form.map { URLQueryItem(name: $0.key, value: $0.value) }
             // URLComponents leaves "+" alone, which form decoding reads as a space.
             r.httpBody = Data((c.percentEncodedQuery ?? "").replacingOccurrences(of: "+", with: "%2B").utf8)
+        } else if let body {
+            r.setValue(contentType ?? "application/octet-stream", forHTTPHeaderField: "Content-Type")
+            r.httpBody = body
         }
         for (k, v) in headers { r.setValue(v, forHTTPHeaderField: k) }
         let res = try send(r)

@@ -31,7 +31,7 @@ struct ExportSheet: View {
             }
         }
         .padding(16)
-        .frame(width: publishing == nil ? 440 : 500)
+        .frame(width: publishing == nil ? 440 : 560)
         .onAppear {
             start = 0
             end = scene.duration

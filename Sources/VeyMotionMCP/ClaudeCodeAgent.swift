@@ -387,6 +387,80 @@ public final class ClaudeCodeAgent {
         return (result?.isEmpty ?? true) ? nil : result
     }
 
+    /// One tool-less `claude -p` turn whose answer must match `schema` (JSON Schema), e.g. to draft
+    /// publishing copy. The prompt goes in on stdin. Blocking; call it off the main thread.
+    public static func structured(prompt: String, schema: [String: Any], claudePath: String, model: String? = nil,
+                                  workingDirectory: URL = Config.defaultWorkingDirectory,
+                                  timeout: TimeInterval = 120,
+                                  isCancelled: @escaping () -> Bool = { false }) throws -> [String: Any] {
+        struct Failure: LocalizedError {
+            var errorDescription: String?
+        }
+        try FileManager.default.createDirectory(at: workingDirectory, withIntermediateDirectories: true)
+        let schemaJSON = String(data: try JSONSerialization.data(withJSONObject: schema), encoding: .utf8) ?? "{}"
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: claudePath)
+        var args = ["-p", "--output-format", "json", "--tools", "", "--strict-mcp-config", "--setting-sources", "",
+                    "--no-session-persistence", "--json-schema", schemaJSON]
+        if let model, !model.isEmpty { args += ["--model", model] }
+        p.arguments = args
+        p.currentDirectoryURL = workingDirectory
+        var env = ProcessInfo.processInfo.environment
+        env["PATH"] = [env["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin", "/opt/homebrew/bin", "/usr/local/bin"].joined(separator: ":")
+        p.environment = env
+        let inPipe = Pipe(), outPipe = Pipe(), errPipe = Pipe()
+        p.standardInput = inPipe
+        p.standardOutput = outPipe
+        p.standardError = errPipe
+
+        let lock = NSLock()
+        var out = Data(), err = Data()
+        outPipe.fileHandleForReading.readabilityHandler = { h in
+            let c = h.availableData; lock.lock(); out.append(c); lock.unlock()
+        }
+        errPipe.fileHandleForReading.readabilityHandler = { h in
+            let c = h.availableData; lock.lock(); err.append(c); lock.unlock()
+        }
+        let done = DispatchSemaphore(value: 0)
+        p.terminationHandler = { _ in done.signal() }
+        try p.run()
+        try? inPipe.fileHandleForWriting.write(contentsOf: Data(prompt.utf8))
+        try? inPipe.fileHandleForWriting.close()
+
+        let deadline = Date().addingTimeInterval(timeout)
+        while done.wait(timeout: .now() + 0.25) == .timedOut {
+            if isCancelled() || Date() > deadline {
+                p.terminate()
+                done.wait()
+                outPipe.fileHandleForReading.readabilityHandler = nil
+                errPipe.fileHandleForReading.readabilityHandler = nil
+                throw Failure(errorDescription: isCancelled() ? "Cancelled" : "Claude took too long to answer.")
+            }
+        }
+        outPipe.fileHandleForReading.readabilityHandler = nil
+        errPipe.fileHandleForReading.readabilityHandler = nil
+        lock.lock()
+        out.append(outPipe.fileHandleForReading.readDataToEndOfFile())
+        let output = out, errors = String(data: err, encoding: .utf8) ?? ""
+        lock.unlock()
+
+        guard let obj = try? JSONSerialization.jsonObject(with: output) as? [String: Any] else {
+            let detail = (errors.isEmpty ? String(data: output.prefix(400), encoding: .utf8) ?? "" : errors)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            throw Failure(errorDescription: "Claude did not answer (exit \(p.terminationStatus)). \(detail.prefix(400))")
+        }
+        if obj["is_error"] as? Bool == true {
+            throw Failure(errorDescription: "Claude: \(obj["result"] as? String ?? obj["subtype"] as? String ?? "error")")
+        }
+        if let s = obj["structured_output"] as? [String: Any] { return s }
+        // Older CLIs: the JSON answer is in `result`.
+        if let text = obj["result"] as? String, let data = text.data(using: .utf8),
+           let s = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            return s
+        }
+        throw Failure(errorDescription: "Claude's answer was not in the expected format.")
+    }
+
     /// Finds the `claude` executable: $VEYMOTION_CLAUDE, common install paths, PATH, then a login shell.
     public static func locateClaude() -> String? {
         let fm = FileManager.default
