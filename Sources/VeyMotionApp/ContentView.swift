@@ -218,9 +218,10 @@ struct CanvasView: View {
             let fit = avail.width / avail.height > aspect
                 ? CGSize(width: avail.height * aspect, height: avail.height)
                 : CGSize(width: avail.width, height: avail.width / aspect)
-            // While playing, one pixel per point (a quarter of the pixels on Retina); full sharpness when paused.
-            let density = store.isPlaying ? 1 : displayScale
-            let scale = min(1, fit.width * density / Double(scene.width))
+            // Render at the canvas's real pixel size (not capped at the scene size, so vector content stays sharp
+            // when the canvas is larger than the scene); while playing, at most 1.5 px/pt to keep frames cheap.
+            let density = store.isPlaying ? min(displayScale, 1.5) : displayScale
+            let scale = fit.width * density / Double(scene.width)
             let key = FrameKey(revision: store.sceneRevision, time: store.time, scale: scale)
             ZStack {
                 if let img = preview.image {
