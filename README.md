@@ -50,6 +50,11 @@ Same agent in the terminal: `vmotion chat "make the title bounce in"`.
 - **Voice-over** (Add Layer → Voice-over…, or the `generate_voice` tool): macOS text-to-speech, offline and free.
   Returns per-word timings, used for **captions** (`add_captions`) and so Claude can time visuals to the narration.
   Better voices: System Settings → Accessibility → Spoken Content → System Voice → Manage Voices.
+- **Vietnamese voices with [VieNeu](https://vieneu.io)**: pick the VieNeu engine in the Voice-over sheet, or pass
+  `"engine": "vieneu"` to `list_voices` / `generate_voice`. The app calls the server in `server/` (Nitro), which
+  keeps the VieNeu API key: put `NITRO_VIENEU_API_KEY` in `server/.env`, run `cd server && bun run dev`, and point
+  the app at it with `BASE_API_URL` (default `http://localhost:3000`; see `.env.example`). Word timings for
+  captions are estimated.
 - Preview plays the mix in sync with the playhead; export writes it into the file
   (`.mp4` AAC, `.mov` PCM, audio-only `.m4a` / `.wav`). Preview and export share one mixer (`AudioMixer`).
 - Generated voice files live in `~/Library/Application Support/VeyMotion/assets/`.

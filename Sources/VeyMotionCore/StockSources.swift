@@ -395,19 +395,8 @@ enum HTTP {
 
     /// Blocking GET that also returns the response (for file names / MIME types).
     static func fetch(_ url: URL, timeout: TimeInterval = 30) throws -> (data: Data, response: HTTPURLResponse?) {
-        let done = DispatchSemaphore(value: 0)
-        var result: (Data?, URLResponse?, Error?) = (nil, nil, nil)
-        let task = session.dataTask(with: request(url, timeout: timeout)) { d, r, e in
-            result = (d, r, e)
-            done.signal()
-        }
-        task.resume()
-        if done.wait(timeout: .now() + timeout + 5) == .timedOut {
-            task.cancel()
-            throw AssetError.failed("Request timed out: \(url.host ?? url.absoluteString)")
-        }
-        if let e = result.2 { throw AssetError.failed("Cannot reach \(url.host ?? "the server"): \(e.localizedDescription)") }
-        if let http = result.1 as? HTTPURLResponse {
+        let result = try perform(request(url, timeout: timeout))
+        if let http = result.response {
             if http.statusCode == 429 {
                 throw AssetError.failed("\(url.host ?? "The server") is rate-limiting requests. Wait a minute and try again.")
             }
@@ -415,6 +404,25 @@ enum HTTP {
                 throw AssetError.failed("\(url.host ?? "Server") returned HTTP \(http.statusCode)")
             }
         }
+        return result
+    }
+
+    /// Blocking request of any method. Throws only when the server cannot be reached; the caller checks the status.
+    static func perform(_ req: URLRequest) throws -> (data: Data, response: HTTPURLResponse?) {
+        let url = req.url
+        let timeout = req.timeoutInterval
+        let done = DispatchSemaphore(value: 0)
+        var result: (Data?, URLResponse?, Error?) = (nil, nil, nil)
+        let task = session.dataTask(with: req) { d, r, e in
+            result = (d, r, e)
+            done.signal()
+        }
+        task.resume()
+        if done.wait(timeout: .now() + timeout + 5) == .timedOut {
+            task.cancel()
+            throw AssetError.failed("Request timed out: \(url?.host ?? url?.absoluteString ?? "")")
+        }
+        if let e = result.2 { throw AssetError.failed("Cannot reach \(url?.host ?? "the server"): \(e.localizedDescription)") }
         return (result.0 ?? Data(), result.1 as? HTTPURLResponse)
     }
 

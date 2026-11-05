@@ -70,4 +70,9 @@ The same `MCPServer` is served three ways: HTTP on `127.0.0.1:19790/mcp` (`Trans
   renderer. `audioReact` is evaluated inside `MotionLayer.value`, which has no scene: `MotionScene.layers`/`duration`
   `didSet` call `resolveAudioLinks`, which stores each reaction's source file and timing in `AudioReact.link`
   (not saved). Renaming an audio layer repoints `source` in `updateLayer`.
+- Text-to-speech has two engines behind `generate_voice` / `list_voices` (`engine`) and the Voice-over sheet:
+  `VoiceSynth` (macOS, exact word timings) and `VieNeu` (`VieNeu.swift`), which calls the Nitro server in
+  `server/` (`/api/tts/*`; it holds the VieNeu key) at `BASE_API_URL` (env, else a `.env` in the working dir /
+  next to the binary / Application Support). VieNeu gives no word timings, so `VoiceSynth.estimateTimings` fills them.
+  Short text uses `/api/tts/speech` (WAV); text over 1500 characters goes through `/api/tts/jobs` and polling.
 - Layer ids are unique: `addLayer` / `duplicateLayer` auto-suffix them (`title-2`), and renaming to a taken id throws.

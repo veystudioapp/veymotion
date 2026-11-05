@@ -97,6 +97,9 @@ enum Docs {
     - Narrated video: write the script per section, then generate_voice once per section with start = section start.
       Use the returned duration to size each section (leave ~0.3–0.6s of air between sections) and the word times
       to make key text/visuals appear as they are spoken. Extend the scene duration if the narration is longer.
+    - Vietnamese narration: use engine "vieneu" (list_voices engine "vieneu" for voice ids such as "Ngọc Lan"); it
+      sounds far more natural than macOS voices. Its word times are estimated. If it fails because the TTS server is
+      not running, tell the user and fall back to engine "macos".
     - Captions: add_captions on each voice layer when the user wants subtitles.
     - Music: add_audio with role "music", duckTo ≈ 0.25 and a fadeOut of 1–2s at the end.
     - Cut to the music: call analyze_audio once the music layer is in (it returns scene times). Start entrances and
@@ -280,19 +283,26 @@ enum Docs {
       },
       {
         "name": "list_voices",
-        "description": "List the text-to-speech voices installed on this Mac (id, name, language, quality). Filter by language prefix, e.g. \"vi\" or \"en\".",
-        "inputSchema": { "type": "object", "properties": { "language": { "type": "string" } } }
+        "description": "List text-to-speech voices. engine \"macos\" (default): voices installed on this Mac (id, name, language, quality), filtered by language prefix, e.g. \"vi\" or \"en\". engine \"vieneu\": natural Vietnamese cloud voices from VieNeu.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "engine": { "type": "string", "enum": ["macos", "vieneu"] },
+            "language": { "type": "string", "description": "macos only." }
+          }
+        }
       },
       {
         "name": "generate_voice",
-        "description": "Speak a script with a macOS voice and add it as a voice audio layer starting at `start`. Returns the audio duration and the scene time of every word, so you can time visuals and captions to the narration. Generate one call per section.",
+        "description": "Speak a script and add it as a voice audio layer starting at `start`. Returns the audio duration and the scene time of every word, so you can time visuals and captions to the narration. Generate one call per section.",
         "inputSchema": {
           "type": "object",
           "properties": {
             "text": { "type": "string", "description": "What to say. Plain sentences; punctuation creates natural pauses." },
             "start": { "type": "number", "description": "Scene time (s) where the voice begins. Default 0." },
-            "language": { "type": "string", "description": "e.g. vi-VN, en-US. Used when `voice` is not given." },
-            "voice": { "type": "string", "description": "Voice id from list_voices." },
+            "engine": { "type": "string", "enum": ["macos", "vieneu"], "description": "Default macos. vieneu = natural Vietnamese voices (word times are estimated)." },
+            "language": { "type": "string", "description": "macos only: e.g. vi-VN, en-US. Used when `voice` is not given." },
+            "voice": { "type": "string", "description": "Voice id from list_voices for the same engine." },
             "rate": { "type": "number", "description": "Speaking speed multiplier, 1 = normal (0.5–2)." },
             "id": { "type": "string", "description": "Layer id, e.g. vo-1." }
           },
