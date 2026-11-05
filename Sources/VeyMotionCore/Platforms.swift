@@ -43,6 +43,14 @@ public struct PlatformPreset: Identifiable, Hashable, Sendable {
         all.first { $0.id == id.lowercased() }
     }
 
+    /// The `platform` preset closest to the scene's aspect ratio (YouTube: Shorts for vertical scenes),
+    /// whose limits apply when the scene is published there as it is.
+    public static func matching(_ platform: SocialPlatform, scene: MotionScene) -> PlatformPreset? {
+        let aspect = Double(scene.width) / Double(max(scene.height, 1))
+        return all.filter { $0.platform == platform }
+            .min { abs(log(Double($0.width) / Double($0.height) / aspect)) < abs(log(Double($1.width) / Double($1.height) / aspect)) }
+    }
+
     /// Problems exporting `scene` with this preset (too long, too many fps, likely too big).
     public func warnings(for scene: MotionScene, duration: Double, estimatedBytes: Int64?) -> [String] {
         var out: [String] = []
@@ -57,7 +65,7 @@ public struct PlatformPreset: Identifiable, Hashable, Sendable {
         return out
     }
 
-    static func formatDuration(_ s: Double) -> String {
+    public static func formatDuration(_ s: Double) -> String {
         let t = Int(s.rounded())
         if t < 60 { return "\(t)s" }
         return t % 60 == 0 ? "\(t / 60) min" : "\(t / 60)m \(t % 60)s"

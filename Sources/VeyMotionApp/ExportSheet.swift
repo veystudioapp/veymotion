@@ -201,10 +201,7 @@ struct ExportSheet: View {
                 Spacer()
                 Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
                 if !ExportFormat.infer(from: url).isAudioOnly {
-                    Button("Publish…") {
-                        PublishStore.shared.lastExport = url
-                        publishing = url
-                    }
+                    Button("Publish…") { publishing = url }
                 }
                 Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
             }

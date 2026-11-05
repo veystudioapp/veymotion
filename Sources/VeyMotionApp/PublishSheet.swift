@@ -1,7 +1,7 @@
 import AppKit
+import CryptoKit
 import Observation
 import SwiftUI
-import UniformTypeIdentifiers
 import VeyMotionCore
 
 /// Connected social accounts and the publish job. Uploads keep running when the sheet is closed.
@@ -24,16 +24,17 @@ final class PublishStore {
     private(set) var tiktokInfo: TikTokCreatorInfo?
     private(set) var tiktokInfoError: String?
 
-    /// Non-nil while publishing (0…1).
+    /// Non-nil while publishing (0…1, rendering included).
     private(set) var progress: Double?
     private(set) var status = ""
     private(set) var publishing: SocialPlatform?
     private(set) var outcome: Outcome?
-    /// The last exported video, offered by File > Publish Video….
-    var lastExport: URL?
 
     @ObservationIgnored private var connectCancel: CancelFlag?
     @ObservationIgnored private var publishCancel: CancelFlag?
+    /// The last scene render, reused while the scene (and its media files) are unchanged, e.g. to publish
+    /// the same video to several platforms in a row.
+    @ObservationIgnored private var rendered: (key: String, url: URL)?
 
     /// Reads saved accounts from the keychain and asks the server which platforms it supports.
     func load(refresh: Bool = false) {
@@ -112,7 +113,8 @@ final class PublishStore {
         }
     }
 
-    func publish(_ p: SocialPlatform, _ request: PublishRequest) {
+    /// Uploads `request.file`, or first renders `scene` to an MP4 (then `request.file` is ignored).
+    func publish(_ p: SocialPlatform, _ request: PublishRequest, rendering scene: MotionScene? = nil, name: String = "VeyMotion") {
         guard progress == nil else { return }
         let cancel = CancelFlag()
         publishCancel = cancel
@@ -120,15 +122,41 @@ final class PublishStore {
         outcome = nil
         progress = 0
         status = "Preparing…"
+        let previous = rendered
         DispatchQueue.global(qos: .userInitiated).async {
             let outcome: Outcome
+            // Rendering takes the first half of the bar, uploading the rest.
+            let report = { (value: Double, text: String) in
+                DispatchQueue.main.async {
+                    guard self.progress != nil else { return }
+                    self.progress = value
+                    self.status = text
+                }
+            }
             do {
-                let r = try SocialPublisher.publish(p, request, isCancelled: { cancel.isSet }) { value, text in
-                    DispatchQueue.main.async {
-                        guard self.progress != nil else { return }
-                        self.progress = value
-                        self.status = text
+                var request = request
+                var uploadStart = 0.0
+                if let scene {
+                    let key = try Self.renderKey(scene, platform: p)
+                    if let previous, previous.key == key, FileManager.default.fileExists(atPath: previous.url.path) {
+                        request.file = previous.url
+                    } else {
+                        let url = try Self.renderURL(name, clearing: previous == nil)
+                        try VideoExporter.export(scene, to: url, options: Self.renderOptions(scene, platform: p),
+                                                 isCancelled: { cancel.isSet }) { v in
+                            report(0.5 * v, "Rendering the video… \(Int(v * 100))%")
+                        }
+                        DispatchQueue.main.async {
+                            if let old = self.rendered?.url, old != url { try? FileManager.default.removeItem(at: old) }
+                            self.rendered = (key, url)
+                        }
+                        request.file = url
                     }
+                    uploadStart = 0.5
+                }
+                let start = uploadStart
+                let r = try SocialPublisher.publish(p, request, isCancelled: { cancel.isSet }) { value, text in
+                    report(start + (1 - start) * value, text)
                 }
                 outcome = .done(r)
             } catch {
@@ -151,6 +179,39 @@ final class PublishStore {
 
     func cancelPublish() { publishCancel?.set() }
 
+    /// MP4 at the scene's size, at the best quality that stays under the platform's file limit.
+    static func renderOptions(_ scene: MotionScene, platform: SocialPlatform) -> ExportOptions {
+        var o = ExportOptions(format: .mp4, quality: .high)
+        for q in [ExportQuality.high, .medium, .low] {
+            o.quality = q
+            if (o.estimatedBytes(for: scene) ?? 0) < platform.maxBytes * 9 / 10 { break }
+        }
+        return o
+    }
+
+    /// Identifies a render: the scene JSON, the media files' modification dates, and the render options.
+    private static func renderKey(_ scene: MotionScene, platform: SocialPlatform) throws -> String {
+        var data = try SceneJSON.encode(scene, pretty: false)
+        for path in Set(scene.layers.compactMap(\.path)).sorted() {
+            let date = (try? FileManager.default.attributesOfItem(atPath: path)[.modificationDate] as? Date) ?? nil
+            data.append(Data("\(path)|\(date?.timeIntervalSince1970 ?? 0)".utf8))
+        }
+        data.append(Data(renderOptions(scene, platform: platform).quality.rawValue.utf8))
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// ~/Library/Caches/VeyMotion/publish/<name>.mp4 (platforms show the file name in some places).
+    /// `clearing` removes renders left over from earlier sessions.
+    private static func renderURL(_ name: String, clearing: Bool) throws -> URL {
+        let fm = FileManager.default
+        let dir = try fm.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+            .appendingPathComponent("VeyMotion/publish", isDirectory: true)
+        if clearing { try? fm.removeItem(at: dir) }
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        let safe = name.components(separatedBy: CharacterSet(charactersIn: "/:\\?%*|\"<>")).joined(separator: "-")
+        return dir.appendingPathComponent("\(safe.isEmpty ? "VeyMotion" : safe)-\(UUID().uuidString.prefix(6)).mp4")
+    }
+
     func clearOutcome() { if progress == nil { outcome = nil } }
 }
 
@@ -160,16 +221,17 @@ struct PublishSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        PublishView(file: PublishStore.shared.lastExport, suggested: nil, defaultTitle: store.defaultExportName,
-                    onClose: { dismiss() })
+        PublishView(file: nil, suggested: nil, defaultTitle: store.defaultExportName, onClose: { dismiss() })
             .padding(16)
             .frame(width: 500)
     }
 }
 
-/// Pick a platform, connect the account, fill in the post, and upload `file`.
+/// Pick a platform, connect the account, fill in the post, and upload: `file` when given (right after an
+/// export), otherwise the current scene, rendered to MP4 when you press Publish.
 struct PublishView: View {
-    @State var file: URL?
+    @Environment(SceneStore.self) private var store
+    var file: URL?
     var suggested: SocialPlatform?
     var defaultTitle: String
     var onBack: (() -> Void)?
@@ -191,7 +253,7 @@ struct PublishView: View {
 
     init(file: URL?, suggested: SocialPlatform?, defaultTitle: String,
          onBack: (() -> Void)? = nil, onClose: @escaping () -> Void) {
-        _file = State(initialValue: file)
+        self.file = file
         self.suggested = suggested
         self.defaultTitle = defaultTitle
         self.onBack = onBack
@@ -236,10 +298,12 @@ struct PublishView: View {
                 Text(file.lastPathComponent).lineLimit(1).truncationMode(.middle)
                 Text(fileSize(file)).foregroundStyle(.secondary)
             } else {
-                Text("No video chosen").foregroundStyle(.secondary)
+                let scene = store.scene
+                Text(defaultTitle).lineLimit(1).truncationMode(.middle)
+                Text("\(scene.width)×\(scene.height) · \(PlatformPreset.formatDuration(scene.duration)) · rendered to MP4 when you publish")
+                    .foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer()
-            Button("Choose…") { chooseFile() }.disabled(isBusy)
         }
         .font(.callout)
     }
@@ -423,8 +487,10 @@ struct PublishView: View {
                 Label("Publishing cancelled", systemImage: "xmark.circle").foregroundStyle(.secondary)
             }
         }
-        if let problem = fileProblem, account != nil, !isBusy {
-            Text(problem).font(.caption).foregroundStyle(.orange)
+        if account != nil, !isBusy {
+            ForEach([fileProblem].compactMap { $0 } + limitWarnings, id: \.self) { problem in
+                Label(problem, systemImage: "exclamationmark.triangle.fill").font(.caption).foregroundStyle(.orange)
+            }
         }
         HStack {
             if let onBack { Button("Back") { onBack() }.disabled(isBusy) }
@@ -447,9 +513,25 @@ struct PublishView: View {
     // MARK: Actions
 
     private var fileProblem: String? {
-        guard let file else { return "Choose a video to publish." }
-        if !platform.accepts(file) { return "\(platform.name) needs an MP4 file\(platform == .x ? "" : " or MOV"). Export as MP4 — H.264." }
+        if let file, !platform.accepts(file) {
+            return "\(platform.name) needs an MP4 file\(platform == .x ? "" : " or MOV"). Export as MP4 — H.264."
+        }
         return nil
+    }
+
+    /// Platform limits the video breaks (too long, too big), from the scene or the file.
+    private var limitWarnings: [String] {
+        let scene = store.scene
+        guard let preset = PlatformPreset.matching(platform, scene: scene) else { return [] }
+        if file != nil { return [] }
+        var out = preset.warnings(for: scene, duration: scene.duration, estimatedBytes: nil)
+        // renderOptions already lowers the quality to fit; warn only if even the lowest is too big.
+        let bytes = PublishStore.renderOptions(scene, platform: platform).estimatedBytes(for: scene) ?? 0
+        if bytes > platform.maxBytes {
+            let fmt = ByteCountFormatter()
+            out.append("The video will be about \(fmt.string(fromByteCount: bytes)); \(platform.name) accepts up to \(fmt.string(fromByteCount: platform.maxBytes)).")
+        }
+        return out
     }
 
     private var canPublish: Bool {
@@ -466,8 +548,8 @@ struct PublishView: View {
     }
 
     private func publish() {
-        guard let file else { return }
-        var r = PublishRequest(file: file, title: platform == .tiktok || platform == .x ? caption : title)
+        var r = PublishRequest(file: file ?? URL(fileURLWithPath: "/dev/null"),
+                               title: platform == .tiktok || platform == .x ? caption : title)
         r.description = details
         r.tags = tags.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         r.youtubePrivacy = youtubePrivacy
@@ -477,17 +559,11 @@ struct PublishView: View {
         r.disableDuet = !allowDuet
         r.disableStitch = !allowStitch
         r.facebookPageId = facebookPage
-        publisher.publish(platform, r)
-    }
-
-    private func chooseFile() {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.mpeg4Movie, .quickTimeMovie]
-        if let file { panel.directoryURL = file.deletingLastPathComponent() }
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        file = url
-        publisher.lastExport = url
-        publisher.clearOutcome()
+        if file != nil {
+            publisher.publish(platform, r)
+        } else {
+            publisher.publish(platform, r, rendering: store.scene, name: defaultTitle)
+        }
     }
 
     private func fileSize(_ url: URL) -> String {

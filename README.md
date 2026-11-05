@@ -66,8 +66,10 @@ Same agent in the terminal: `vmotion chat "make the title bounce in"`.
   ratio is **fit** (bars in the background color) or **fill** (cropped), and the sheet warns when the video is
   longer or (roughly) bigger than the platform accepts. Agents use `export_video` with `preset` / `fit`; the CLI
   takes `vmotion render scene.json out.mp4 --preset tiktok --fit fill`.
-- **Publishing** (Export → **Publish…** after an export, or File → Publish Video… ⇧⌘E): upload to YouTube,
-  TikTok (to the creator's inbox, or a direct post), a Facebook Page, or X. **Connect** opens the platform's
+- **Publishing** (toolbar **Publish**, File → Publish Video… ⇧⌘E, or **Publish…** after an export): upload to
+  YouTube, TikTok (to the creator's inbox, or a direct post), a Facebook Page, or X. From the toolbar/menu the
+  current scene is rendered to MP4 at its own size when you press Publish (the render is reused while the scene is
+  unchanged, so publishing to several platforms renders once); after an export, the exported file is uploaded. **Connect** opens the platform's
   sign-in in the browser. OAuth goes through the `server/` app, which holds the client secrets
   (`/api/social/*`): create a developer app on each platform, register
   `<server URL>/api/social/<platform>/callback` as its redirect URI, and put the client id/secret in

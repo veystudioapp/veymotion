@@ -908,9 +908,7 @@ final class SceneStore: SceneHost {
                 self.exportCancel = nil
                 self.exportResult = result
                 switch result {
-                case let .done(url, _):
-                    self.message = "Exported \(url.lastPathComponent)"
-                    if !ExportFormat.infer(from: url).isAudioOnly { PublishStore.shared.lastExport = url }
+                case let .done(url, _): self.message = "Exported \(url.lastPathComponent)"
                 case let .failed(msg): self.message = msg
                 case .cancelled: self.message = "Export cancelled"
                 }
