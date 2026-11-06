@@ -498,6 +498,15 @@ struct StatusBar: View {
                 }
                 .buttonStyle(.plain)
                 .help("Show export progress")
+            } else if store.exportResultUnseen, case let .done(url, _)? = store.exportResult {
+                Button { store.exportVideo() } label: {
+                    Label("Exported \(url.lastPathComponent)", systemImage: "checkmark.circle.fill")
+                        .lineLimit(1).truncationMode(.middle)
+                }
+                .buttonStyle(.plain)
+                .help("Show the export result (Show in Finder, Publish)")
+                Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+                    .buttonStyle(.link)
             } else if let m = store.message {
                 Text(m).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
             }

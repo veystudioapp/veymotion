@@ -48,6 +48,8 @@ final class SceneStore: SceneHost {
     private(set) var exportStartedAt: Date?
     /// Result of the last export, shown in the Export sheet until the next one starts.
     private(set) var exportResult: ExportResult?
+    /// The export finished while its sheet was hidden: the status bar offers the result until it is opened.
+    private(set) var exportResultUnseen = false
     @ObservationIgnored private var exportCancel: CancelFlag?
     var message: String?
     var lastAgentAction: String?
@@ -931,7 +933,8 @@ final class SceneStore: SceneHost {
 
     /// Opens the Export sheet (options, or progress if an export is already running).
     func exportVideo() {
-        if exportProgress == nil { exportResult = nil }
+        if exportProgress == nil && !exportResultUnseen { exportResult = nil }
+        exportResultUnseen = false
         showExport = true
     }
 
@@ -953,6 +956,7 @@ final class SceneStore: SceneHost {
         let cancel = CancelFlag()
         exportCancel = cancel
         exportResult = nil
+        exportResultUnseen = false
         exportProgress = 0
         exportStartedAt = Date()
         DispatchQueue.global(qos: .userInitiated).async {
@@ -980,6 +984,7 @@ final class SceneStore: SceneHost {
                 }
                 // Surface failures even if the sheet was closed while exporting.
                 if case .failed = result { self.showExport = true }
+                self.exportResultUnseen = !self.showExport
             }
         }
     }
