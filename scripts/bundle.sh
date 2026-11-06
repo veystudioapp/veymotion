@@ -30,6 +30,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSPrincipalClass</key><string>NSApplication</string>
+  <key>NSSpeechRecognitionUsageDescription</key><string>VeyMotion transcribes the speech in your audio and video layers to make captions.</string>
 </dict>
 </plist>
 PLIST

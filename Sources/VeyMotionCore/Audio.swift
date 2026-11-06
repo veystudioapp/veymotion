@@ -88,6 +88,18 @@ public enum AudioFileInfo {
 extension MotionScene {
     public var audioLayers: [MotionLayer] { layers.filter { $0.type == .audio && $0.path != nil } }
 
+    /// Everything the mixer plays: audio layers, plus video layers whose movie has sound (at normal speed).
+    public var soundLayers: [MotionLayer] {
+        layers.filter { l in
+            guard let p = l.path else { return false }
+            switch l.type {
+            case .audio: return true
+            case .video: return l.speed == 1 && MediaAudio.hasAudioTrack(p)
+            default: return false
+            }
+        }
+    }
+
     /// Fills `sourceDuration` for audio and video layers that don't have it yet. Returns problems (unreadable files).
     @discardableResult
     public mutating func refreshMediaInfo() -> [String] {
@@ -117,7 +129,7 @@ public enum AudioMixer {
     public static let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 2)!
     static let duckRamp = 0.25
 
-    public static func hasAudio(_ scene: MotionScene) -> Bool { !scene.audioLayers.isEmpty }
+    public static func hasAudio(_ scene: MotionScene) -> Bool { !scene.soundLayers.isEmpty }
 
     /// Gain of a layer at scene time t: volume × fades × ducking.
     static func gain(_ l: MotionLayer, at t: Double, start: Double, end: Double, voice: [(Double, Double)]) -> Float {
@@ -151,41 +163,72 @@ public enum AudioMixer {
         let voice = scene.audioLayers.filter { $0.role == .voice }
             .map { ($0.start, $0.effectiveEnd(sceneDuration: scene.duration)) }
 
-        for l in scene.audioLayers {
+        for l in scene.soundLayers {
             guard let path = l.path else { continue }
             // Fades end where the sound actually stops: the layer end or the scene end, whichever is first.
             let ls = l.start, le = min(l.effectiveEnd(sceneDuration: scene.duration), scene.duration)
             let segStart = max(ls, t0), segEnd = min(le, end)
             guard segEnd > segStart else { continue }
 
-            let src = try readSegment(path: path, from: l.trimIn + (segStart - ls), duration: segEnd - segStart)
-            let n = Int(src.frameLength)
-            guard n > 0, let ch = src.floatChannelData else { continue }
-            let srcChannels = Int(src.format.channelCount)
-            let left = ch[0], right = ch[min(1, srcChannels - 1)]
-            let offset = Int(((segStart - t0) * sampleRate).rounded())
-            let count = min(n, Int(frames) - offset)
-            guard count > 0 else { continue }
-
-            // Gain is evaluated per block of 128 frames (plenty smooth, much cheaper than per sample).
-            var i = 0
-            while i < count {
-                let blockEnd = min(i + 128, count)
-                let t = segStart + Double(i) / sampleRate
-                let g = gain(l, at: t, start: ls, end: le, voice: voice)
-                if g > 0 {
-                    for k in i..<blockEnd {
-                        outL[offset + k] += left[k] * g
-                        outR[offset + k] += right[k] * g
-                    }
+            for piece in sourcePieces(l, from: segStart, to: segEnd) {
+                let src: AVAudioPCMBuffer
+                if l.type == .audio {
+                    src = try readSegment(path: path, from: piece.file, duration: piece.end - piece.start)
+                } else {
+                    // A movie's sound; an unreadable one stays silent rather than failing the whole mix.
+                    guard let b = try? MediaAudio.read(path: path, from: piece.file, duration: piece.end - piece.start,
+                                                       sampleRate: sampleRate, channels: 2) else { continue }
+                    src = b
                 }
-                i = blockEnd
+                let n = Int(src.frameLength)
+                guard n > 0, let ch = src.floatChannelData else { continue }
+                let srcChannels = Int(src.format.channelCount)
+                let left = ch[0], right = ch[min(1, srcChannels - 1)]
+                let offset = Int(((piece.start - t0) * sampleRate).rounded())
+                let count = min(n, Int(frames) - offset)
+                guard count > 0 else { continue }
+
+                // Gain is evaluated per block of 128 frames (plenty smooth, much cheaper than per sample).
+                var i = 0
+                while i < count {
+                    let blockEnd = min(i + 128, count)
+                    let t = piece.start + Double(i) / sampleRate
+                    let g = gain(l, at: t, start: ls, end: le, voice: voice)
+                    if g > 0 {
+                        for k in i..<blockEnd {
+                            outL[offset + k] += left[k] * g
+                            outR[offset + k] += right[k] * g
+                        }
+                    }
+                    i = blockEnd
+                }
             }
         }
         // Soft safety limit.
         for k in 0..<Int(frames) {
             outL[k] = max(-1, min(1, outL[k]))
             outR[k] = max(-1, min(1, outR[k]))
+        }
+        return out
+    }
+
+    /// The stretches of scene time [from, to) where a layer plays its file continuously, with the file time at
+    /// each start. Audio is one stretch; a video stops at the end of its clip (once / hold) or starts over (loop).
+    static func sourcePieces(_ l: MotionLayer, from: Double, to: Double) -> [(start: Double, end: Double, file: Double)] {
+        let file = l.trimIn + (from - l.start)
+        guard l.type == .video, let total = l.sourceDuration, total > l.trimIn else { return [(from, to, file)] }
+        let span = total - l.trimIn
+        guard l.playback == .loop else {
+            let stop = min(to, l.start + span)
+            return stop > from ? [(from, stop, file)] : []
+        }
+        var out: [(Double, Double, Double)] = []
+        var k = ((from - l.start) / span).rounded(.down)
+        while l.start + k * span < to {
+            let a = l.start + k * span
+            let s = max(from, a), e = min(to, a + span)
+            if e > s { out.append((s, e, l.trimIn + (s - a))) }
+            k += 1
         }
         return out
     }
@@ -310,61 +353,134 @@ public struct CaptionStyle: Sendable {
     public init() {}
 }
 
+/// One caption as created by `addCaptions`: its number (for `setCaptionTexts`), layer id, scene times and text.
+public struct CaptionLine: Sendable {
+    public var number: Int
+    public var id: String
+    public var start: Double
+    public var end: Double
+    public var text: String
+}
+
 extension MotionScene {
-    /// Turns a voice layer's word timings into caption text layers (ids "cap-<voice>-<n>").
-    /// Replaces existing captions for that voice. Returns the new layer ids.
+    /// Turns the word timings of a voice-over or a transcribed audio/video layer into caption text layers
+    /// (ids "cap-<layer>-<n>"). Replaces existing captions for that layer.
     @discardableResult
-    public mutating func addCaptions(forVoice id: String, style: CaptionStyle = CaptionStyle()) throws -> [String] {
-        let voice = try layer(id)
-        guard voice.type == .audio else { throw SceneError.invalid("'\(id)' is not an audio layer") }
-        guard let words = voice.words, !words.isEmpty else {
-            throw SceneError.invalid("'\(id)' has no word timings (only generated voice-overs have them)")
+    public mutating func addCaptions(for id: String, style: CaptionStyle = CaptionStyle()) throws -> [CaptionLine] {
+        let source = try layer(id)
+        guard source.type == .audio || source.type == .video else {
+            throw SceneError.invalid("'\(id)' is not an audio or video layer")
+        }
+        guard let words = source.words, !words.isEmpty else {
+            throw SceneError.invalid("'\(id)' has no word timings: generate a voice-over, or transcribe the layer first")
         }
         let prefix = "cap-\(id)-"
-        layers.removeAll { $0.id.hasPrefix(prefix) }
+        let rate = source.type == .video ? source.speed : 1
+        let sourceEnd = source.effectiveEnd(sceneDuration: duration)
+        func sceneTime(_ fileTime: Double) -> Double { source.start + (fileTime - source.trimIn) / rate }
 
-        let voiceEnd = voice.effectiveEnd(sceneDuration: duration)
-        func sceneTime(_ w: WordTiming) -> Double { voice.start + (w.t - voice.trimIn) }
-
-        // Group words into readable chunks: break at sentence ends or when the line gets long.
+        // Group words into readable chunks: break at sentence ends, at pauses, or when the line gets long.
         var chunks: [[WordTiming]] = []
         var cur: [WordTiming] = []
         var chars = 0
-        for w in words where sceneTime(w) >= voice.start - 0.01 && sceneTime(w) < voiceEnd {
-            if !cur.isEmpty && chars + w.text.count + 1 > style.maxChars {
-                chunks.append(cur); cur = []; chars = 0
+        for w in words where sceneTime(w.t) >= source.start - 0.01 && sceneTime(w.t) < sourceEnd {
+            if let prev = cur.last {
+                let pause = prev.d.map { sceneTime(w.t) - sceneTime(prev.t + $0) > 0.7 } ?? false
+                if pause || chars + w.text.count + 1 > style.maxChars { chunks.append(cur); cur = []; chars = 0 }
             }
             cur.append(w)
             chars += w.text.count + 1
-            if let last = w.text.last, ".!?…。".contains(last) { chunks.append(cur); cur = []; chars = 0 }
+            if let last = w.text.last, ".!?…。！？".contains(last) { chunks.append(cur); cur = []; chars = 0 }
         }
         if !cur.isEmpty { chunks.append(cur) }
 
-        let y = style.y ?? Double(height) - 110
-        var ids: [String] = []
-        if style.background, let first = chunks.first?.first, let last = chunks.last?.last {
-            var bar = MotionLayer(id: prefix + "bg", name: "Caption background", type: .rect, x: Double(width) / 2, y: y)
-            bar.width = .constant(min(Double(width) - 160, Double(style.maxChars) * style.fontSize * 0.55 + 80))
-            bar.height = .constant(style.fontSize * 1.9)
-            bar.cornerRadius = 14
-            bar.fill = .constant(RGBA(r: 0, g: 0, b: 0, a: 0.55))
-            bar.start = sceneTime(first)
-            bar.end = min(voiceEnd, sceneTime(last) + 0.8)
-            ids.append(addLayer(bar))
-        }
+        var lines: [CaptionLine] = []
         for (n, chunk) in chunks.enumerated() {
             guard let first = chunk.first, let last = chunk.last else { continue }
-            var t = MotionLayer(id: "\(prefix)\(n + 1)", name: "Caption \(n + 1)", type: .text, x: Double(width) / 2, y: y)
-            t.text = chunk.map(\.text).joined(separator: " ")
+            let start = sceneTime(first.t)
+            let next = n + 1 < chunks.count ? sceneTime(chunks[n + 1][0].t) : sourceEnd
+            var end = n + 1 < chunks.count ? next : min(sourceEnd, sceneTime(last.t) + 0.8)
+            if let d = last.d {
+                // Leave shortly after the last word is spoken, but give short lines time to be read.
+                end = min(next, max(sceneTime(last.t + d) + 0.5, start + 1))
+            }
+            lines.append(CaptionLine(number: n + 1, id: "\(prefix)\(n + 1)", start: start, end: max(end, start + 0.3),
+                                     text: Self.joinWords(chunk.map(\.text))))
+        }
+
+        // Replace the old captions in one assignment (every write to `layers` re-links audio reactions).
+        var all = layers
+        all.removeAll { $0.id.hasPrefix(prefix) }
+        let y = style.y ?? Double(height) - 110
+        if style.background {
+            // One bar per run of back-to-back captions, so no empty bar stays up during long pauses.
+            var runs: [(Double, Double)] = []
+            for l in lines {
+                if let r = runs.last, l.start - r.1 < 0.3 { runs[runs.count - 1].1 = max(r.1, l.end) } else { runs.append((l.start, l.end)) }
+            }
+            for (k, run) in runs.enumerated() {
+                var bar = MotionLayer(id: prefix + (k == 0 ? "bg" : "bg\(k + 1)"), name: "Caption background",
+                                      type: .rect, x: Double(width) / 2, y: y)
+                bar.width = .constant(min(Double(width) - 160, Double(style.maxChars) * style.fontSize * 0.55 + 80))
+                bar.height = .constant(style.fontSize * 1.9)
+                bar.cornerRadius = .constant(14)
+                bar.fill = .constant(RGBA(r: 0, g: 0, b: 0, a: 0.55))
+                bar.start = run.0
+                bar.end = run.1
+                all.append(bar)
+            }
+        }
+        for l in lines {
+            var t = MotionLayer(id: l.id, name: "Caption \(l.number)", type: .text, x: Double(width) / 2, y: y)
+            t.text = l.text
             t.fontSize = style.fontSize
             t.fontWeight = "semibold"
             t.color = .constant(style.color)
             t.maxWidth = Double(width) - 240
-            t.start = sceneTime(first)
-            let nextStart = n + 1 < chunks.count ? sceneTime(chunks[n + 1][0]) : min(voiceEnd, sceneTime(last) + 0.8)
-            t.end = max(nextStart, t.start + 0.3)
-            ids.append(addLayer(t))
+            t.start = l.start
+            t.end = l.end
+            all.append(t)
         }
-        return ids
+        layers = all
+        return lines
+    }
+
+    /// Replaces the text of captions number `from`, `from + 1`, … of a layer (numbers as listed by addCaptions),
+    /// e.g. with a translation. Timing and style stay.
+    public mutating func setCaptionTexts(_ id: String, from: Int = 1, texts: [String]) throws {
+        var all = layers
+        for (k, text) in texts.enumerated() {
+            let cid = "cap-\(id)-\(from + k)"
+            guard let i = all.firstIndex(where: { $0.id == cid }) else {
+                throw SceneError.invalid("No caption '\(cid)' (add_captions lists the caption numbers of '\(id)')")
+            }
+            all[i].text = text
+        }
+        layers = all
+    }
+
+    /// The caption layers of an audio/video layer, in order.
+    public func captions(of id: String) -> [CaptionLine] {
+        let prefix = "cap-\(id)-"
+        return layers.compactMap { l -> CaptionLine? in
+            guard l.type == .text, l.id.hasPrefix(prefix), let n = Int(l.id.dropFirst(prefix.count)) else { return nil }
+            return CaptionLine(number: n, id: l.id, start: l.start, end: l.effectiveEnd(sceneDuration: duration), text: l.text)
+        }
+        .sorted { $0.number < $1.number }
+    }
+
+    /// Joins recognized words with spaces, except between Chinese / Japanese characters.
+    static func joinWords(_ words: [String]) -> String {
+        func isCJK(_ c: Character?) -> Bool {
+            guard let s = c?.unicodeScalars.first?.value else { return false }
+            return (0x3040...0x30FF).contains(s) || (0x3400...0x9FFF).contains(s) || (0xFF00...0xFFEF).contains(s)
+                || (0x3000...0x303F).contains(s)
+        }
+        var out = ""
+        for w in words {
+            if !out.isEmpty && !(isCJK(out.last) && isCJK(w.first)) { out += " " }
+            out += w
+        }
+        return out
     }
 }

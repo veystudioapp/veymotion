@@ -53,9 +53,15 @@ final class AudioPreview {
         player.play()
     }
 
-    /// Everything that affects the mix: audio layers and duration.
+    /// Everything that affects the mix: audio layers, the timing and volume of videos with sound, and duration.
+    /// (Not a video's whole JSON: moving a video on the canvas must not remix the sound.)
     private static func signature(_ scene: MotionScene) -> String {
-        SceneJSON.string(scene.audioLayers, pretty: false) + "|\(scene.duration)"
+        let videos = scene.soundLayers.filter { $0.type == .video }.map { l in
+            "\(l.path ?? "")|\(l.start)|\(l.end ?? -1)|\(l.trimIn)|\(l.playback)|\(l.sourceDuration ?? -1)|"
+                + SceneJSON.string(l.volume, pretty: false) + SceneJSON.string(l.loop["volume"], pretty: false)
+                + SceneJSON.string(l.wiggle["volume"], pretty: false)
+        }
+        return SceneJSON.string(scene.audioLayers, pretty: false) + videos.joined(separator: "\n") + "|\(scene.duration)"
     }
 }
 

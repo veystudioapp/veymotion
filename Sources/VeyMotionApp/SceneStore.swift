@@ -265,16 +265,45 @@ final class SceneStore: SceneHost {
             id = s.addLayer(l)
             let end = start + result.duration
             if end > s.duration { s.duration = (end + 0.5).rounded(.up) }
-            if captions { _ = try? s.addCaptions(forVoice: id) }
+            if captions { _ = try? s.addCaptions(for: id) }
         }
         selection = id
     }
 
     func addCaptions(for id: String) {
         do {
-            try apply("Add Captions") { _ = try $0.addCaptions(forVoice: id) }
+            try apply("Add Captions") { _ = try $0.addCaptions(for: id) }
         } catch {
             message = error.localizedDescription
+        }
+    }
+
+    /// Layers being transcribed (the inspector shows a spinner).
+    private(set) var transcribing: Set<String> = []
+
+    /// Recognizes the speech of an audio/video layer in the background and stores it on the layer.
+    func transcribe(_ id: String, language: String?) {
+        guard let l = scene.layers.first(where: { $0.id == id }), let path = l.path, !transcribing.contains(id) else { return }
+        let range = l.playedSourceRange(sceneDuration: scene.duration)
+        let revision = documentRevision
+        transcribing.insert(id)
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result = Result { try Transcriber.transcribe(path: path, from: range.from, duration: range.duration, language: language) }
+            DispatchQueue.main.async {
+                self.transcribing.remove(id)
+                // The user may have opened another document meanwhile.
+                guard self.documentRevision == revision else { return }
+                do {
+                    let r = try result.get()
+                    if r.words.isEmpty {
+                        self.message = "No speech found (recognized as \(r.language))."
+                        return
+                    }
+                    try self.apply("Transcribe") { try $0.setTranscription(id, r) }
+                } catch {
+                    self.message = error.localizedDescription
+                }
+            }
         }
     }
 

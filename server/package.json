@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "nitro dev",
+    "dev": "PORT=4000 nitro dev",
     "build": "nitro build",
     "preview": "nitro preview"
   },

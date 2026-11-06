@@ -236,9 +236,41 @@ public final class MCPServer {
             if let c = a["color"] as? String, let rgba = RGBA(hex: c) { style.color = rgba }
             if let v = number(a["maxChars"]) { style.maxChars = max(10, Int(v)) }
             if let b = a["background"] as? Bool { style.background = b }
-            var ids: [String] = []
-            try host.mutate("Add Captions") { ids = try $0.addCaptions(forVoice: id, style: style) }
-            return text("Added \(ids.count) caption layers: \(ids.joined(separator: ", "))")
+            var lines: [CaptionLine] = []
+            try host.mutate("Add Captions") { lines = try $0.addCaptions(for: id, style: style) }
+            return text("Added \(lines.count) captions for '\(id)' (layers cap-\(id)-<number>):\n" + captionList(lines))
+
+        case "transcribe":
+            let id = try string(a, "id")
+            let scene = host.currentScene()
+            let l = try scene.layer(id)
+            guard l.type == .audio || l.type == .video, let path = l.path else {
+                throw ToolError("'\(id)' is not an audio or video layer with a file")
+            }
+            let range = l.playedSourceRange(sceneDuration: scene.duration)
+            let result = try Transcriber.transcribe(path: path, from: range.from, duration: range.duration,
+                                                    language: a["language"] as? String)
+            try host.mutate("Transcribe") { try $0.setTranscription(id, result) }
+            let how = result.onDevice ? "on this Mac" : "by Apple's servers"
+            guard !result.words.isEmpty else {
+                return text("No speech found in '\(id)' (recognized as \(result.language) \(how)). "
+                            + "Check the language, or that the layer's file has speech.")
+            }
+            let body = result.text.count > 6000 ? String(result.text.prefix(6000)) + " …" : result.text
+            return text("Transcribed '\(id)' as \(result.language) \(how): \(result.words.count) words.\n\(body)\n"
+                        + "Next: add_captions with id '\(id)' to make timed captions.")
+
+        case "set_caption_texts":
+            let id = try string(a, "id")
+            guard let texts = a["texts"] as? [String], !texts.isEmpty else { throw ToolError("`texts` must be a non-empty array of strings") }
+            let from = max(1, Int(number(a["from"]) ?? 1))
+            try host.mutate("Edit Captions") { try $0.setCaptionTexts(id, from: from, texts: texts) }
+            return text("Set captions \(from)–\(from + texts.count - 1) of '\(id)'.")
+
+        case "list_captions":
+            let id = try string(a, "id")
+            let lines = host.currentScene().captions(of: id)
+            return text(lines.isEmpty ? "'\(id)' has no captions (add_captions makes them)." : captionList(lines))
 
         case "set_keyframes":
             let id = try string(a, "id")
@@ -549,6 +581,11 @@ public final class MCPServer {
 
     private func text(_ s: String) -> [String: Any] {
         ["content": [["type": "text", "text": s]]]
+    }
+
+    /// "3 [12.40–15.10] text" per caption.
+    private func captionList(_ lines: [CaptionLine]) -> String {
+        lines.map { String(format: "%d [%.2f–%.2f] ", $0.number, $0.start, $0.end) + $0.text }.joined(separator: "\n")
     }
 
     private func string(_ a: [String: Any], _ key: String) throws -> String {

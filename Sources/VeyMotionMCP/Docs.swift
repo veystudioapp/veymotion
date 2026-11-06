@@ -26,7 +26,8 @@ enum Docs {
           frames in natural name order), width/height (as image), trimIn (source seconds skipped), speed (1 = normal),
           playback ("once": the layer ends with the clip, default | "hold": last frame stays | "loop": starts over),
           fps (image sequences only: frames per second of the images; set to the render's rate, Blender's default is 24).
-          The video's own sound is not played. sourceDuration is filled in by the app.
+          The movie's own sound plays at speed 1 (silent at other speeds); volume (animatable, 1 = original, 0 = mute).
+          sourceDuration / transcript / words are filled in by the app.
     particles: see PARTICLES.
     Optional on every visual layer (omit when unused):
       scaleX, scaleY (multiply scale; flip effects), skewX, skewY (degrees), anchorX, anchorY (pivot for rotation/scale/
@@ -127,6 +128,12 @@ enum Docs {
       sounds far more natural than macOS voices. Its word times are estimated. If it fails because the TTS server is
       not running, tell the user and fall back to engine "macos".
     - Captions: add_captions on each voice layer when the user wants subtitles.
+    - Subtitles for recorded speech (a video or audio layer, e.g. Vietnamese subtitles for a foreign video): call
+      transcribe with the spoken language (e.g. "en-US", "ja-JP", "zh-CN"; Apple speech recognition, may take a minute
+      or more for long media, so give the command a long timeout), then add_captions on the same layer; it lists the
+      numbered captions with times. To translate, call set_caption_texts with the translated lines in the same order
+      (batches with `from` for long lists; keep each line about as short as the original so it fits one line).
+      Check the result with render_frame. Recognition makes mistakes: fix obvious ones while translating.
     - Music: add_audio with role "music", duckTo ≈ 0.25 and a fadeOut of 1–2s at the end.
     - Cut to the music: call analyze_audio once the music layer is in (it returns scene times). Start entrances and
       scene changes on downbeats, land keyframes and apply_preset starts on beats (e.g. a list item per beat), and
@@ -374,11 +381,11 @@ enum Docs {
       },
       {
         "name": "add_captions",
-        "description": "Create timed caption text layers from a generated voice layer's word timings (replaces earlier captions for that voice).",
+        "description": "Create timed caption text layers (ids cap-<id>-<number>) from the word timings of a generated voice layer or a transcribed audio/video layer. Replaces earlier captions for that layer and lists the numbered captions with scene times.",
         "inputSchema": {
           "type": "object",
           "properties": {
-            "id": { "type": "string", "description": "Voice layer id." },
+            "id": { "type": "string", "description": "Voice layer, or audio/video layer that was transcribed." },
             "fontSize": { "type": "number" },
             "y": { "type": "number", "description": "Vertical center of captions (default: near the bottom)." },
             "color": { "type": "string" },
@@ -387,6 +394,36 @@ enum Docs {
           },
           "required": ["id"]
         }
+      },
+      {
+        "name": "transcribe",
+        "description": "Recognize the speech of an audio or video layer (the part it plays) with Apple speech recognition and store the text and word timings on the layer, for add_captions. Slow for long media (about a minute per few minutes of audio).",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "id": { "type": "string", "description": "Audio or video layer id." },
+            "language": { "type": "string", "description": "Spoken language, e.g. en-US, ja-JP, zh-CN, ko-KR, vi-VN (a bare code like \"en\" picks a region). Default: the system language." }
+          },
+          "required": ["id"]
+        }
+      },
+      {
+        "name": "set_caption_texts",
+        "description": "Replace the text of captions made by add_captions (e.g. with a translation), keeping their timing and style. texts[0] goes to caption number `from`, texts[1] to from+1, …",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "id": { "type": "string", "description": "The layer the captions belong to (as passed to add_captions)." },
+            "texts": { "type": "array", "items": { "type": "string" } },
+            "from": { "type": "integer", "description": "Number of the first caption to replace (default 1)." }
+          },
+          "required": ["id", "texts"]
+        }
+      },
+      {
+        "name": "list_captions",
+        "description": "List a layer's captions: number, scene start–end and text.",
+        "inputSchema": { "type": "object", "properties": { "id": { "type": "string" } }, "required": ["id"] }
       },
       {
         "name": "list_assets",

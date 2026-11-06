@@ -138,6 +138,7 @@ struct LayerInspector: View {
                 ParentRow(layer: layer)
             }
             InspectorSection(appearanceTitle) { appearance }
+            if layer.type == .video, layer.path.map(MediaAudio.hasAudioTrack) ?? false { SpeechSection(layer: layer) }
             EffectsSection(layer: layer)
             MotionSection(layer: layer)
             if layer.type == .text { TextAnimatorSection(layer: layer) }
@@ -265,6 +266,10 @@ struct LayerInspector: View {
                 .controlSize(.small)
             }
             .help("Stop: the layer ends with the clip. Hold: the last frame stays. Loop: the clip starts over.")
+            if layer.path.map(MediaAudio.hasAudioTrack) ?? false {
+                AnimSlider(layer: layer, property: .volume, label: "Volume", range: 0...2)
+                    .help(layer.speed == 1 ? "Level of the clip's own sound (0 = mute)" : "The clip's sound only plays at speed 1×")
+            }
         case .particles:
             ParticlesEditor(layer: layer)
         case .audio:
@@ -730,16 +735,66 @@ struct AudioInspector: View {
                 }
             }
         }
-        if layer.role == .voice {
-            InspectorSection("Narration") {
-                if let t = layer.transcript {
+        SpeechSection(layer: layer)
+    }
+}
+
+/// Transcript and captions of an audio or video layer: a generated voice-over already has its words; other sound
+/// is transcribed with Apple speech recognition.
+struct SpeechSection: View {
+    @Environment(SceneStore.self) private var store
+    let layer: MotionLayer
+    @AppStorage("transcribeLanguage") private var language = ""
+    @State private var languages: [String] = []
+
+    private var isGeneratedVoice: Bool { layer.type == .audio && layer.role == .voice && layer.words?.contains { $0.d != nil } == false }
+
+    var body: some View {
+        let id = layer.id
+        InspectorSection(isGeneratedVoice ? "Narration" : "Speech") {
+            if let t = layer.transcript, !t.isEmpty {
+                ScrollView {
                     Text(t).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 140)
+            }
+            if !isGeneratedVoice {
+                HStack(spacing: 6) {
+                    RowLabel("Language")
+                    Picker("", selection: $language) {
+                        Text("System").tag("")
+                        ForEach(languages, id: \.self) { code in
+                            Text(Locale.current.localizedString(forIdentifier: code).map { "\($0) (\(code))" } ?? code).tag(code)
+                        }
+                    }
+                    .labelsHidden()
+                    .controlSize(.small)
+                }
+                .help("The language spoken in the clip")
+            }
+            HStack(spacing: 8) {
+                if !isGeneratedVoice {
+                    Button(layer.words == nil ? "Transcribe" : "Transcribe Again") {
+                        store.transcribe(id, language: language.isEmpty ? nil : language)
+                    }
+                    .disabled(store.transcribing.contains(id))
+                    if store.transcribing.contains(id) { ProgressView().controlSize(.small) }
                 }
                 Button(store.scene.layers.contains { $0.id.hasPrefix("cap-\(id)-") } ? "Rebuild Captions" : "Add Captions") {
                     store.addCaptions(for: id)
                 }
-                .controlSize(.small)
                 .disabled(layer.words?.isEmpty ?? true)
+            }
+            .controlSize(.small)
+            if !isGeneratedVoice && layer.words == nil {
+                Text("Recognizes the speech with Apple speech recognition, then makes timed captions. Ask Claude to translate them.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .task {
+            if languages.isEmpty {
+                languages = await Task.detached { Transcriber.supportedLanguages() }.value
             }
         }
     }

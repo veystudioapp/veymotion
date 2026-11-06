@@ -69,6 +69,14 @@ The same `MCPServer` is served three ways: HTTP on `127.0.0.1:19790/mcp` (`Trans
   renderer. `audioReact` is evaluated inside `MotionLayer.value`, which has no scene: `MotionScene.layers`/`duration`
   `didSet` call `resolveAudioLinks`, which stores each reaction's source file and timing in `AudioReact.link`
   (not saved). Renaming an audio layer repoints `source` in `updateLayer`.
+- Video sound and transcription (`Transcribe.swift`): `MediaAudio.read` decodes any file's sound (AVAudioFile first,
+  AVAssetReader for movies; the latter decodes nothing in sandboxed processes, so test the mixer with WAV there).
+  `soundLayers` (audio layers + video layers with an audio track at speed 1) is what `AudioMixer` plays; `audioLayers`
+  stays audio-only (audioReact, ducking). `Transcriber` uses SFSpeechRecognizer on 16 kHz mono, cut into < 50 s pieces
+  at quiet points (server limit), and fills `words` (with durations `d`) + `transcript` on audio/video layers, so
+  `addCaptions(for:)` works on them; `setCaptionTexts` swaps caption text (translations). Speech recognition needs
+  `NSSpeechRecognitionUsageDescription` (only the bundled app has it); without it `Transcriber` throws instead of
+  letting macOS kill the process, so the debug build and `vmotion --scene` cannot transcribe.
 - Text-to-speech has two engines behind `generate_voice` / `list_voices` (`engine`) and the Voice-over sheet:
   `VoiceSynth` (macOS, exact word timings) and `VieNeu` (`VieNeu.swift`), which calls the Nitro server in
   `server/` (`/api/tts/*`; it holds the VieNeu key) at `BASE_API_URL` (env, else a `.env` in the working dir /

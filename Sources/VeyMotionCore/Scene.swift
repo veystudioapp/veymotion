@@ -15,11 +15,13 @@ public enum AudioRole: String, Codable, CaseIterable, Sendable {
     case voice, music, sfx
 }
 
-/// A spoken word in a voice layer; `t` is seconds from the start of the audio file.
+/// A spoken word in a voice layer or a transcribed audio/video layer; `t` is seconds from the start of the file.
 public struct WordTiming: Codable, Equatable, Hashable, Sendable {
     public var t: Double
     public var text: String
-    public init(t: Double, text: String) { self.t = t; self.text = text }
+    /// How long the word is spoken (transcriptions only).
+    public var d: Double?
+    public init(t: Double, text: String, d: Double? = nil) { self.t = t; self.text = text; self.d = d }
 }
 
 public enum TextAlign: String, Codable, CaseIterable, Sendable {
@@ -353,7 +355,8 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         case .rect: list += [.width, .height, .cornerRadius, .strokeWidth, .trim]
         case .ellipse: list += [.width, .height, .strokeWidth, .trim]
         case .text: list += [.reveal, .letterSpacing]
-        case .image, .video: list += [.width, .height]
+        case .image: list += [.width, .height]
+        case .video: list += [.width, .height, .volume]
         case .particles: list += [.width, .height, .emission, .particleSpeed, .particleSize]
         case .audio: break
         }
@@ -647,6 +650,9 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
             try c.encode(playback, forKey: .playback)
             try c.encodeIfPresent(fps, forKey: .fps)
             try c.encodeIfPresent(sourceDuration, forKey: .sourceDuration)
+            if volume != .constant(1) { try c.encode(volume, forKey: .volume) }
+            try c.encodeIfPresent(transcript, forKey: .transcript)
+            try c.encodeIfPresent(words, forKey: .words)
         case .particles:
             try c.encode(self[.width], forKey: .width)
             try c.encode(self[.height], forKey: .height)
