@@ -211,6 +211,22 @@ final class SceneStore: SceneHost {
         selection = id
     }
 
+    /// Sets the selected text layer's font, or adds a text layer set in it.
+    func useFont(_ family: String) {
+        if let l = selectedLayer, l.type == .text {
+            updateLayer(l.id, "Change Font") { $0.fontName = family }
+            return
+        }
+        var l = MotionLayer(type: .text, x: Double(scene.width) / 2, y: Double(scene.height) / 2)
+        l.text = family
+        l.fontName = family
+        l.fontWeight = "regular"
+        l.start = time
+        var id = ""
+        apply("Add Text") { id = $0.addLayer(l) }
+        selection = id
+    }
+
     func addLayer(_ type: LayerType, path: String? = nil) {
         if type == .particles { return addParticles(.fire) }
         var l = MotionLayer(type: type, x: Double(scene.width) / 2, y: Double(scene.height) / 2)
@@ -370,8 +386,15 @@ final class SceneStore: SceneHost {
             } catch {
                 message = "Cannot read video \(name): \(error.localizedDescription)"
             }
+        case .font:
+            FontLibrary.refresh(force: true)
+            guard let family = FontLibrary.families(inFile: URL(fileURLWithPath: path)).first else {
+                message = "Cannot read font \(name)"
+                return
+            }
+            useFont(family)
         default:
-            message = "\(name) is not an image, video or audio file"
+            message = "\(name) is not an image, video, audio or font file"
         }
     }
 

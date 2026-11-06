@@ -26,8 +26,9 @@ enum Docs {
           Keyframes on d MORPH from shape to shape: {"d":{"keyframes":[{"t":0,"v":"star(5,200,80)"},
           {"t":1,"v":"circle(160)","easing":"easeInOutCubic"}]}} (or set_keyframes with property "d"). Any two shapes
           morph; closed shapes with similar point counts morph most cleanly. loop works on "d" too.
-    text: text (may contain \n), fontSize, fontWeight (thin|light|regular|medium|semibold|bold|heavy|black),
-          fontName (optional PostScript name), color, align (left|center|right), maxWidth (wraps), reveal (0..1 typewriter),
+    text: text (may contain \n), fontSize, fontName (a font family, e.g. "Be Vietnam Pro"; see FONTS; default the
+          system font), fontWeight (thin|light|regular|medium|semibold|bold|heavy|black or 100–900; add " italic", e.g.
+          "bold italic"), color, align (left|center|right), maxWidth (wraps), reveal (0..1 typewriter),
           letterSpacing (px), textAnimators (see TEXT ANIMATORS)
     image: path (absolute file path), width/height (optional; keeps aspect if only one is set)
     video: path = a movie file (.mov/.mp4/.m4v) or a FOLDER of numbered images (image sequence, e.g. a Blender render;
@@ -111,6 +112,20 @@ enum Docs {
     - glow (strength 0..4, animatable), glowRadius (px, default 24), glowColor (optional tint): light around the layer —
       neon lines and logos, glowing text, light streaks. Best on bright layers over dark backgrounds.
     - Layers draw in list order (no 3D camera). For depth, combine scale, blur and parallax (far layers move less).
+
+    FONTS
+    - fontName is a font family; fontWeight picks the closest face it has. Without fontName, text uses the system font
+      (clean but plain): choose fonts that fit the piece's mood.
+    - list_fonts shows the fonts you can use right away (asset-library fonts first, then fonts on this Mac) with their
+      weights; query filters by name, vietnamese true keeps fonts with Vietnamese letters.
+    - More fonts: search_stock kind "font" searches ~1,900 free Google Fonts by name, category (serif, sans, display,
+      handwriting, mono) or mood (elegant, modern, playful, retro, tech, cute…), most popular first; the image shows
+      each font. When the text is Vietnamese, ALWAYS pass vietnamese true (otherwise accents fall back to another font).
+      import_stock the ref (every upright weight by default; "weights":["400","700","400i"] to choose), then use the
+      family name as fontName. Imported fonts are files in the asset library (fonts/ in a project), so they travel
+      with the project and render the same in preview and export.
+    - Use 1–2 families per piece: e.g. a display or serif font for titles and a clean sans for the rest.
+    - A font warning in a tool result means the name was not found or the font lacks some letters: fix it.
 
     TEXT ANIMATORS (per character / word / line, staggered)
     "textAnimators":[{"unit":"char","mode":"in","start":0.5,"duration":0.5,"stagger":0.04,"order":"forward",
@@ -572,12 +587,13 @@ enum Docs {
       },
       {
         "name": "search_stock",
-        "description": "Search free assets online: photos and illustrations from Openverse (licenses allowing commercial use and changes), icons from Iconify (200k+ open-source SVG icons), music from Jamendo and sound effects from Freesound (via Openverse). Returns numbered results with refs, licenses, durations and (for images/icons) a numbered preview image. English keywords work best.",
+        "description": "Search free assets online: photos and illustrations from Openverse (licenses allowing commercial use and changes), icons from Iconify (200k+ open-source SVG icons), music from Jamendo and sound effects from Freesound (via Openverse), fonts from Google Fonts. Returns numbered results with refs, licenses, durations and (for images/icons/fonts) a numbered preview image. English keywords work best.",
         "inputSchema": {
           "type": "object",
           "properties": {
             "query": { "type": "string", "description": "e.g. \"mountain sunset\", \"rocket\", \"upbeat corporate\", \"whoosh\"." },
-            "kind": { "type": "string", "enum": ["photo", "illustration", "icon", "music", "sound"], "default": "photo" },
+            "kind": { "type": "string", "enum": ["photo", "illustration", "icon", "music", "sound", "font"], "default": "photo" },
+            "vietnamese": { "type": "boolean", "description": "Fonts only: keep fonts that have Vietnamese letters." },
             "page": { "type": "integer", "description": "1-based page (20 results per page, 48 for icons)." },
             "limit": { "type": "integer", "description": "Return at most this many results." },
             "preview": { "type": "boolean", "description": "Include the numbered thumbnail sheet. Default true." }
@@ -587,7 +603,7 @@ enum Docs {
       },
       {
         "name": "import_stock",
-        "description": "Download a search_stock result into the asset library (with its license and credit recorded). Returns the path to use in an image layer. Icons are saved as SVG in `color`.",
+        "description": "Download a search_stock result into the asset library (with its license and credit recorded). Returns the path to use in an image layer. Icons are saved as SVG in `color`. Fonts are installed for the app and used by family name (fontName).",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -595,9 +611,22 @@ enum Docs {
             "name": { "type": "string", "description": "File name in the library (optional)." },
             "folder": { "type": "string", "description": "Folder to put it in (created if missing). Default: top level." },
             "color": { "type": "string", "description": "Icons only: hex color, default #FFFFFF." },
+            "weights": { "type": "array", "items": { "type": "string" }, "description": "Fonts only: styles to download, e.g. [\"400\", \"700\", \"400i\"] (i = italic). Default: every upright weight." },
             "size": { "type": "integer", "description": "Icons only: height in px of the SVG's natural size, default 512." }
           },
           "required": ["ref"]
+        }
+      },
+      {
+        "name": "list_fonts",
+        "description": "List the font families text layers can use as fontName: fonts in the asset library (e.g. imported from Google Fonts) first, then fonts installed on this Mac, with their weights.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": { "type": "string", "description": "Part of a family name, e.g. \"serif\" or \"Avenir\"." },
+            "vietnamese": { "type": "boolean", "description": "Only fonts with all Vietnamese letters." },
+            "limit": { "type": "integer", "description": "Max families listed (default 80)." }
+          }
         }
       },
       {

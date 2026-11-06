@@ -579,6 +579,7 @@ private struct AssetRow: View {
         case .audio: return "waveform"
         case .video: return "film"
         case .text: return "doc.text"
+        case .font: return "textformat"
         case .other: return "doc"
         }
     }

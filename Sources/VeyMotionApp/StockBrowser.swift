@@ -9,6 +9,8 @@ import VeyMotionCore
 final class StockBrowserModel {
     var kind: StockKind = .photo
     var query = ""
+    /// Fonts: only families with Vietnamese letters.
+    var vietnamese = false
     var results: [StockItem] = []
     var page = 1
     var isSearching = false
@@ -28,14 +30,14 @@ final class StockBrowserModel {
     func search(more: Bool = false) {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty, !(more && isSearching) else { return } // a new search replaces one in flight
-        let kind = kind, page = more ? page + 1 : 1
+        let kind = kind, page = more ? page + 1 : 1, vietnamese = vietnamese
         if !more { results = []; canLoadMore = false }
         searchToken += 1
         let token = searchToken
         isSearching = true
         error = nil
         DispatchQueue.global(qos: .userInitiated).async {
-            let outcome = Result { try StockSearch.search(q, kind: kind, page: page) }
+            let outcome = Result { try StockSearch.search(q, kind: kind, page: page, vietnamese: vietnamese) }
             DispatchQueue.main.async {
                 guard token == self.searchToken else { return }
                 self.isSearching = false
@@ -92,6 +94,7 @@ final class StockBrowserModel {
     func importItem(_ item: StockItem, iconColor: String, store: SceneStore, addToScene: Bool, asMusic: Bool = false) {
         func place(_ path: String) {
             guard addToScene else { return }
+            if item.kind == .font { store.useFont(item.title); return }
             if asMusic { store.addMusicLayer(path) } else { store.addFileLayer(path) }
         }
         if let path = imported[item.ref] {
@@ -108,7 +111,7 @@ final class StockBrowserModel {
                 case let .success(asset):
                     self.imported[item.ref] = asset.path
                     AssetLibrary.shared.refresh()
-                    store.message = "Added \(asset.name) to Assets"
+                    store.message = (item.kind == .font ? "Added the font \(item.title) to Assets" : "Added \(asset.name) to Assets")
                         + (item.credit.requiresAttribution ? " — credit required (\(item.credit.license))" : "")
                     place(asset.path)
                 case let .failure(e):
@@ -152,6 +155,12 @@ struct StockBrowserSheet: View {
                     ColorPicker("Color", selection: $iconColor, supportsOpacity: false)
                         .help("Icon color used when importing")
                 }
+                if model.kind == .font {
+                    Toggle("Vietnamese", isOn: $model.vietnamese)
+                        .toggleStyle(.checkbox)
+                        .help("Only fonts that have every Vietnamese letter")
+                        .onChange(of: model.vietnamese) { _, _ in model.search() }
+                }
             }
             .padding(12)
             Divider()
@@ -175,7 +184,7 @@ struct StockBrowserSheet: View {
                             .padding(.bottom, 14)
                     }
                 } else {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: model.kind == .icon ? 84 : 150), spacing: 10)], spacing: 10) {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: model.kind == .icon ? 84 : model.kind == .font ? 250 : 150), spacing: 10)], spacing: 10) {
                         ForEach(model.results) { item in
                             StockCell(item: item, model: model, iconColor: hex(iconColor))
                                 .onHover { inside in
@@ -208,6 +217,8 @@ struct StockBrowserSheet: View {
                 } else {
                     Text(model.kind.isAudio
                          ? "▶ previews · ⤓ adds to Assets. Music: Jamendo · Sound FX: Freesound (via Openverse, commercial use allowed)."
+                         : model.kind == .font
+                         ? "Click to add to Assets · ⊕ sets the selected text's font (or adds a text). Google Fonts, free for commercial use."
                          : "Click to add to Assets · ⊕ adds it to the scene. Photos & illustrations: Openverse (commercial use allowed). Icons: Iconify.")
                         .foregroundStyle(.secondary)
                 }
@@ -230,6 +241,7 @@ struct StockBrowserSheet: View {
         case .icon: return "Search icons (e.g. rocket, check, chart)"
         case .music: return "Search music by mood or genre (e.g. calm piano, upbeat corporate)"
         case .sound: return "Search sound effects (e.g. whoosh, pop, click, applause)"
+        case .font: return "Search fonts by name, style or mood (e.g. serif, handwriting, elegant, Montserrat)"
         }
     }
 
@@ -254,6 +266,7 @@ struct StockBrowserSheet: View {
         case .icon: return ["arrow", "check", "chart", "user", "heart"]
         case .music: return ["upbeat", "calm piano", "cinematic", "lofi", "corporate"]
         case .sound: return ["whoosh", "pop", "click", "ding", "transition"]
+        case .font: return ["popular", "elegant", "modern", "handwriting", "display"]
         }
     }
 
@@ -262,6 +275,7 @@ struct StockBrowserSheet: View {
         case .icon: return "star.square.on.square"
         case .music: return "music.note.list"
         case .sound: return "speaker.wave.2"
+        case .font: return "textformat"
         default: return "photo.on.rectangle.angled"
         }
     }
@@ -278,16 +292,17 @@ private struct StockCell: View {
 
     var body: some View {
         let isIcon = item.kind == .icon
+        let dark = isIcon || item.kind == .font
         let busy = model.importing.contains(item.ref)
         let done = model.imported[item.ref] != nil
         VStack(alignment: .leading, spacing: 4) {
             ZStack {
                 RoundedRectangle(cornerRadius: 8)
-                    .fill(isIcon ? Color(white: 0.16) : Color.primary.opacity(0.06))
+                    .fill(dark ? Color(white: 0.16) : Color.primary.opacity(0.06))
                 if let img = model.thumbnail(item) {
                     Image(nsImage: img)
                         .resizable()
-                        .aspectRatio(contentMode: isIcon ? .fit : .fill)
+                        .aspectRatio(contentMode: dark ? .fit : .fill)
                         .padding(isIcon ? 18 : 0)
                 } else {
                     ProgressView().controlSize(.small)

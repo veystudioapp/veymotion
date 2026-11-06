@@ -9,8 +9,9 @@ import UniformTypeIdentifiers
 ///   licenses that allow commercial use and modification (CC0, Public Domain, CC BY, CC BY-SA).
 /// - Iconify (api.iconify.design): 200k+ open-source SVG icons (Material, Tabler, Lucide, Phosphor, …).
 /// - Openverse audio: music from Jamendo and sound effects from Freesound, with the same license filter.
+/// - Google Fonts: open-source font families (see `GoogleFonts`).
 public enum StockKind: String, CaseIterable, Codable, Sendable {
-    case photo, illustration, icon, music, sound
+    case photo, illustration, icon, music, sound, font
 
     public var title: String {
         switch self {
@@ -19,6 +20,7 @@ public enum StockKind: String, CaseIterable, Codable, Sendable {
         case .icon: return "Icons"
         case .music: return "Music"
         case .sound: return "Sound FX"
+        case .font: return "Fonts"
         }
     }
 
@@ -41,14 +43,19 @@ public struct StockItem: Identifiable, Hashable, Sendable {
     public var downloadURL: URL?
     /// Audio length in seconds.
     public var duration: Double?
+    /// Music genres; for fonts: category, weights and "Vietnamese ✓".
     public var genres: [String] = []
+    /// Fonts: available styles ("400", "700", "400i"…).
+    public var fontStyles: [String] = []
 
     public var id: String { ref }
 
     /// One line for agents: "openverse:abc — Title — 1024×768 jpg — CC BY 4.0 (credit required) — by Someone".
     public var summary: String {
         var parts = [ref, title]
-        if let d = duration {
+        if kind == .font {
+            parts.append(genres.joined(separator: ", "))
+        } else if let d = duration {
             parts.append(Self.clock(d) + " " + fileExtension + (genres.isEmpty ? "" : " — " + genres.prefix(3).joined(separator: ", ")))
         } else if let w = width, let h = height {
             parts.append("\(w)×\(h) \(fileExtension)")
@@ -75,10 +82,12 @@ public enum StockSearch {
     // MARK: Search
 
     /// Blocking; call off the main thread. `page` starts at 1.
-    public static func search(_ query: String, kind: StockKind, page: Int = 1) throws -> [StockItem] {
+    /// `vietnamese`: fonts only, keep families with Vietnamese letters.
+    public static func search(_ query: String, kind: StockKind, page: Int = 1, vietnamese: Bool = false) throws -> [StockItem] {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { return [] }
         switch kind {
+        case .font: return try GoogleFonts.search(q, page: page, vietnamese: vietnamese)
         case .icon: return try searchIcons(q, page: page)
         case .photo, .illustration: return try searchOpenverse(q, kind: kind, page: page)
         case .music, .sound: return try searchOpenverseAudio(q, kind: kind, page: page)
@@ -213,6 +222,8 @@ public enum StockSearch {
             let kind: StockKind = (obj["source"] as? String) == "freesound" ? .sound : .music
             guard let item = openverseItem(obj, kind: kind) else { throw AssetError.failed("Openverse has no audio \(parts[1])") }
             return item
+        case "googlefonts" where parts.count == 2:
+            return GoogleFonts.item(try GoogleFonts.family(named: parts[1]))
         case "iconify" where parts.count == 3:
             let info = try? HTTP.json(URL(string: "https://api.iconify.design/collections?prefixes=\(parts[1])")!)
             return iconItem(prefix: parts[1], name: parts[2], collection: info?[parts[1]] as? [String: Any])
@@ -226,6 +237,10 @@ public enum StockSearch {
     @discardableResult
     public static func importItem(_ item: StockItem, name: String? = nil, folder: String? = nil, color: String? = nil,
                                   size: Int = 512) throws -> AssetInfo {
+        if item.kind == .font {
+            guard let first = try importFont(item, folder: folder).first else { throw AssetError.failed("No font files") }
+            return first
+        }
         let typeFolder: String
         switch item.kind {
         case .icon: typeFolder = "icons"
@@ -268,6 +283,15 @@ public enum StockSearch {
         return asset
     }
 
+    /// Downloads a font family's styles ("400", "700i"…; default every upright weight) into the library and
+    /// registers them, so a text layer can use the family as its fontName right away. Blocking.
+    @discardableResult
+    public static func importFont(_ item: StockItem, styles: [String]? = nil, folder: String? = nil) throws -> [AssetInfo] {
+        guard item.ref.hasPrefix(GoogleFonts.refPrefix) else { throw AssetError.failed("\(item.ref) is not a font") }
+        let family = try GoogleFonts.family(named: String(item.ref.dropFirst(GoogleFonts.refPrefix.count)))
+        return try GoogleFonts.importFamily(family, styles: styles, folder: folder)
+    }
+
     static func normalizedHex(_ s: String) -> String {
         let h = s.trimmingCharacters(in: .whitespaces)
         return h.hasPrefix("#") ? h : "#" + h
@@ -301,6 +325,7 @@ public enum StockSearch {
     /// One result's thumbnail. Openverse cannot thumbnail SVGs (HTTP 424), so for those, and for other small
     /// originals, it falls back to the original file. Blocking; call off the main thread.
     public static func loadThumbnail(_ item: StockItem, timeout: TimeInterval = 20) -> CGImage? {
+        if item.kind == .font { return GoogleFonts.preview(item, timeout: timeout) }
         if let u = item.thumbnailURL, let data = try? HTTP.get(u, timeout: timeout), let img = decodeImage(data) {
             return img
         }
@@ -329,19 +354,22 @@ public enum StockSearch {
     public static func contactSheet(_ items: [StockItem], columns: Int = 5, cell: Int = 160) -> Data? {
         guard !items.isEmpty else { return nil }
         let thumbs = thumbnails(items)
-        let cols = min(columns, items.count)
+        // Font samples are wide.
+        let fonts = items.allSatisfy { $0.kind == .font }
+        let cellW = fonts ? 400 : cell, cellH = fonts ? 112 : cell
+        let cols = min(fonts ? 3 : columns, items.count)
         let rows = (items.count + cols - 1) / cols
-        let w = cols * cell, h = rows * cell
+        let w = cols * cellW, h = rows * cellH
         guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
                                   space: FrameRenderer.colorSpace,
                                   bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
         // Icons default to white, so show them on a dark background; photos on mid-grey.
-        let iconsOnly = items.allSatisfy { $0.kind == .icon }
+        let iconsOnly = items.allSatisfy { $0.kind == .icon || $0.kind == .font }
         ctx.setFillColor(iconsOnly ? CGColor(gray: 0.12, alpha: 1) : CGColor(gray: 0.85, alpha: 1))
         ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
         for i in items.indices {
             let col = i % cols, row = i / cols
-            let cellRect = CGRect(x: col * cell, y: h - (row + 1) * cell, width: cell, height: cell).insetBy(dx: 4, dy: 4)
+            let cellRect = CGRect(x: col * cellW, y: h - (row + 1) * cellH, width: cellW, height: cellH).insetBy(dx: 4, dy: 4)
             ctx.setFillColor(iconsOnly ? CGColor(gray: 0.2, alpha: 1) : CGColor(gray: 0.95, alpha: 1))
             ctx.fill(cellRect)
             if let img = thumbs[i] {

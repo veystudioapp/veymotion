@@ -8,7 +8,7 @@ import UniformTypeIdentifiers
 /// reference by absolute path. Assets are named by their path relative to the library (`icons/logo.svg`).
 /// The UI and the agent tools both go through these functions.
 public enum AssetKind: String, Codable, Sendable, CaseIterable {
-    case image, audio, video, text, other
+    case image, audio, video, text, font, other
 }
 
 public struct AssetInfo: Equatable, Identifiable, Sendable {
@@ -21,6 +21,8 @@ public struct AssetInfo: Equatable, Identifiable, Sendable {
     public var pixelWidth: Int?
     public var pixelHeight: Int?
     public var duration: Double?
+    /// Fonts: the faces in the file, e.g. ["Be Vietnam Pro Bold"] (use the family as a text layer's fontName).
+    public var fontFaces: [String]?
     /// Where the file came from and how to credit it (set for files from the free asset sources).
     public var credit: AssetCredit?
 
@@ -35,6 +37,7 @@ public struct AssetInfo: Equatable, Identifiable, Sendable {
         var parts = [kind.rawValue]
         if let w = pixelWidth, let h = pixelHeight { parts.append("\(w)×\(h)") }
         if let d = duration { parts.append(String(format: "%.2fs", d)) }
+        if let f = fontFaces, !f.isEmpty { parts.append(f.joined(separator: " / ")) }
         parts.append(ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file))
         return parts.joined(separator: ", ")
     }
@@ -161,6 +164,7 @@ extension AssetStore {
     }
 
     public static func kind(of url: URL) -> AssetKind {
+        if FontLibrary.fileExtensions.contains(url.pathExtension.lowercased()) { return .font }
         guard let type = UTType(filenameExtension: url.pathExtension.lowercased()) else { return .other }
         if type.conforms(to: .image) { return .image }
         if type.conforms(to: .audio) { return .audio }
@@ -229,6 +233,8 @@ extension AssetStore {
                 a.pixelWidth = v.width
                 a.pixelHeight = v.height
             }
+        case .font:
+            a.fontFaces = FontLibrary.faces(inFile: url)
         default:
             break
         }
@@ -257,6 +263,7 @@ extension AssetStore {
         case .image: return "images"
         case .video: return "video"
         case .audio: return "audio"
+        case .font: return "fonts"
         default: return nil
         }
     }

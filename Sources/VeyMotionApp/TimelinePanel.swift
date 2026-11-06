@@ -225,7 +225,7 @@ struct TimelinePanel: View {
                 header(scene, rows: rows)
                 Divider()
                 HStack(spacing: 0) {
-                    Color.clear.frame(width: nameWidth)
+                    Color.clear.frame(width: nameWidth, height: 22)
                     TimeRuler(tl: tl) { scrub(to: $0) }
                         .frame(width: trackW, height: 22)
                         .clipped()

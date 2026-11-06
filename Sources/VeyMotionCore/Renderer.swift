@@ -763,20 +763,10 @@ public final class FrameRenderer {
 
     static func font(for layer: MotionLayer) -> CTFont {
         let size = CGFloat(max(layer.fontSize, 1))
-        if let name = layer.fontName, let f = NSFont(name: name, size: size) { return f }
-        let weight: NSFont.Weight
-        switch layer.fontWeight.lowercased() {
-        case "ultralight": weight = .ultraLight
-        case "thin": weight = .thin
-        case "light": weight = .light
-        case "regular", "normal": weight = .regular
-        case "medium": weight = .medium
-        case "semibold": weight = .semibold
-        case "heavy": weight = .heavy
-        case "black": weight = .black
-        default: weight = .bold
+        if let name = layer.fontName, let ps = FontLibrary.resolve(name, weight: layer.fontWeight) {
+            return CTFontCreateWithName(ps as CFString, size, nil)
         }
-        return NSFont.systemFont(ofSize: size, weight: weight)
+        return FontLibrary.systemFont(layer.fontWeight, size: size)
     }
 }
 

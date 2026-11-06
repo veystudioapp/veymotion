@@ -109,6 +109,15 @@ The same `MCPServer` is served three ways: HTTP on `127.0.0.1:19790/mcp` (`Trans
   `PathShape` is an `Interpolatable` (so `d` uses `Animated` keyframes/loop like any track) that stores every
   segment as a cubic; morphing subdivides the shorter path and aligns closed loops (start point + direction) before
   lerping. Trim paths stroke each subpath with a dash pattern computed from its flattened length.
+- Fonts (`Fonts.swift`, `GoogleFonts.swift`): `fontName` is resolved by `FontLibrary.resolve` (family, PostScript or
+  full name + `fontWeight` such as "bold", "light italic" or "600"; cached, misses recheck the libraries at most every
+  2 s). Font files (.ttf/.otf/.ttc, asset kind `font`, `fonts/` in projects) in the active and shared libraries are
+  registered with CoreText for the process, so preview, CLI and export match. Static font files name weights other
+  than regular/bold as families of their own ("Be Vietnam Pro Black"); `faces(of:)` folds them into the base family
+  and `listedFamilies` hides them. Google Fonts needs no key: the family list is fonts.google.com/metadata/fonts
+  (cached a week under Application Support/VeyMotion/cache), files come from the css2 API (static TTFs for non-browser
+  user agents), and search previews use `text=` subset fonts. Layer tools report fonts that are missing or lack
+  letters of the text (`fontNotes` in `MCPServer`).
 - `blendMode` applies to every visual layer (set on the context before drawing; particles skip the opacity
   transparency layer and take opacity per particle, so they keep adding up).
 - Layer ids are unique: `addLayer` / `duplicateLayer` auto-suffix them (`title-2`), and renaming to a taken id throws.

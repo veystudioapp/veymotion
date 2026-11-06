@@ -94,7 +94,7 @@ public final class MCPServer {
             var scene = try SceneJSON.decode(MotionScene.self, fromObject: obj)
             let problems = scene.refreshMediaInfo()
             try host.mutate("Set Scene") { $0 = scene }
-            return text("Scene set: \(scene.width)x\(scene.height) @\(scene.fps)fps, \(scene.duration)s, \(scene.layers.count) layers: \(scene.layers.map(\.id).joined(separator: ", "))" + warnings(problems))
+            return text("Scene set: \(scene.width)x\(scene.height) @\(scene.fps)fps, \(scene.duration)s, \(scene.layers.count) layers: \(scene.layers.map(\.id).joined(separator: ", "))" + warnings(problems + fontNotes(scene.layers)))
 
         case "update_scene":
             guard let changes = a["changes"] as? [String: Any] else { throw ToolError("`changes` must be an object") }
@@ -111,7 +111,7 @@ public final class MCPServer {
                 newId = $0.addLayer(layer, at: a["index"] as? Int)
                 problems = $0.refreshMediaInfo()
             }
-            return text("Added layer '\(newId)'" + warnings(problems))
+            return text("Added layer '\(newId)'" + warnings(problems + fontNotes([try host.currentScene().layer(newId)])))
 
         case "add_layers":
             guard let list = a["layers"] as? [Any], !list.isEmpty else { throw ToolError("`layers` must be a non-empty array") }
@@ -122,7 +122,8 @@ public final class MCPServer {
                 ids = layers.map { s.addLayer($0) }
                 problems = s.refreshMediaInfo()
             }
-            return text("Added \(ids.count) layers: \(ids.joined(separator: ", ")) (scene now has \(host.currentScene().layers.count))" + warnings(problems))
+            let added = host.currentScene().layers.filter { ids.contains($0.id) }
+            return text("Added \(ids.count) layers: \(ids.joined(separator: ", ")) (scene now has \(host.currentScene().layers.count))" + warnings(problems + fontNotes(added)))
 
         case "update_layer":
             let id = try string(a, "id")
@@ -135,7 +136,12 @@ public final class MCPServer {
                 }
                 s.refreshMediaInfo()
             }
-            return text(SceneJSON.string(try host.currentScene().layer(newId)))
+            let updated = try host.currentScene().layer(newId)
+            return text(SceneJSON.string(updated) + warnings(fontNotes([updated])))
+
+        case "list_fonts":
+            return text(fontList(query: a["query"] as? String ?? "", vietnamese: a["vietnamese"] as? Bool ?? false,
+                                 limit: Int(number(a["limit"]) ?? 80)))
 
         case "remove_layer":
             let id = try string(a, "id")
@@ -444,14 +450,15 @@ public final class MCPServer {
                 throw ToolError("`kind` must be one of \(StockKind.allCases.map(\.rawValue))")
             }
             let page = max(1, Int(number(a["page"]) ?? 1))
-            var items = try StockSearch.search(query, kind: kind, page: page)
+            var items = try StockSearch.search(query, kind: kind, page: page, vietnamese: a["vietnamese"] as? Bool ?? false)
             if let limit = number(a["limit"]), limit > 0 { items = Array(items.prefix(Int(limit))) }
             if items.isEmpty { return text("No \(kind.rawValue) results for '\(query)'. Try a simpler or English query.") }
             var lines = ["\(items.count) \(kind.rawValue) results for '\(query)' (page \(page)). Import one with import_stock {\"ref\": …}:"]
             for (i, item) in items.enumerated() { lines.append("\(i + 1). \(item.summary)") }
             var content: [[String: Any]] = []
             if !kind.isAudio, a["preview"] as? Bool ?? true, let png = StockSearch.contactSheet(items) {
-                lines.append("The image shows the results numbered in the same order.")
+                lines.append(kind == .font ? "The image shows each font's name and a sample, numbered in the same order."
+                             : "The image shows the results numbered in the same order.")
                 content.append(["type": "image", "data": png.base64EncodedString(), "mimeType": "image/png"])
             }
             content.append(["type": "text", "text": lines.joined(separator: "\n")])
@@ -459,6 +466,20 @@ public final class MCPServer {
 
         case "import_stock":
             let item = try StockSearch.item(ref: try string(a, "ref"))
+            if item.kind == .font {
+                let styles = (a["weights"] as? [Any])?.map { "\($0)" }
+                let files = try StockSearch.importFont(item, styles: styles, folder: a["folder"] as? String)
+                let faces = FontLibrary.faces(of: item.title)
+                var lines = ["Imported the font \(item.title): \(files.map(\.name).joined(separator: ", "))",
+                             "license: \(item.credit.license) (no credit needed)"]
+                if faces.isEmpty {
+                    lines.append("Warning: the files did not register as a font. Try another family.")
+                } else {
+                    let weights = faces.map { "\($0.weight)\($0.italic ? " italic" : "")" }
+                    lines.append("Use it: \"fontName\": \"\(item.title)\" with fontWeight one of: \(weights.joined(separator: ", ")) (or names like regular/bold; add \" italic\" for italics).")
+                }
+                return text(lines.joined(separator: "\n"))
+            }
             let asset = try StockSearch.importItem(item, name: a["name"] as? String, folder: a["folder"] as? String,
                                                    color: a["color"] as? String,
                                                    size: Int(number(a["size"]) ?? 512))
@@ -578,6 +599,55 @@ public final class MCPServer {
         fields.append("\"onsets\":[" + onsets.map { "[\(fmt($0.t + offset)),\(fmt($0.strength, 2))]" }.joined(separator: ",") + "]")
         fields.append("\"loudness\":{\"from\":\(fmt(from)),\"step\":1,\"values\":[" + loudness.map { fmt($0, 2) }.joined(separator: ",") + "]}")
         return "{" + fields.joined(separator: ",") + "}"
+    }
+
+    /// Problems with text layers' fonts: names that are not installed, and letters the font cannot draw.
+    private func fontNotes(_ layers: [MotionLayer]) -> [String] {
+        var notes: [String] = []
+        var reported = Set<String>()
+        for l in layers where l.type == .text {
+            guard let name = l.fontName, !name.trimmingCharacters(in: .whitespaces).isEmpty else { continue }
+            guard let ps = FontLibrary.resolve(name, weight: l.fontWeight) else {
+                if reported.insert(name).inserted {
+                    let alt = FontLibrary.suggestions(for: name)
+                    notes.append("Font '\(name)' was not found, so '\(l.id)' uses the system font"
+                        + (alt.isEmpty ? "" : ". Similar installed fonts: \(alt.joined(separator: ", "))")
+                        + ". list_fonts shows what is available; search_stock kind \"font\" + import_stock adds a Google font.")
+                }
+                continue
+            }
+            let missing = FontLibrary.missingCharacters(l.text, postScriptName: ps)
+            if !missing.isEmpty {
+                notes.append("Font '\(name)' has no letters for \"\(String(missing.prefix(16)))\" in '\(l.id)' (another font fills them in, "
+                    + "which looks uneven). Use a font that has them, e.g. list_fonts with vietnamese true, or search_stock kind \"font\" with vietnamese true.")
+            }
+        }
+        return notes
+    }
+
+    /// Library fonts first, then installed families, with their weights.
+    private func fontList(query: String, vietnamese: Bool, limit: Int) -> String {
+        let q = query.lowercased().trimmingCharacters(in: .whitespaces)
+        let library = Set(FontLibrary.libraryFamilies)
+        var families = FontLibrary.listedFamilies().filter { q.isEmpty || $0.lowercased().contains(q) }
+        if vietnamese { families = families.filter(FontLibrary.supportsVietnamese) }
+        families.sort { (library.contains($0) ? 0 : 1, $0) < (library.contains($1) ? 0 : 1, $1) }
+        func describe(_ f: String) -> String {
+            let faces = FontLibrary.faces(of: f)
+            let weights = Array(Set(faces.filter { !$0.italic }.map(\.weight))).sorted().map(String.init)
+            let italic = faces.contains { $0.italic }
+            return "- \(f) — \(weights.isEmpty ? "italic" : weights.joined(separator: " "))\(italic && !weights.isEmpty ? " + italic" : "")"
+                + (library.contains(f) ? " [asset library]" : "")
+        }
+        guard !families.isEmpty else {
+            return "No fonts match '\(query)'\(vietnamese ? " with Vietnamese letters" : ""). search_stock kind \"font\" finds Google fonts to import."
+        }
+        let shown = families.prefix(max(1, limit))
+        var lines = ["\(families.count) font families\(vietnamese ? " with Vietnamese letters" : "")\(q.isEmpty ? "" : " matching '\(query)'")"
+                     + (families.count > shown.count ? " (first \(shown.count); use query to narrow)" : "")
+                     + ". Use the family as fontName and pick a weight with fontWeight (numbers are CSS weights):"]
+        lines += shown.map(describe)
+        return lines.joined(separator: "\n")
     }
 
     private func warnings(_ problems: [String]) -> String {

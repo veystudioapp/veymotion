@@ -217,7 +217,8 @@ vmotion render scene.json out.mp4
 - Layer types: `rect` (width, height, cornerRadius, fill, stroke, strokeWidth), `ellipse`,
   `path` (`d` = SVG path data or `star(5,200,80)` / `polygon(6,150)` / `circle(r)` / `ellipse(rx,ry)` / `rect(w,h,r)`,
   fill, stroke, fillRule, lineCap, lineJoin),
-  `text` (text, fontSize, fontWeight, fontName, color, align, maxWidth), `image` (path, width, height),
+  `text` (text, fontSize, fontWeight, fontName = any installed font, a font file in the asset library, or a Google
+  font imported with `search_stock`/`import_stock` kind `font`; color, align, maxWidth), `image` (path, width, height),
   `video` (path to a .mov/.mp4 or a folder of numbered images, width, height, trimIn, speed,
   playback `once`/`hold`/`loop`, fps for image sequences), `particles` (see below).
 - **Particles**: `{"type": "particles", "x": 960, "y": 900, "width": 220, "height": 0, "particles": {"preset": "fire"}}`.

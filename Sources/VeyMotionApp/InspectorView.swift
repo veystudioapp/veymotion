@@ -206,6 +206,7 @@ struct LayerInspector: View {
                 .lineLimit(2...6)
                 .padding(7)
                 .background(RoundedRectangle(cornerRadius: 5).fill(Color.primary.opacity(0.06)))
+            FontFamilyRow(layer: layer)
             Grid(horizontalSpacing: 8, verticalSpacing: 6) {
                 GridRow {
                     NumberField("Size", layer.fontSize, digits: 0) { v in store.updateLayer(id) { $0.fontSize = max(1, v) } }
@@ -414,6 +415,86 @@ struct EffectsSection: View {
             }
             MatteRow(layer: layer)
         }
+    }
+}
+
+/// Font family of a text layer, picked from installed and asset-library fonts.
+struct FontFamilyRow: View {
+    @Environment(SceneStore.self) private var store
+    let layer: MotionLayer
+    @State private var showList = false
+
+    var body: some View {
+        let name = layer.fontName.flatMap { $0.isEmpty ? nil : $0 }
+        HStack(spacing: 6) {
+            RowLabel("Font")
+            Button { showList.toggle() } label: {
+                HStack {
+                    Text(name ?? "System").lineLimit(1)
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.up.chevron.down").font(.caption2).foregroundStyle(.secondary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .fieldBackground()
+            .popover(isPresented: $showList, arrowEdge: .leading) {
+                FontListPopover(current: name) { family in
+                    store.updateLayer(layer.id, "Change Font") { $0.fontName = family }
+                    showList = false
+                }
+            }
+        }
+        .help("Fonts installed on this Mac and font files in the asset library. Get more in Free Assets → Fonts.")
+        if let name, FontLibrary.resolve(name, weight: layer.fontWeight) == nil {
+            Text("“\(name)” is not installed: the system font is used.")
+                .font(.caption).foregroundStyle(.orange)
+        }
+    }
+}
+
+private struct FontListPopover: View {
+    let current: String?
+    let onPick: (String?) -> Void
+    @State private var query = ""
+    @State private var families: [String] = []
+    @State private var library: Set<String> = []
+
+    var body: some View {
+        let q = query.lowercased()
+        let shown = families.filter { q.isEmpty || $0.lowercased().contains(q) }
+        VStack(spacing: 0) {
+            TextField("Search fonts", text: $query)
+                .textFieldStyle(.roundedBorder)
+                .padding(8)
+            List {
+                if q.isEmpty { row(nil, title: "System") }
+                let lib = shown.filter(library.contains)
+                if !lib.isEmpty {
+                    Section("Asset library") { ForEach(lib, id: \.self) { row($0, title: $0) } }
+                }
+                Section("Installed") {
+                    ForEach(shown.filter { !library.contains($0) }, id: \.self) { row($0, title: $0) }
+                }
+            }
+        }
+        .frame(width: 300, height: 420)
+        .task {
+            families = FontLibrary.listedFamilies()
+            library = Set(FontLibrary.libraryFamilies)
+        }
+    }
+
+    private func row(_ family: String?, title: String) -> some View {
+        Button { onPick(family) } label: {
+            HStack {
+                Text(title).font(family.map { .custom($0, size: 15) } ?? .system(size: 15)).lineLimit(1)
+                Spacer()
+                if family == current { Image(systemName: "checkmark").foregroundStyle(Color.accentColor) }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 
