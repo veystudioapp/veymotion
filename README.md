@@ -202,16 +202,21 @@ vmotion render scene.json out.mp4
 
 - Scene pixels, origin top-left; `x`/`y` is the layer center. First layer = bottom.
 - Animatable: `x`, `y`, `scale`, `scaleX`, `scaleY`, `rotation` (deg), `skewX`, `skewY`, `anchorX`, `anchorY`, `opacity`,
-  `width`, `height`, `cornerRadius`, `strokeWidth`, `trim` (stroke draw-on), `reveal` (typewriter), `letterSpacing`,
-  `blur`, `shadowX/Y/Blur/Opacity`, `pathProgress`, `emission`/`particleSpeed`/`particleSize` (particles), and the
-  colors `fill`, `stroke`, `color`.
+  `width`, `height`, `cornerRadius`, `strokeWidth`, `trim`/`trimStart`/`trimOffset` (trim paths), `reveal` (typewriter),
+  `letterSpacing`, `blur`, `shadowX/Y/Blur/Opacity`, `glow`/`glowRadius`, `pathProgress`,
+  `emission`/`particleSpeed`/`particleSize` (particles), the colors `fill`, `stroke`, `color`, and a path's shape `d`
+  (keyframes morph between shapes).
   Each is a value or `{"keyframes": [...]}` (color keyframes use `"v": "#RRGGBB"`).
 - Keyframe `t` is absolute seconds; `easing` shapes the segment *arriving* at that keyframe:
   `linear | easeIn | easeOut | easeInOut (default) | hold | spring | spring(damping,frequency) | steps(n) |
   cubicBezier(x1,y1,x2,y2)` and `ease<In|Out|InOut><Sine|Quad|Cubic|Quart|Quint|Expo|Circ|Back|Elastic|Bounce>`.
 - Per layer: `blendMode` (`normal`, `add`, `screen`, `multiply`, `overlay`, `lighten`, `darken`), `loop` (`cycle`/`pingpong`/`offset` after the last key), `wiggle` (smooth noise), `audioReact` (follows the music), `parent`,
-  `motionPath` (curve the layer follows, driven by `pathProgress`), `textAnimators` (staggered per char/word/line).
+  `motionPath` (curve the layer follows, driven by `pathProgress`), `textAnimators` (staggered per char/word/line),
+  `gradient` (linear/radial fill for shapes, paths and text), `matte` (track matte: alpha/luma, inverted),
+  `repeater` (stepped copies with compounding transform and delay), `motionBlur` (shutter angle), `glowColor`.
 - Layer types: `rect` (width, height, cornerRadius, fill, stroke, strokeWidth), `ellipse`,
+  `path` (`d` = SVG path data or `star(5,200,80)` / `polygon(6,150)` / `circle(r)` / `ellipse(rx,ry)` / `rect(w,h,r)`,
+  fill, stroke, fillRule, lineCap, lineJoin),
   `text` (text, fontSize, fontWeight, fontName, color, align, maxWidth), `image` (path, width, height),
   `video` (path to a .mov/.mp4 or a folder of numbered images, width, height, trimIn, speed,
   playback `once`/`hold`/`loop`, fps for image sequences), `particles` (see below).

@@ -274,10 +274,15 @@ public final class MCPServer {
 
         case "set_keyframes":
             let id = try string(a, "id")
-            guard let track = KeyTrack(name: try string(a, "property")) else {
-                throw ToolError("`property` must be one of \(KeyTrack.allNames)")
-            }
             let raw = a["keyframes"] ?? [Any]()
+            if a["property"] as? String == "d" {
+                let kfs = try SceneJSON.decode([Keyframe<PathShape>].self, fromObject: raw)
+                try host.mutate("Set Keyframes") { try $0.setPathKeyframes(id, keyframes: kfs) }
+                return text("\(id).d = \(SceneJSON.string(try host.currentScene().layer(id).d, pretty: false))")
+            }
+            guard let track = KeyTrack(name: try string(a, "property")) else {
+                throw ToolError("`property` must be one of \(KeyTrack.allNames + ["d"])")
+            }
             switch track {
             case let .number(prop):
                 let kfs = try SceneJSON.decode([MotionKeyframe].self, fromObject: raw)

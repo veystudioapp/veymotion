@@ -141,6 +141,7 @@ struct LayerInspector: View {
             if layer.type == .video, layer.path.map(MediaAudio.hasAudioTrack) ?? false { SpeechSection(layer: layer) }
             EffectsSection(layer: layer)
             MotionSection(layer: layer)
+            RepeaterSection(layer: layer)
             if layer.type == .text { TextAnimatorSection(layer: layer) }
             PresetSection(layer: layer)
         }
@@ -175,9 +176,28 @@ struct LayerInspector: View {
                 }
             }
             AnimColorField(layer: layer, property: .fill, label: "Fill")
+            GradientRows(layer: layer)
             AnimColorField(layer: layer, property: .stroke, label: "Stroke")
-            AnimSlider(layer: layer, property: .trim, label: "Trim")
-                .help("Part of the stroke that is drawn (animate 0 → 100% to draw the outline)")
+            StrokeTrimRows(layer: layer)
+        case .path:
+            PathShapeField(layer: layer)
+            Grid(horizontalSpacing: 8, verticalSpacing: 6) {
+                GridRow {
+                    AnimField(layer: layer, property: .strokeWidth, label: "Stroke")
+                    Picker("", selection: Binding(get: { layer.fillRule },
+                                                  set: { v in store.updateLayer(id, "Fill Rule") { $0.fillRule = v } })) {
+                        Text("Nonzero").tag(FillRule.nonzero)
+                        Text("Even-odd").tag(FillRule.evenodd)
+                    }
+                    .labelsHidden()
+                    .controlSize(.small)
+                    .help("Even-odd turns shapes inside other shapes into holes")
+                }
+            }
+            AnimColorField(layer: layer, property: .fill, label: "Fill")
+            GradientRows(layer: layer)
+            AnimColorField(layer: layer, property: .stroke, label: "Stroke")
+            StrokeTrimRows(layer: layer)
         case .text:
             TextField("Text", text: Binding(get: { layer.text },
                                             set: { v in store.updateLayer(id, "Edit Text") { $0.text = v } }),
@@ -218,6 +238,7 @@ struct LayerInspector: View {
                 }
             }
             AnimColorField(layer: layer, property: .color, label: "Color")
+            GradientRows(layer: layer)
         case .image:
             FileRow(path: layer.path, kind: .image) { p in store.updateLayer(id, "Change Image") { $0.path = p } }
             sizeFields
@@ -365,6 +386,222 @@ struct EffectsSection: View {
                     }
                 }
                 ColorField("Shadow", layer.shadowColor) { c in store.updateLayer(layer.id, "Shadow Color") { $0.shadowColor = c } }
+            }
+            AnimSlider(layer: layer, property: .glow, label: "Glow", range: 0...2)
+            if layer.value(.glow, at: store.panelTime) > 0 || layer[.glow].isAnimated {
+                Grid(horizontalSpacing: 8, verticalSpacing: 6) {
+                    GridRow {
+                        AnimField(layer: layer, property: .glowRadius, label: "Radius")
+                        Toggle("Tint", isOn: Binding(get: { layer.glowColor != nil }, set: { on in
+                            store.updateLayer(layer.id, "Glow Tint") { $0.glowColor = on ? RGBA(hex: "#FFD27A") : nil }
+                        }))
+                        .toggleStyle(.checkbox)
+                        .controlSize(.small)
+                    }
+                }
+                if let tint = layer.glowColor {
+                    ColorField("Glow", tint) { c in store.updateLayer(layer.id, "Glow Color") { $0.glowColor = c } }
+                }
+            }
+            Grid(horizontalSpacing: 8, verticalSpacing: 6) {
+                GridRow {
+                    NumberField("Motion blur", layer.motionBlur, unit: "°", digits: 0) { v in
+                        store.updateLayer(layer.id, "Motion Blur") { $0.motionBlur = min(max(v, 0), 720) }
+                    }
+                    .help("Shutter angle: 180° = natural film blur on fast moves, 0 = off")
+                    Color.clear.frame(height: 1)
+                }
+            }
+            MatteRow(layer: layer)
+        }
+    }
+}
+
+/// Track matte: show the layer only through another layer.
+struct MatteRow: View {
+    @Environment(SceneStore.self) private var store
+    let layer: MotionLayer
+
+    var body: some View {
+        let candidates = store.scene.layers.filter { $0.type.isVisual && $0.id != layer.id }
+        HStack(spacing: 6) {
+            RowLabel("Matte")
+            Picker("", selection: Binding(get: { layer.matte?.source ?? "" }, set: { v in
+                store.updateLayer(layer.id, "Track Matte") { l in
+                    l.matte = v.isEmpty ? nil : Matte(source: v, mode: l.matte?.mode ?? .alpha)
+                }
+            })) {
+                Text("None").tag("")
+                ForEach(candidates.reversed()) { Text($0.name).tag($0.id) }
+            }
+            .labelsHidden()
+            .controlSize(.small)
+            if let m = layer.matte {
+                Picker("", selection: Binding(get: { m.mode }, set: { v in
+                    store.updateLayer(layer.id, "Matte Mode") { $0.matte?.mode = v }
+                })) {
+                    ForEach(MatteMode.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+                .labelsHidden()
+                .controlSize(.small)
+            }
+        }
+        .help("Show this layer only where the matte layer is (alpha) or is bright (luma). The matte layer itself is hidden.")
+    }
+}
+
+/// Trim paths: the drawn part of the stroke.
+struct StrokeTrimRows: View {
+    let layer: MotionLayer
+
+    var body: some View {
+        AnimSlider(layer: layer, property: .trimStart, label: "Trim start")
+        AnimSlider(layer: layer, property: .trim, label: "Trim end")
+            .help("Part of the stroke that is drawn (animate end 0 → 100% to draw the outline)")
+        AnimSlider(layer: layer, property: .trimOffset, label: "Offset")
+            .help("Slides the drawn part along the outline (100% = one lap)")
+    }
+}
+
+/// Linear/radial gradient replacing the solid fill or text color.
+struct GradientRows: View {
+    @Environment(SceneStore.self) private var store
+    let layer: MotionLayer
+
+    var body: some View {
+        let id = layer.id
+        if let g = layer.gradient {
+            HStack(spacing: 6) {
+                RowLabel("Gradient")
+                Picker("", selection: Binding(get: { g.type }, set: { v in
+                    store.updateLayer(id, "Gradient Type") { $0.gradient?.type = v }
+                })) {
+                    Text("Linear").tag(GradientType.linear)
+                    Text("Radial").tag(GradientType.radial)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .controlSize(.small)
+                Button { store.updateLayer(id, "Remove Gradient") { $0.gradient = nil } } label: { Image(systemName: "xmark") }
+                    .buttonStyle(.borderless)
+                    .help("Back to a solid color")
+            }
+            ForEach(Array(g.stops.enumerated()), id: \.offset) { i, stop in
+                ColorField(i == 0 ? "From" : i == g.stops.count - 1 ? "To" : "Via", stop.color) { c in
+                    store.updateLayer(id, "Gradient Color") { $0.gradient?.stops[i].color = c }
+                }
+            }
+            Grid(horizontalSpacing: 8, verticalSpacing: 6) {
+                GridRow {
+                    if g.type == .linear {
+                        NumberField("Angle", g.angle.value(at: store.panelTime), unit: "°", digits: 0) { v in
+                            store.updateLayer(id, "Gradient Angle") { $0.gradient?.angle = .constant(v) }
+                        }
+                    } else {
+                        NumberField("Radius", g.radius.value(at: store.panelTime) * 100, unit: "%", digits: 0) { v in
+                            store.updateLayer(id, "Gradient Radius") { $0.gradient?.radius = .constant(max(v, 1) / 100) }
+                        }
+                    }
+                    NumberField("Shift", g.shift.value(at: store.panelTime) * 100, unit: "%", digits: 0) { v in
+                        store.updateLayer(id, "Gradient Shift") { $0.gradient?.shift = .constant(v / 100) }
+                    }
+                }
+            }
+        } else {
+            Button("Add Gradient") {
+                store.updateLayer(id, "Add Gradient") { l in
+                    let base = (l.type == .text ? l.color : l.fill).value(at: store.time)
+                    let end = RGBA(r: base.r * 0.45, g: base.g * 0.45, b: base.b * 0.75, a: base.a)
+                    l.gradient = Gradient(stops: [GradientStop(offset: 0, color: base), GradientStop(offset: 1, color: end)])
+                }
+            }
+            .controlSize(.small)
+        }
+    }
+}
+
+/// A path layer's shape as SVG path data or a shorthand; keyframed shapes (morphs) are edited as JSON or by Claude.
+struct PathShapeField: View {
+    @Environment(SceneStore.self) private var store
+    let layer: MotionLayer
+
+    var body: some View {
+        if layer.d.isAnimated {
+            HStack {
+                Image(systemName: "wand.and.stars").foregroundStyle(.secondary)
+                Text("Morph · \(layer.d.keyframeList.count) shapes").font(.callout)
+                Spacer()
+            }
+            .help("The shape morphs between keyframes. Edit the shapes in JSON or ask Claude.")
+        } else {
+            CommitTextField(placeholder: "M0 0 L100 0 … or star(5,160,70)", value: layer.pathShape(at: 0).description,
+                            font: .system(.caption, design: .monospaced)) { v in
+                do {
+                    let shape = try PathShape(v)
+                    store.updateLayer(layer.id, "Edit Path") { $0.d = .constant(shape) }
+                } catch {
+                    store.message = "Path: \(error.localizedDescription)"
+                }
+            }
+            .padding(7)
+            .background(RoundedRectangle(cornerRadius: 5).fill(Color.primary.opacity(0.06)))
+            .help("SVG path data around the layer's position, or star(points,outer,inner), polygon(sides,r), circle(r), ellipse(rx,ry), rect(w,h,r)")
+        }
+    }
+}
+
+/// Stepped copies of the layer (rings, rows, spirals, echo trails).
+struct RepeaterSection: View {
+    @Environment(SceneStore.self) private var store
+    let layer: MotionLayer
+
+    var body: some View {
+        let id = layer.id
+        let t = store.panelTime
+        InspectorSection("Repeater") {
+            if let r = layer.repeater {
+                Grid(horizontalSpacing: 8, verticalSpacing: 6) {
+                    GridRow {
+                        NumberField("Copies", Double(r.count), digits: 0) { v in
+                            store.updateLayer(id, "Repeater") { $0.repeater?.count = min(max(Int(v), 1), Repeater.maxCount) }
+                        }
+                        NumberField("Delay", r.delay, unit: "s") { v in store.updateLayer(id, "Repeater") { $0.repeater?.delay = v } }
+                    }
+                    GridRow {
+                        NumberField("Step X", r.x.value(at: t), digits: 0) { v in store.updateLayer(id, "Repeater") { $0.repeater?.x = .constant(v) } }
+                        NumberField("Step Y", r.y.value(at: t), digits: 0) { v in store.updateLayer(id, "Repeater") { $0.repeater?.y = .constant(v) } }
+                    }
+                    GridRow {
+                        NumberField("Rotate", r.rotation.value(at: t), unit: "°") { v in
+                            store.updateLayer(id, "Repeater") { $0.repeater?.rotation = .constant(v) }
+                        }
+                        NumberField("Scale", r.scale.value(at: t), unit: "×") { v in
+                            store.updateLayer(id, "Repeater") { $0.repeater?.scale = .constant(v) }
+                        }
+                    }
+                    GridRow {
+                        NumberField("Pivot X", r.pivotX, digits: 0) { v in store.updateLayer(id, "Repeater") { $0.repeater?.pivotX = v } }
+                        NumberField("Pivot Y", r.pivotY, digits: 0) { v in store.updateLayer(id, "Repeater") { $0.repeater?.pivotY = v } }
+                    }
+                    GridRow {
+                        NumberField("End opacity", r.opacityEnd * 100, unit: "%", digits: 0) { v in
+                            store.updateLayer(id, "Repeater") { $0.repeater?.opacityEnd = min(max(v / 100, 0), 1) }
+                        }
+                        Button("Remove") { store.updateLayer(id, "Remove Repeater") { $0.repeater = nil } }
+                            .controlSize(.small)
+                    }
+                }
+            } else {
+                Button("Add Repeater") {
+                    store.updateLayer(id, "Add Repeater") { l in
+                        var r = Repeater(count: 5)
+                        r.x = .constant(80)
+                        r.opacityEnd = 0.3
+                        l.repeater = r
+                    }
+                }
+                .controlSize(.small)
+                .help("Draw stepped copies: rows, rings (rotation + pivot), spirals, cascades (delay)")
             }
         }
     }

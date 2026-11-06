@@ -458,6 +458,7 @@ extension LayerType {
         switch self {
         case .rect: return "rectangle"
         case .ellipse: return "circle"
+        case .path: return "scribble.variable"
         case .text: return "textformat"
         case .image: return "photo"
         case .video: return "film"

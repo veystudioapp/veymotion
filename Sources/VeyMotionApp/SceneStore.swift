@@ -217,6 +217,10 @@ final class SceneStore: SceneHost {
         switch type {
         case .rect: l.width = 400; l.height = 240; l.cornerRadius = 24; l.fill = .constant(RGBA(hex: "#6C5CE7")!)
         case .ellipse: l.width = 240; l.height = 240; l.fill = .constant(RGBA(hex: "#00B894")!)
+        case .path:
+            l.name = "Star"
+            l.d = (try? PathShape("star(5,160,70)")).map(PathValue.constant) ?? l.d
+            l.fill = .constant(RGBA(hex: "#FDCB6E")!)
         case .text: l.text = "New Text"
         case .image: l.path = path; l.width = 600
         case .video:

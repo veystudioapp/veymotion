@@ -49,6 +49,7 @@ struct VeyMotionApp: App {
             CommandMenu("Layer") {
                 Button("Add Rectangle") { store.addLayer(.rect) }
                 Button("Add Ellipse") { store.addLayer(.ellipse) }
+                Button("Add Path") { store.addLayer(.path) }
                 Button("Add Text") { store.addLayer(.text) }.keyboardShortcut("t", modifiers: [.command, .shift])
                 Button("Add Image…") { store.addImageLayer() }
                 Button("Add Video or Image Sequence…") { store.addVideoLayer() }

@@ -1,13 +1,16 @@
 import Foundation
 
 public enum LayerType: String, Codable, CaseIterable, Sendable {
-    case rect, ellipse, text, image, video, audio, particles
+    case rect, ellipse, path, text, image, video, audio, particles
 
     /// Drawn in the frame (audio layers are not).
     public var isVisual: Bool { self != .audio }
 
     /// Images and videos: sized by their file unless width/height are set.
     public var hasNaturalSize: Bool { self == .image || self == .video }
+
+    /// Filled/stroked vector shapes.
+    public var isShape: Bool { self == .rect || self == .ellipse || self == .path }
 }
 
 /// What an audio layer is, used for ducking (music dips under voice) and display.
@@ -37,9 +40,9 @@ public enum BlendMode: String, Codable, CaseIterable, Sendable {
 
 public enum AnimProperty: String, Codable, CaseIterable, Sendable {
     case x, y, scale, scaleX, scaleY, rotation, skewX, skewY, anchorX, anchorY, opacity
-    case width, height, cornerRadius, strokeWidth, trim
+    case width, height, cornerRadius, strokeWidth, trim, trimStart, trimOffset
     case reveal, letterSpacing
-    case blur, shadowX, shadowY, shadowBlur, shadowOpacity
+    case blur, shadowX, shadowY, shadowBlur, shadowOpacity, glow, glowRadius
     case pathProgress
     case volume
     /// Particles: multipliers on the system's rate, speed and size, read when each particle is born.
@@ -55,13 +58,15 @@ public enum AnimProperty: String, Codable, CaseIterable, Sendable {
         case .height: return 240
         case .shadowY: return 8
         case .shadowBlur: return 16
+        case .glowRadius: return 24
         default: return 0
         }
     }
 
     /// Properties kept in `MotionLayer.extra` (written to JSON only when set).
-    static let extras: [AnimProperty] = [.scaleX, .scaleY, .skewX, .skewY, .anchorX, .anchorY, .trim, .letterSpacing,
-                                         .blur, .shadowX, .shadowY, .shadowBlur, .shadowOpacity, .pathProgress,
+    static let extras: [AnimProperty] = [.scaleX, .scaleY, .skewX, .skewY, .anchorX, .anchorY, .trim, .trimStart,
+                                         .trimOffset, .letterSpacing, .blur, .shadowX, .shadowY, .shadowBlur,
+                                         .shadowOpacity, .glow, .glowRadius, .pathProgress,
                                          .emission, .particleSpeed, .particleSize]
 
     public var title: String {
@@ -81,7 +86,9 @@ public enum AnimProperty: String, Codable, CaseIterable, Sendable {
         case .height: return "Height"
         case .cornerRadius: return "Radius"
         case .strokeWidth: return "Stroke Width"
-        case .trim: return "Trim"
+        case .trim: return "Trim End"
+        case .trimStart: return "Trim Start"
+        case .trimOffset: return "Trim Offset"
         case .reveal: return "Reveal"
         case .letterSpacing: return "Letter Spacing"
         case .blur: return "Blur"
@@ -89,6 +96,8 @@ public enum AnimProperty: String, Codable, CaseIterable, Sendable {
         case .shadowY: return "Shadow Y"
         case .shadowBlur: return "Shadow Blur"
         case .shadowOpacity: return "Shadow Opacity"
+        case .glow: return "Glow"
+        case .glowRadius: return "Glow Radius"
         case .pathProgress: return "Path Progress"
         case .volume: return "Volume"
         case .emission: return "Emission"
@@ -100,8 +109,8 @@ public enum AnimProperty: String, Codable, CaseIterable, Sendable {
     /// Shown with two decimals rather than as whole pixels/degrees.
     public var isFractional: Bool {
         switch self {
-        case .scale, .scaleX, .scaleY, .opacity, .trim, .reveal, .shadowOpacity, .pathProgress, .volume,
-             .emission, .particleSpeed, .particleSize: return true
+        case .scale, .scaleX, .scaleY, .opacity, .trim, .trimStart, .trimOffset, .reveal, .shadowOpacity, .glow,
+             .pathProgress, .volume, .emission, .particleSpeed, .particleSize: return true
         default: return false
         }
     }
@@ -174,6 +183,16 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
     public var audioReact: [String: AudioReact]
     public var shadowColor: RGBA
     public var blendMode: BlendMode
+    /// Glow tint (nil = the layer's own colors).
+    public var glowColor: RGBA?
+    /// Shown only through another layer's shape or brightness.
+    public var matte: Matte?
+    /// Draws stepped copies of the layer.
+    public var repeater: Repeater?
+    /// Shutter angle in degrees (180 = film look, 0 = off): fast motion smears over the frame's exposure.
+    public var motionBlur: Double
+    /// Linear or radial fill (shapes, paths, text); replaces the solid fill/color.
+    public var gradient: Gradient?
 
     // Shape (rect/ellipse) and image size. Image defaults to its natural size.
     public var width: AnimValue?
@@ -182,6 +201,12 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
     public var fill: ColorValue
     public var stroke: ColorValue?
     public var strokeWidth: AnimValue
+    public var lineCap: LineCap?
+    public var lineJoin: LineJoin?
+
+    // Path: the shape in layer px around the layer's x/y (keyframes morph between shapes)
+    public var d: PathValue
+    public var fillRule: FillRule
 
     // Text
     public var text: String
@@ -244,12 +269,21 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         audioReact = [:]
         shadowColor = RGBA(r: 0, g: 0, b: 0, a: 0.6)
         blendMode = .normal
+        glowColor = nil
+        matte = nil
+        repeater = nil
+        motionBlur = 0
+        gradient = nil
         width = nil
         height = nil
         cornerRadius = .constant(0)
         fill = .constant(.white)
         stroke = nil
         strokeWidth = .constant(0)
+        lineCap = nil
+        lineJoin = nil
+        d = .constant(.zero)
+        fillRule = .nonzero
         text = type == .text ? "Text" : ""
         fontSize = 72
         fontWeight = "bold"
@@ -352,22 +386,23 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         if type == .audio { return [.volume] }
         var list: [AnimProperty] = [.x, .y, .scale, .scaleX, .scaleY, .rotation, .skewX, .skewY, .anchorX, .anchorY, .opacity]
         switch type {
-        case .rect: list += [.width, .height, .cornerRadius, .strokeWidth, .trim]
-        case .ellipse: list += [.width, .height, .strokeWidth, .trim]
+        case .rect: list += [.width, .height, .cornerRadius, .strokeWidth, .trimStart, .trim, .trimOffset]
+        case .ellipse: list += [.width, .height, .strokeWidth, .trimStart, .trim, .trimOffset]
+        case .path: list += [.strokeWidth, .trimStart, .trim, .trimOffset]
         case .text: list += [.reveal, .letterSpacing]
         case .image: list += [.width, .height]
         case .video: list += [.width, .height, .volume]
         case .particles: list += [.width, .height, .emission, .particleSpeed, .particleSize]
         case .audio: break
         }
-        list += [.blur, .shadowX, .shadowY, .shadowBlur, .shadowOpacity]
+        list += [.blur, .shadowX, .shadowY, .shadowBlur, .shadowOpacity, .glow, .glowRadius]
         if motionPath != nil { list.append(.pathProgress) }
         return list
     }
 
     public var applicableColors: [ColorProperty] {
         switch type {
-        case .rect, .ellipse: return [.fill, .stroke]
+        case .rect, .ellipse, .path: return [.fill, .stroke]
         case .text: return [.color]
         default: return []
         }
@@ -473,6 +508,9 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         for c in ColorProperty.allCases where self[c].isAnimated { self[c] = self[c].shifted(by: d) }
         for i in textAnimators.indices { textAnimators[i].start += d }
         for i in particles.bursts.indices { particles.bursts[i].t += d }
+        self.d = self.d.shifted(by: d)
+        gradient = gradient?.shifted(by: d)
+        repeater = repeater?.shifted(by: d)
     }
 
     /// Earliest keyframe, text-animator or particle-burst time, if any.
@@ -492,15 +530,18 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
     }
 
     public func shapeWidth(at t: Double) -> Double { value(.width, at: t) }
+    /// Path layers: the shape at time t (morphing between keyframes, looping like other tracks under "d").
+    public func pathShape(at t: Double) -> PathShape { d.value(at: t, loop: loop["d"]) }
     public func shapeHeight(at t: Double) -> Double { value(.height, at: t) }
 
     enum CodingKeys: String, CodingKey {
         case id, name, type, start, end, x, y, scale, rotation, opacity, reveal
         case scaleX, scaleY, skewX, skewY, anchorX, anchorY, trim, letterSpacing
+        case trimStart, trimOffset, glow, glowRadius, glowColor, matte, repeater, motionBlur, gradient
         case blur, shadowX, shadowY, shadowBlur, shadowOpacity, shadowColor, pathProgress, blendMode
         case emission, particleSpeed, particleSize, particles
         case parent, motionPath, loop, wiggle, audioReact, textAnimators
-        case width, height, cornerRadius, fill, stroke, strokeWidth
+        case width, height, cornerRadius, fill, stroke, strokeWidth, lineCap, lineJoin, d, fillRule
         case text, fontSize, fontWeight, fontName, color, align, maxWidth
         case path, speed, playback, fps
         case volume, role, trimIn, fadeIn, fadeOut, duckTo, sourceDuration, transcript, words
@@ -527,9 +568,9 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         parent = try c.decodeIfPresent(String.self, forKey: .parent).flatMap { $0.isEmpty ? nil : $0 }
         motionPath = try c.decodeIfPresent(MotionPath.self, forKey: .motionPath)
         loop = try c.decodeIfPresent([String: LoopMode].self, forKey: .loop) ?? [:]
-        for k in loop.keys where KeyTrack(name: k) == nil {
+        for k in loop.keys where KeyTrack(name: k) == nil && k != "d" {
             throw DecodingError.dataCorruptedError(forKey: .loop, in: c,
-                debugDescription: "Unknown property '\(k)' in loop. Use one of \(KeyTrack.allNames).")
+                debugDescription: "Unknown property '\(k)' in loop. Use one of \(KeyTrack.allNames + ["d"]).")
         }
         wiggle = try c.decodeIfPresent([String: Wiggle].self, forKey: .wiggle) ?? [:]
         for k in wiggle.keys where AnimProperty(rawValue: k) == nil {
@@ -545,12 +586,22 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         particles = try c.decodeIfPresent(ParticleSystem.self, forKey: .particles) ?? particles
         blendMode = try c.decodeIfPresent(BlendMode.self, forKey: .blendMode)
             ?? (type == .particles ? particles.preset?.defaultBlendMode ?? .normal : .normal)
+        glowColor = try c.decodeIfPresent(RGBA.self, forKey: .glowColor)
+        matte = try c.decodeIfPresent(Matte.self, forKey: .matte).flatMap { $0.source.isEmpty ? nil : $0 }
+        repeater = try c.decodeIfPresent(Repeater.self, forKey: .repeater)
+        motionBlur = min(max(try c.decodeIfPresent(Double.self, forKey: .motionBlur) ?? 0, 0), 720)
+        gradient = try c.decodeIfPresent(Gradient.self, forKey: .gradient)
         width = try c.decodeIfPresent(AnimValue.self, forKey: .width)
         height = try c.decodeIfPresent(AnimValue.self, forKey: .height)
         cornerRadius = try c.decodeIfPresent(AnimValue.self, forKey: .cornerRadius) ?? cornerRadius
-        fill = try c.decodeIfPresent(ColorValue.self, forKey: .fill) ?? fill
         stroke = try c.decodeIfPresent(ColorValue.self, forKey: .stroke)
+        // A path with only a stroke is a line: no fill unless one is given.
+        fill = try c.decodeIfPresent(ColorValue.self, forKey: .fill) ?? (type == .path && stroke != nil ? .constant(.clear) : fill)
         strokeWidth = try c.decodeIfPresent(AnimValue.self, forKey: .strokeWidth) ?? .constant(stroke == nil ? 0 : 4)
+        lineCap = try c.decodeIfPresent(LineCap.self, forKey: .lineCap)
+        lineJoin = try c.decodeIfPresent(LineJoin.self, forKey: .lineJoin)
+        d = try c.decodeIfPresent(PathValue.self, forKey: .d) ?? d
+        fillRule = try c.decodeIfPresent(FillRule.self, forKey: .fillRule) ?? .nonzero
         text = try c.decodeIfPresent(String.self, forKey: .text) ?? text
         fontSize = try c.decodeIfPresent(Double.self, forKey: .fontSize) ?? fontSize
         fontWeight = try c.decodeIfPresent(String.self, forKey: .fontWeight) ?? fontWeight
@@ -575,6 +626,14 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         sourceDuration = try c.decodeIfPresent(Double.self, forKey: .sourceDuration)
         transcript = try c.decodeIfPresent(String.self, forKey: .transcript)
         words = try c.decodeIfPresent([WordTiming].self, forKey: .words)
+    }
+
+    private func encodePaint(_ c: inout KeyedEncodingContainer<CodingKeys>) throws {
+        try c.encode(fill, forKey: .fill)
+        try c.encodeIfPresent(stroke, forKey: .stroke)
+        if stroke != nil { try c.encode(strokeWidth, forKey: .strokeWidth) }
+        try c.encodeIfPresent(lineCap, forKey: .lineCap)
+        try c.encodeIfPresent(lineJoin, forKey: .lineJoin)
     }
 
     /// Only writes fields relevant to the layer type, so JSON stays compact for humans and agents.
@@ -612,6 +671,11 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         if extra[.shadowOpacity] != nil { try c.encode(shadowColor, forKey: .shadowColor) }
         // Particles always write it: a missing blendMode takes the preset's default.
         if blendMode != .normal || type == .particles { try c.encode(blendMode, forKey: .blendMode) }
+        if extra[.glow] != nil { try c.encodeIfPresent(glowColor, forKey: .glowColor) }
+        try c.encodeIfPresent(matte, forKey: .matte)
+        try c.encodeIfPresent(repeater, forKey: .repeater)
+        if motionBlur > 0 { try c.encode(motionBlur, forKey: .motionBlur) }
+        if type.isShape || type == .text { try c.encodeIfPresent(gradient, forKey: .gradient) }
         try c.encodeIfPresent(parent, forKey: .parent)
         try c.encodeIfPresent(motionPath, forKey: .motionPath)
         if !loop.isEmpty { try c.encode(loop, forKey: .loop) }
@@ -624,9 +688,11 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
             try c.encode(self[.width], forKey: .width)
             try c.encode(self[.height], forKey: .height)
             if type == .rect { try c.encode(cornerRadius, forKey: .cornerRadius) }
-            try c.encode(fill, forKey: .fill)
-            try c.encodeIfPresent(stroke, forKey: .stroke)
-            if stroke != nil { try c.encode(strokeWidth, forKey: .strokeWidth) }
+            try encodePaint(&c)
+        case .path:
+            try c.encode(d, forKey: .d)
+            try encodePaint(&c)
+            if fillRule != .nonzero { try c.encode(fillRule, forKey: .fillRule) }
         case .text:
             try c.encode(reveal, forKey: .reveal)
             try c.encode(text, forKey: .text)

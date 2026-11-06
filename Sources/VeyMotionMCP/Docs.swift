@@ -14,10 +14,18 @@ enum Docs {
       Publishing is done by the user from the app (Export → Publish); you cannot post.
 
     LAYER
-    Common: id, name, type ("rect" | "ellipse" | "text" | "image" | "video" | "audio" | "particles"), start, end (seconds, end optional = scene end),
+    Common: id, name, type ("rect" | "ellipse" | "path" | "text" | "image" | "video" | "audio" | "particles"), start, end (seconds, end optional = scene end),
             x, y, scale, rotation (degrees), opacity (0..1)
-    rect/ellipse: width, height, cornerRadius (rect), fill "#RRGGBB[AA]", stroke, strokeWidth, trim (0..1: part of the
-          stroke drawn, for "draw on" line animations)
+    rect/ellipse: width, height, cornerRadius (rect), fill "#RRGGBB[AA]", stroke, strokeWidth (see STROKES for trim)
+    path: any vector shape. d = the shape in layer px around the layer's x/y (0,0 in d is at x/y and is the pivot for
+          rotation/scale): SVG path data, e.g. "M-200 0 C -100 -150, 100 -150, 200 0" (M L H V C S Q T A Z; uppercase
+          absolute, lowercase relative), or a shape centered on 0,0: star(points,outer,inner[,rotation]),
+          polygon(sides,radius[,rotation]), circle(r), ellipse(rx,ry), rect(w,h[,cornerRadius]).
+          fill, stroke, strokeWidth, fillRule ("nonzero" | "evenodd": inner shapes become holes). A path with a stroke
+          and no fill is a line (fill defaults to transparent then). To draw in scene coordinates use x 0, y 0.
+          Keyframes on d MORPH from shape to shape: {"d":{"keyframes":[{"t":0,"v":"star(5,200,80)"},
+          {"t":1,"v":"circle(160)","easing":"easeInOutCubic"}]}} (or set_keyframes with property "d"). Any two shapes
+          morph; closed shapes with similar point counts morph most cleanly. loop works on "d" too.
     text: text (may contain \n), fontSize, fontWeight (thin|light|regular|medium|semibold|bold|heavy|black),
           fontName (optional PostScript name), color, align (left|center|right), maxWidth (wraps), reveal (0..1 typewriter),
           letterSpacing (px), textAnimators (see TEXT ANIMATORS)
@@ -35,13 +43,15 @@ enum Docs {
       layer), blur (px), shadowOpacity (0..1, shadow off when 0), shadowX, shadowY (px, default 0/8), shadowBlur (default 16),
       shadowColor ("#000000"), parent, motionPath, pathProgress, loop, wiggle, audioReact (see below),
       blendMode ("normal" | "add" | "screen" | "multiply" | "overlay" | "lighten" | "darken"; "add"/"screen" make dark
-      areas see-through, e.g. fire or smoke footage on black)
+      areas see-through, e.g. fire or smoke footage on black),
+      gradient (rect/ellipse/path/text), matte, repeater, motionBlur, glow, glowRadius, glowColor (see AFTER EFFECTS-STYLE
+      TOOLS)
 
     ANIMATION
     Every number above (x, y, scale, scaleX, scaleY, rotation, skewX, skewY, anchorX, anchorY, opacity,
-    width, height, cornerRadius, strokeWidth, trim, reveal, letterSpacing, blur, shadowX, shadowY, shadowBlur,
-    shadowOpacity, pathProgress, volume, emission, particleSpeed, particleSize) and the colors fill, stroke and color can be a
-    plain value or
+    width, height, cornerRadius, strokeWidth, trim, trimStart, trimOffset, reveal, letterSpacing, blur, shadowX, shadowY,
+    shadowBlur, shadowOpacity, glow, glowRadius, pathProgress, volume, emission, particleSpeed, particleSize), the colors
+    fill, stroke and color, and a path's d (shapes) can be a plain value or
       {"keyframes":[{"t":0.5,"v":0},{"t":1.2,"v":1,"easing":"easeOut"}]}     (colors: "v":"#FF5500")
     - Never write the same key twice in one object (e.g. "y": 500 and "y": {"keyframes": ...}); only one would be used.
     - t is ABSOLUTE scene time in seconds. Before the first keyframe the first value holds; after the last, the last holds
@@ -67,6 +77,40 @@ enum Docs {
     - motionPath: {"points":[[200,800],[960,300],[1700,800]],"smooth":true,"closed":false,"orient":false} — the layer's
       center follows the path (x/y are then ignored); animate pathProgress 0→1 to move along it at even speed;
       orient = true turns the layer to face the direction of travel.
+
+    STROKES (rect, ellipse, path)
+    - Trim paths: trimStart and trim (= end), 0..1 along the outline, draw only part of the stroke; trimOffset slides
+      that part along (1 = one full lap; it wraps around). Draw on: trim 0→1. Draw on then off: trim 0→1 and trimStart
+      0→1 starting a bit later. Chasing dash on a ring: trimStart 0, trim 0.25, trimOffset 0→1 (linear) + loop offset.
+      A path made of several pieces trims each piece on its own.
+    - lineCap: butt | round | square (paths default round); lineJoin: miter | round | bevel (paths default round).
+
+    AFTER EFFECTS-STYLE TOOLS
+    - gradient (rect, ellipse, path, text; replaces fill / color):
+        {"type":"linear","colors":["#FF6B6B","#FFD93D"],"angle":90}
+      colors spread evenly, or "stops":[{"offset":0,"color":"#..."},{"offset":0.7,"color":"#..."}]. linear: angle in
+      degrees (0 = left→right, 90 = top→bottom). radial: cx, cy (center as a fraction of the layer box, default 0.5) and
+      radius (fraction of half its diagonal, default 1). angle, radius and shift are animatable. shift slides the colors
+      along (radial: outward): a metallic shine sweeping over a title = colors ["#C9A227","#FFF6C8","#C9A227"] with shift
+      keyframes -1 → 1.
+    - matte (track matte): {"source":"shape-id","mode":"alpha"} (or just "shape-id") shows the layer only where the
+      source layer is (alpha), where it is not (alphaInverted), or where it is bright (luma, lumaInverted). The source
+      layer is no longer drawn on its own; animate it (position, scale, trim, d morph, text animators…) for wipes and
+      reveals: text revealed by a sliding bar, a photo inside big text, an image in a growing circle, a title wiped
+      away by a shape. Keep the source next to the layer in the list.
+    - repeater: {"count":12,"rotation":30,"pivotY":200,"opacityEnd":0.3,"delay":0.05} draws count copies; copy i is
+      moved by i steps of x/y (px), rotation (°) and scale (×) around the pivot (pivotX/pivotY = offset from the layer's
+      position, e.g. the center of a ring); steps compound, so rotation + x makes a spiral. opacityEnd = opacity of the
+      last copy; delay = seconds each copy lags behind (its keyframes and start), for cascades and echo trails.
+      x/y/rotation/scale are animatable (a fan opening: rotation 0 → 15). Recipes: ring of 12 dots = a dot at the ring's
+      top, rotation 30, pivotY = radius; row of bars = x 60; echo trail of a moving layer = count 6, delay 0.04,
+      opacityEnd 0.1; burst of rays = a thin rect above the center, rotation 360/count, pivotY = its distance to the
+      center.
+    - motionBlur: shutter angle (180 = natural film blur, 360 = strong, 0 = off); fast moves, spins and zooms smear like
+      a real camera. It renders the layer several times per frame, so use it on the few fast-moving layers.
+    - glow (strength 0..4, animatable), glowRadius (px, default 24), glowColor (optional tint): light around the layer —
+      neon lines and logos, glowing text, light streaks. Best on bright layers over dark backgrounds.
+    - Layers draw in list order (no 3D camera). For depth, combine scale, blur and parallax (far layers move less).
 
     TEXT ANIMATORS (per character / word / line, staggered)
     "textAnimators":[{"unit":"char","mode":"in","start":0.5,"duration":0.5,"stagger":0.04,"order":"forward",
@@ -191,6 +235,9 @@ enum Docs {
     - apply_preset is a quick way to add common entrances/exits/emphasis; pass `ids` + `stagger` to cascade one preset
       over several layers (e.g. list items 0.12s apart). Combine with easings like easeOutBack / easeOutExpo for polish,
       and use loop/wiggle for ambient motion (floating shapes, subtle drift).
+    - For motion-design polish, layer techniques: a logo outline drawn on with trim + glow, then filled; titles revealed
+      through a matte; repeaters for bursts, rings and trails; shape morphs between scenes; motionBlur on fast moves;
+      gradients instead of flat fills. Check fast moments with render_frame at several close times.
     """#
 
     static let toolsJSON = #"""
@@ -264,17 +311,17 @@ enum Docs {
       },
       {
         "name": "set_keyframes",
-        "description": "Replace all keyframes of one property (numbers or the colors fill/stroke/color). An empty list makes the property constant.",
+        "description": "Replace all keyframes of one property (numbers, the colors fill/stroke/color, or a path layer's shape d, which morphs). An empty list makes the property constant.",
         "inputSchema": {
           "type": "object",
           "properties": {
             "id": { "type": "string" },
-            "property": { "type": "string", "enum": ["x", "y", "scale", "scaleX", "scaleY", "rotation", "skewX", "skewY", "anchorX", "anchorY", "opacity", "width", "height", "cornerRadius", "strokeWidth", "trim", "reveal", "letterSpacing", "blur", "shadowX", "shadowY", "shadowBlur", "shadowOpacity", "pathProgress", "volume", "emission", "particleSpeed", "particleSize", "fill", "stroke", "color"] },
+            "property": { "type": "string", "enum": ["x", "y", "scale", "scaleX", "scaleY", "rotation", "skewX", "skewY", "anchorX", "anchorY", "opacity", "width", "height", "cornerRadius", "strokeWidth", "trim", "trimStart", "trimOffset", "reveal", "letterSpacing", "blur", "shadowX", "shadowY", "shadowBlur", "shadowOpacity", "glow", "glowRadius", "pathProgress", "volume", "emission", "particleSpeed", "particleSize", "fill", "stroke", "color", "d"] },
             "keyframes": {
               "type": "array",
               "items": {
                 "type": "object",
-                "properties": { "t": { "type": "number" }, "v": { "type": ["number", "string"], "description": "Number, or \"#RRGGBB[AA]\" for fill/stroke/color." }, "easing": { "type": "string" } },
+                "properties": { "t": { "type": "number" }, "v": { "type": ["number", "string"], "description": "Number, \"#RRGGBB[AA]\" for fill/stroke/color, or a shape (SVG path data or e.g. \"star(5,200,80)\") for d." }, "easing": { "type": "string" } },
                 "required": ["t", "v"]
               }
             }
@@ -284,7 +331,7 @@ enum Docs {
       },
       {
         "name": "apply_preset",
-        "description": "Add a ready-made animation to one or more layers between start and start+duration. The layer's current values are the resting state. With several ids, each starts `stagger` seconds after the previous; layers the preset doesn't apply to are skipped. text* presets animate each letter/word/line; drawOn traces a shape's outline.",
+        "description": "Add a ready-made animation to one or more layers between start and start+duration. The layer's current values are the resting state. With several ids, each starts `stagger` seconds after the previous; layers the preset doesn't apply to are skipped. text* presets animate each letter/word/line; drawOn traces a shape's or path's outline.",
         "inputSchema": {
           "type": "object",
           "properties": {

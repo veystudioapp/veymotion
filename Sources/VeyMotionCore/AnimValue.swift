@@ -197,7 +197,13 @@ public enum Animated<V: Interpolatable>: Equatable, Hashable, Sendable, Codable 
         } else if let list = try? c.decode([Keyframe<V>].self) {
             self = Animated.make(list, fallback: V.zero)
         } else {
-            let what = V.self == RGBA.self ? "a color \"#RRGGBB[AA]\"" : "a number"
+            if V.self == PathShape.self, let s = try? c.decode(String.self) {
+                do { _ = try PathShape(s) } catch {
+                    throw DecodingError.dataCorruptedError(in: c, debugDescription: "Bad path: \(error.localizedDescription)")
+                }
+            }
+            let what = V.self == RGBA.self ? "a color \"#RRGGBB[AA]\""
+                : V.self == PathShape.self ? "SVG path data or a shape like \"star(5,200,80)\"" : "a number"
             throw DecodingError.dataCorruptedError(
                 in: c, debugDescription: "Expected \(what) or {\"keyframes\": [{\"t\", \"v\", \"easing\"?}]}")
         }

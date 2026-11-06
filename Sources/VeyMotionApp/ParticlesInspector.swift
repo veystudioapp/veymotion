@@ -154,7 +154,7 @@ struct ParticlesEditor: View {
     /// Emit from another layer: a text's letters, a shape or an image's frame.
     private var sourcePicker: some View {
         let candidates = store.scene.layers.filter {
-            $0.id != layer.id && [.text, .rect, .ellipse, .image, .video].contains($0.type)
+            $0.id != layer.id && [.text, .rect, .ellipse, .path, .image, .video].contains($0.type)
         }
         return HStack(spacing: 6) {
             RowLabel("From")

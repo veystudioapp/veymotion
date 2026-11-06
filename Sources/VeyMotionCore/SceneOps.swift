@@ -71,7 +71,7 @@ public enum Preset: String, CaseIterable, Codable, Sendable {
     public func applies(to type: LayerType) -> Bool {
         switch group {
         case .text: return type == .text
-        case .shape: return type == .rect || type == .ellipse
+        case .shape: return type.isShape
         default: return type.isVisual
         }
     }
@@ -111,6 +111,7 @@ extension MotionScene {
         let i = try layerIndex(id)
         for child in children(of: id) { try setParent(child, to: layers[i].parent, at: layers[i].start) }
         layers.remove(at: try layerIndex(id))
+        for j in layers.indices where layers[j].matte?.source == id { layers[j].matte = nil }
     }
 
     @discardableResult
@@ -136,6 +137,13 @@ extension MotionScene {
         layers[i][property] = AnimValue.make(keyframes, fallback: fallback)
     }
 
+    /// Path layers: replaces the shape keyframes (a morph between them); an empty list keeps the shape at 0 s.
+    public mutating func setPathKeyframes(_ id: String, keyframes: [Keyframe<PathShape>]) throws {
+        let i = try layerIndex(id)
+        guard layers[i].type == .path else { throw SceneError.invalid("'\(id)' is not a path layer") }
+        layers[i].d = PathValue.make(keyframes, fallback: layers[i].d.value(at: 0))
+    }
+
     public mutating func setValue(_ id: String, property: AnimProperty, value: Double, at t: Double) throws {
         let i = try layerIndex(id)
         layers[i][property] = layers[i][property].setting(value, at: t)
@@ -157,11 +165,15 @@ extension MotionScene {
         if let p = updated.parent, p == updated.id || !layers.contains(where: { $0.id == p }) || isAncestor(layers[i].id, of: p) {
             throw SceneError.invalid("parent '\(p)' must be another existing layer that is not a child of '\(updated.id)'")
         }
+        if let m = updated.matte, m.source == layers[i].id || m.source == updated.id || !layers.contains(where: { $0.id == m.source }) {
+            throw SceneError.invalid("matte '\(m.source)' must be another existing layer")
+        }
         let oldId = layers[i].id
         layers[i] = updated
         if updated.id != oldId {
             for j in layers.indices where layers[j].parent == oldId { layers[j].parent = updated.id }
             for j in layers.indices where layers[j].particles.from == oldId { layers[j].particles.from = updated.id }
+            for j in layers.indices where layers[j].matte?.source == oldId { layers[j].matte?.source = updated.id }
             for j in layers.indices {
                 for (k, r) in layers[j].audioReact where r.source == oldId { layers[j].audioReact[k]?.source = updated.id }
             }
@@ -182,7 +194,7 @@ extension MotionScene {
         let i = try layerIndex(id)
         var l = layers[i]
         guard preset.applies(to: l.type) else {
-            throw SceneError.invalid("\(preset.rawValue) only applies to \(preset.group == .text ? "text" : preset.group == .shape ? "rect/ellipse" : "visual") layers")
+            throw SceneError.invalid("\(preset.rawValue) only applies to \(preset.group == .text ? "text" : preset.group == .shape ? "rect/ellipse/path" : "visual") layers")
         }
         let e = s + d
         func put(_ p: AnimProperty, _ kfs: [MotionKeyframe]) {

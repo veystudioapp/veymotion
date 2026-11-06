@@ -101,6 +101,14 @@ The same `MCPServer` is served three ways: HTTP on `127.0.0.1:19790/mcp` (`Trans
   noise) or a floor. So any frame renders alone and preview matches export. World-space particles are drawn without
   the layer transform. Emitting `from` a text uses the glyph outlines from `FrameRenderer.glyphOutline`. A sprite
   image is the layer's `path`. `emission`/`particleSpeed`/`particleSize` are multipliers read at each birth.
+- Layer pipeline in `FrameRenderer`: `renderLayer` (track matte clip + repeater copies, each copy at
+  `t - i·delay`) → `drawCopy` (motion blur: averages `motionBlurSamples` sub-frame renders in an offscreen bitmap)
+  → `drawLayer` (transform, shadow, opacity, blur, then glow). Offscreen work uses `offscreen(area:)`, a window onto the
+  full frame in device pixels, so nested effects compose. A layer used as another's `matte` is not drawn on its own;
+  the matte is rendered to a gray mask (alpha or luma) and clipped in device space. Shapes live in `Shapes.swift`:
+  `PathShape` is an `Interpolatable` (so `d` uses `Animated` keyframes/loop like any track) that stores every
+  segment as a cubic; morphing subdivides the shorter path and aligns closed loops (start point + direction) before
+  lerping. Trim paths stroke each subpath with a dash pattern computed from its flattened length.
 - `blendMode` applies to every visual layer (set on the context before drawing; particles skip the opacity
   transparency layer and take opacity per particle, so they keep adding up).
 - Layer ids are unique: `addLayer` / `duplicateLayer` auto-suffix them (`title-2`), and renaming to a taken id throws.

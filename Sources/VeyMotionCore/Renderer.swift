@@ -19,6 +19,10 @@ public final class FrameRenderer {
     /// Open video decoders by path, reopened when the file (or sequence folder) changes. nil = unreadable.
     private var videoCache: [String: (frames: VideoFrames?, modified: Double?)] = [:]
     public static let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
+    /// Sub-frame renders averaged for a layer with motion blur (lower it for a faster preview).
+    public var motionBlurSamples = 8
+    /// Set while rendering motion-blur samples, so samples are not blurred again.
+    private var inMotionSample = false
 
     public init() {}
 
@@ -48,9 +52,10 @@ public final class FrameRenderer {
         ctx.setFillColor(scene.background.cgColor)
         ctx.fill(CGRect(x: 0, y: 0, width: scene.width, height: scene.height))
 
-        let visible = scene.layers.filter { $0.type.isVisual && $0.isVisible(at: t, sceneDuration: scene.duration) }
-        for layer in visible {
-            drawLayer(layer, scene: scene, at: t, in: ctx)
+        // A layer used as another's track matte is only drawn through that layer.
+        let matteSources = Set(scene.layers.compactMap { l in l.matte.flatMap { $0.source == l.id ? nil : $0.source } })
+        for layer in scene.layers where layer.type.isVisual && !matteSources.contains(layer.id) {
+            renderLayer(layer, scene: scene, at: t, in: ctx)
         }
         ctx.restoreGState()
     }
@@ -84,17 +89,174 @@ public final class FrameRenderer {
 
     // MARK: - Layers
 
-    private func drawLayer(_ layer: MotionLayer, scene: MotionScene, at t: Double, in ctx: CGContext) {
-        let opacity = min(max(layer.value(.opacity, at: t), 0), 1)
+    /// Draws a layer with its track matte and repeater copies. `depth` limits mattes of mattes.
+    private func renderLayer(_ layer: MotionLayer, scene: MotionScene, at t: Double, in ctx: CGContext, depth: Int = 0) {
+        let rep = layer.repeater
+        let n = rep.map { min(max($0.count, 1), Repeater.maxCount) } ?? 1
+        let delay = rep?.delay ?? 0
+        // Each copy lags `delay` behind the previous one, start time included.
+        let copies = (0..<n).filter { layer.isVisible(at: t - Double($0) * delay, sceneDuration: scene.duration) }
+        guard !copies.isEmpty else { return }
+        ctx.saveGState()
+        defer { ctx.restoreGState() }
+        if let matte = layer.matte, matte.source != layer.id, depth < 4,
+           let src = scene.layers.first(where: { $0.id == matte.source }) {
+            guard let mask = matteMask(src, mode: matte.mode, scene: scene, at: t, depth: depth) else { return }
+            // The mask covers the frame in device pixels: clip with y pointing up, then return to scene space.
+            let flip = CGAffineTransform(a: 1, b: 0, c: 0, d: -1, tx: 0, ty: CGFloat(scene.height))
+            ctx.concatenate(flip)
+            ctx.clip(to: CGRect(x: 0, y: 0, width: scene.width, height: scene.height), mask: mask)
+            ctx.concatenate(flip)
+        }
+        // The original (copy 0) is on top.
+        for i in copies.reversed() {
+            let ti = t - Double(i) * delay
+            if let rep {
+                let c = rep.copy(i, at: t, position: layer.position(at: ti).point)
+                drawCopy(layer, scene: scene, at: ti, in: ctx, copy: c.transform, alphaScale: c.opacity)
+            } else {
+                drawCopy(layer, scene: scene, at: ti, in: ctx, copy: nil, alphaScale: 1)
+            }
+        }
+    }
+
+    /// Gray mask of the frame (white = show) from a matte layer, or nil when nothing can show through.
+    private func matteMask(_ src: MotionLayer, mode: MatteMode, scene: MotionScene, at t: Double, depth: Int) -> CGImage? {
+        let (w, h) = pixelSize
+        guard let off = offscreen(CGRect(x: 0, y: 0, width: w, height: h), scene: scene) else { return nil }
+        renderLayer(src, scene: scene, at: t, in: off, depth: depth + 1)
+        let luma = mode == .luma || mode == .lumaInverted
+        let invert = mode == .alphaInverted || mode == .lumaInverted
+        return Self.grayMask(off, luma: luma, invert: invert)
+    }
+
+    /// One pixel per pixel of `ctx`: alpha (or brightness over black), optionally inverted.
+    private static func grayMask(_ ctx: CGContext, luma: Bool, invert: Bool) -> CGImage? {
+        let w = ctx.width, h = ctx.height, rb = ctx.bytesPerRow
+        guard let src = ctx.data?.assumingMemoryBound(to: UInt8.self),
+              let gray = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w,
+                                   space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue),
+              let dst = gray.data?.assumingMemoryBound(to: UInt8.self) else { return nil }
+        for y in 0..<h {
+            let row = y * rb, out = y * w
+            for x in 0..<w {
+                let p = row + x * 4
+                var v: Int
+                if luma {
+                    // Premultiplied RGB = the matte composited over black.
+                    v = (54 * Int(src[p]) + 183 * Int(src[p + 1]) + 19 * Int(src[p + 2]) + 128) >> 8
+                } else {
+                    v = Int(src[p + 3])
+                }
+                if invert { v = 255 - v }
+                dst[out + x] = UInt8(min(v, 255))
+            }
+        }
+        return gray.makeImage()
+    }
+
+    /// Bitmap covering `area` (device pixels, bottom-left origin) of the frame, set up in scene coordinates.
+    private func offscreen(_ area: CGRect, scene: MotionScene) -> CGContext? {
+        guard let off = Self.bitmap(Int(area.width), Int(area.height)) else { return nil }
+        off.setShouldAntialias(true)
+        off.interpolationQuality = .high
+        off.translateBy(x: -area.minX, y: -area.minY)
+        Self.applySceneSpace(off, scene: scene, pixelWidth: pixelSize.w, pixelHeight: pixelSize.h)
+        return off
+    }
+
+    /// Draws a device-pixel image of part of the frame at its place (ctx in scene coordinates).
+    private func drawDeviceImage(_ image: CGImage, rect r: CGRect, scene: MotionScene, in ctx: CGContext) {
+        let sx = Double(scene.width) / Double(pixelSize.w), sy = Double(scene.height) / Double(pixelSize.h)
+        ctx.saveGState()
+        ctx.translateBy(x: 0, y: CGFloat(scene.height))
+        ctx.scaleBy(x: 1, y: -1)
+        ctx.draw(image, in: CGRect(x: r.minX * sx, y: r.minY * sy, width: r.width * sx, height: r.height * sy))
+        ctx.restoreGState()
+    }
+
+    /// Scene transform of a layer (or of one of its repeater copies, `copy` being the step in its parent's space).
+    private func transform(of layer: MotionLayer, scene: MotionScene, at t: Double, copy: CGAffineTransform?) -> CGAffineTransform {
+        guard let copy else { return scene.worldTransform(of: layer, at: t) }
+        return layer.localTransform(at: t).concatenating(copy).concatenating(scene.parentTransform(of: layer, at: t))
+    }
+
+    /// One copy of a layer, averaged over the shutter time when it has motion blur.
+    private func drawCopy(_ layer: MotionLayer, scene: MotionScene, at t: Double, in ctx: CGContext,
+                          copy: CGAffineTransform?, alphaScale: Double) {
+        let shutter = layer.motionBlur / 360 / Double(max(scene.fps, 1))
+        let n = motionBlurSamples
+        guard shutter > 0, n > 1, !inMotionSample else {
+            drawLayer(layer, scene: scene, at: t, in: ctx, copy: copy, alphaScale: alphaScale)
+            return
+        }
+        let times = (0..<n).map { t + shutter * ((Double($0) + 0.5) / Double(n) - 0.5) }
+        let (w, h) = pixelSize
+        let frame = CGRect(x: 0, y: 0, width: w, height: h)
+        let area = (motionBounds(layer, scene: scene, times: times, copy: copy) ?? frame).integral.intersection(frame)
+        guard !area.isNull, area.width >= 1, area.height >= 1, let off = offscreen(area, scene: scene),
+              let data = off.data?.assumingMemoryBound(to: UInt8.self) else { return }
+        let rb = off.bytesPerRow, ah = off.height, rowLen = off.width * 4
+        var acc = [UInt32](repeating: 0, count: rowLen * ah)
+        inMotionSample = true
+        for tk in times {
+            memset(data, 0, rb * ah)
+            drawLayer(layer, scene: scene, at: tk, in: off, copy: copy, alphaScale: alphaScale)
+            acc.withUnsafeMutableBufferPointer { a in
+                for y in 0..<ah {
+                    let row = y * rb, ar = y * rowLen
+                    for x in 0..<rowLen { a[ar + x] &+= UInt32(data[row + x]) }
+                }
+            }
+        }
+        inMotionSample = false
+        let half = UInt32(n / 2), count = UInt32(n)
+        acc.withUnsafeBufferPointer { a in
+            for y in 0..<ah {
+                let row = y * rb, ar = y * rowLen
+                for x in 0..<rowLen { data[row + x] = UInt8((a[ar + x] + half) / count) }
+            }
+        }
+        guard let image = off.makeImage() else { return }
+        ctx.saveGState()
+        ctx.setBlendMode(layer.blendMode.cgBlendMode)
+        drawDeviceImage(image, rect: area, scene: scene, in: ctx)
+        ctx.restoreGState()
+    }
+
+    /// Device-pixel area a layer covers over several times (with blur, shadow and glow), or nil when unknown.
+    private func motionBounds(_ layer: MotionLayer, scene: MotionScene, times: [Double], copy: CGAffineTransform?) -> CGRect? {
+        guard layer.type != .particles else { return nil }
+        let (w, h) = pixelSize
+        let toDevice = CGAffineTransform(a: Double(w) / Double(scene.width), b: 0, c: 0,
+                                         d: -Double(h) / Double(scene.height), tx: 0, ty: Double(h))
+        var union = CGRect.null
+        for tk in times {
+            guard let local = contentBounds(layer, at: tk) else { return nil }
+            var pad = 3 * max(0, layer.value(.blur, at: tk)) + 4
+            if layer.value(.shadowOpacity, at: tk) > 0.001 {
+                pad += abs(layer.value(.shadowX, at: tk)) + abs(layer.value(.shadowY, at: tk)) + 2 * layer.value(.shadowBlur, at: tk)
+            }
+            if layer.value(.glow, at: tk) > 0.001 { pad += 3 * layer.value(.glowRadius, at: tk) }
+            let m = transform(of: layer, scene: scene, at: tk, copy: copy)
+            let r = local.applying(m).insetBy(dx: -pad, dy: -pad).applying(toDevice)
+            union = union.union(r)
+        }
+        return union
+    }
+
+    private func drawLayer(_ layer: MotionLayer, scene: MotionScene, at t: Double, in ctx: CGContext,
+                           copy: CGAffineTransform? = nil, alphaScale: Double = 1) {
+        let opacity = min(max(layer.value(.opacity, at: t), 0), 1) * alphaScale
         guard opacity > 0.001 else { return }
-        var m = scene.worldTransform(of: layer, at: t)
+        var m = transform(of: layer, scene: scene, at: t, copy: copy)
         if layer.type == .particles {
             currentParticles = scene.particles(of: layer, at: t) { [unowned self] src, tb, r1, r2, edge in
                 self.emitPoint(on: src, at: tb, r1, r2, edge)
             }
             guard !currentParticles.isEmpty else { return }
             // World-space particles are already in scene pixels.
-            if layer.particles.usesWorldSpace { m = .identity }
+            if layer.particles.usesWorldSpace { m = copy ?? .identity }
         }
         guard abs(m.a * m.d - m.b * m.c) > 1e-8 else { return } // scaled to nothing
         let blur = max(0, layer.value(.blur, at: t))
@@ -106,11 +268,7 @@ public final class FrameRenderer {
         if blur * pixelScale > 0.25 {
             // The blurred layer is a device-pixel image of part of the frame: draw it 1:1 at its place.
             if let blurred = blurredLayer(layer, scene: scene, transform: m, radius: blur, at: t) {
-                let sx = Double(scene.width) / Double(pixelSize.w), sy = Double(scene.height) / Double(pixelSize.h)
-                let r = blurred.rect
-                ctx.translateBy(x: 0, y: CGFloat(scene.height))
-                ctx.scaleBy(x: 1, y: -1)
-                ctx.draw(blurred.image, in: CGRect(x: r.minX * sx, y: r.minY * sy, width: r.width * sx, height: r.height * sy))
+                drawDeviceImage(blurred.image, rect: blurred.rect, scene: scene, in: ctx)
             }
         } else {
             // Shadow and partial opacity apply to the layer as a whole, through an offscreen layer that costs
@@ -130,12 +288,40 @@ public final class FrameRenderer {
             if grouped { ctx.endTransparencyLayer() }
         }
         ctx.restoreGState()
+        drawGlow(layer, scene: scene, transform: m, opacity: opacity, at: t, in: ctx)
+    }
+
+    /// Light added on top of the layer: its blurred copy (or that shape in `glowColor`), `glow` times over.
+    private func drawGlow(_ layer: MotionLayer, scene: MotionScene, transform m: CGAffineTransform, opacity: Double,
+                          at t: Double, in ctx: CGContext) {
+        let strength = min(max(layer.value(.glow, at: t), 0), 4)
+        guard strength > 0.001,
+              let g = blurredLayer(layer, scene: scene, transform: m, radius: max(1, layer.value(.glowRadius, at: t)), at: t)
+        else { return }
+        var image = g.image
+        if let tint = layer.glowColor, let off = Self.bitmap(image.width, image.height) {
+            let r = CGRect(x: 0, y: 0, width: image.width, height: image.height)
+            off.draw(image, in: r)
+            off.setBlendMode(.sourceIn)
+            off.setFillColor(tint.cgColor)
+            off.fill(r)
+            image = off.makeImage() ?? image
+        }
+        ctx.saveGState()
+        ctx.setBlendMode(.plusLighter)
+        var left = strength
+        while left > 0.001 {
+            ctx.setAlpha(min(left, 1) * opacity)
+            drawDeviceImage(image, rect: g.rect, scene: scene, in: ctx)
+            left -= 1
+        }
+        ctx.restoreGState()
     }
 
     /// `alpha`: opacity particles apply themselves (the context's alpha is replaced per particle).
     private func drawContent(_ layer: MotionLayer, at t: Double, in ctx: CGContext, alpha: Double = 1) {
         switch layer.type {
-        case .rect, .ellipse: drawShape(layer, at: t, in: ctx)
+        case .rect, .ellipse, .path: drawShape(layer, at: t, in: ctx)
         case .text: drawText(layer, at: t, in: ctx)
         case .image, .video: drawImage(layer, at: t, in: ctx)
         case .particles: drawParticles(layer, alpha: alpha, in: ctx)
@@ -172,12 +358,7 @@ public final class FrameRenderer {
             let reach = Double(Self.blurReach(sigma))
             area = local.applying(toDevice).insetBy(dx: -reach, dy: -reach).integral.intersection(frame)
         }
-        guard !area.isNull, area.width >= 1, area.height >= 1,
-              let off = Self.bitmap(Int(area.width), Int(area.height)) else { return nil }
-        off.setShouldAntialias(true)
-        off.interpolationQuality = .high
-        off.translateBy(x: -area.minX, y: -area.minY)
-        Self.applySceneSpace(off, scene: scene, pixelWidth: w, pixelHeight: h)
+        guard !area.isNull, area.width >= 1, area.height >= 1, let off = offscreen(area, scene: scene) else { return nil }
         off.concatenate(m)
         // Particles add up among themselves before the blurred result is blended with the frame.
         if layer.type == .particles { off.setBlendMode(layer.blendMode.cgBlendMode) }
@@ -194,6 +375,12 @@ public final class FrameRenderer {
             let w = max(layer.shapeWidth(at: t), 0), h = max(layer.shapeHeight(at: t), 0)
             let stroke = max(layer.value(.strokeWidth, at: t), 0) // covers half the line plus miter corners
             return CGRect(x: -w / 2, y: -h / 2, width: w, height: h).insetBy(dx: -stroke, dy: -stroke)
+        case .path:
+            let shape = layer.pathShape(at: t)
+            guard !shape.isEmpty else { return .zero }
+            // Miter joins on sharp corners reach up to 5 line widths out (miter limit 10).
+            let stroke = max(layer.value(.strokeWidth, at: t), 0) * (layer.lineJoin == .miter ? 5 : 1)
+            return shape.cgPath.boundingBoxOfPath.insetBy(dx: -stroke - 1, dy: -stroke - 1)
         case .image, .video:
             return imageFrame(layer, at: t).rect.insetBy(dx: -4, dy: -4) // placeholder outline
         case .text:
@@ -243,43 +430,125 @@ public final class FrameRenderer {
     }
 
     private func drawShape(_ layer: MotionLayer, at t: Double, in ctx: CGContext) {
-        let w = max(layer.shapeWidth(at: t), 0), h = max(layer.shapeHeight(at: t), 0)
-        guard w > 0, h > 0 else { return }
-        let rect = CGRect(x: -w / 2, y: -h / 2, width: w, height: h)
-        let path: CGPath
-        let length: Double
-        if layer.type == .ellipse {
-            path = CGPath(ellipseIn: rect, transform: nil)
-            let a = w / 2, b = h / 2 // Ramanujan's perimeter approximation
-            length = .pi * (3 * (a + b) - ((3 * a + b) * (a + 3 * b)).squareRoot())
+        let fillPath: CGPath
+        let pieces: [(path: CGPath, length: Double)]
+        let box: CGRect
+        if layer.type == .path {
+            let shape = layer.pathShape(at: t)
+            guard !shape.isEmpty else { return }
+            fillPath = shape.cgPath
+            pieces = shape.strokePieces
+            box = fillPath.boundingBoxOfPath
         } else {
-            let r = max(0, min(layer.value(.cornerRadius, at: t), w / 2, h / 2))
-            path = CGPath(roundedRect: rect, cornerWidth: r, cornerHeight: r, transform: nil)
-            length = 2 * (w + h) - (8 - 2 * .pi) * r
+            let w = max(layer.shapeWidth(at: t), 0), h = max(layer.shapeHeight(at: t), 0)
+            guard w > 0, h > 0 else { return }
+            box = CGRect(x: -w / 2, y: -h / 2, width: w, height: h)
+            let length: Double
+            if layer.type == .ellipse {
+                fillPath = CGPath(ellipseIn: box, transform: nil)
+                let a = w / 2, b = h / 2 // Ramanujan's perimeter approximation
+                length = .pi * (3 * (a + b) - ((3 * a + b) * (a + 3 * b)).squareRoot())
+            } else {
+                let r = max(0, min(layer.value(.cornerRadius, at: t), w / 2, h / 2))
+                fillPath = CGPath(roundedRect: box, cornerWidth: r, cornerHeight: r, transform: nil)
+                length = 2 * (w + h) - (8 - 2 * .pi) * r
+            }
+            pieces = [(fillPath, length)]
         }
-        if let fill = layer.color(.fill, at: t), fill.a > 0 {
-            ctx.addPath(path)
-            ctx.setFillColor(fill.cgColor)
-            ctx.fillPath()
-        }
-        let lineWidth = layer.value(.strokeWidth, at: t)
-        let trim = min(max(layer.value(.trim, at: t), 0), 1)
-        if let stroke = layer.color(.stroke, at: t), lineWidth > 0, trim > 0.0005 {
+        let rule: CGPathFillRule = layer.fillRule == .evenodd ? .evenOdd : .winding
+        if let g = layer.gradient {
             ctx.saveGState()
-            ctx.addPath(path)
-            ctx.setStrokeColor(stroke.cgColor)
-            ctx.setLineWidth(lineWidth)
-            if trim < 0.9995 {
-                ctx.setLineCap(.round)
-                ctx.setLineDash(phase: 0, lengths: [length * trim, length * 2])
+            ctx.addPath(fillPath)
+            ctx.clip(using: rule)
+            drawGradient(g, in: box, at: t, in: ctx)
+            ctx.restoreGState()
+        } else if let fill = layer.color(.fill, at: t), fill.a > 0 {
+            ctx.addPath(fillPath)
+            ctx.setFillColor(fill.cgColor)
+            ctx.fillPath(using: rule)
+        }
+        strokeTrimmed(layer, pieces, at: t, in: ctx)
+    }
+
+    /// Strokes each piece between trimStart and trim (end), moved along by trimOffset; trims wrap around.
+    private func strokeTrimmed(_ layer: MotionLayer, _ pieces: [(path: CGPath, length: Double)], at t: Double, in ctx: CGContext) {
+        let lineWidth = layer.value(.strokeWidth, at: t)
+        guard let stroke = layer.color(.stroke, at: t), lineWidth > 0 else { return }
+        var s = min(max(layer.value(.trimStart, at: t), 0), 1), e = min(max(layer.value(.trim, at: t), 0), 1)
+        if s > e { swap(&s, &e) }
+        let visible = e - s
+        guard visible > 0.0005 else { return }
+        let trimmed = visible < 0.9995
+        let offset = s + layer.value(.trimOffset, at: t)
+        let start = offset - floor(offset)
+        ctx.saveGState()
+        ctx.setStrokeColor(stroke.cgColor)
+        ctx.setLineWidth(lineWidth)
+        let isPath = layer.type == .path
+        ctx.setLineCap((layer.lineCap ?? (isPath || trimmed ? .round : .butt)).cgLineCap)
+        ctx.setLineJoin((layer.lineJoin ?? (isPath ? .round : .miter)).cgLineJoin)
+        for piece in pieces where piece.length > 0 {
+            ctx.addPath(piece.path)
+            if trimmed {
+                let on = visible * piece.length
+                // Wrapping past the end needs a pattern that repeats every path length; otherwise a long gap keeps
+                // a slightly underestimated length from showing a sliver at the end.
+                let wraps = start + visible > 1 + 1e-9
+                let period = wraps ? piece.length : on + 2 * piece.length
+                ctx.setLineDash(phase: start > 0 ? period - start * piece.length : 0,
+                                lengths: [on, period - on])
             }
             ctx.strokePath()
-            ctx.restoreGState()
+        }
+        ctx.restoreGState()
+    }
+
+    /// Fills the current clip with a gradient laid out over `box` (layer-local px).
+    private func drawGradient(_ g: Gradient, in box: CGRect, at t: Double, in ctx: CGContext) {
+        var locations = g.stops.map { CGFloat(min(max($0.offset, 0), 1)) }
+        guard let gradient = CGGradient(colorsSpace: Self.colorSpace, colors: g.stops.map(\.color.cgColor) as CFArray,
+                                        locations: &locations) else { return }
+        let options: CGGradientDrawingOptions = [.drawsBeforeStartLocation, .drawsAfterEndLocation]
+        let shift = g.shift.value(at: t)
+        switch g.type {
+        case .linear:
+            let a = g.angle.value(at: t) * .pi / 180, dx = cos(a), dy = sin(a)
+            let half = max((abs(dx) * box.width + abs(dy) * box.height) / 2, 0.5)
+            let cx = box.midX + dx * 2 * half * shift, cy = box.midY + dy * 2 * half * shift
+            ctx.drawLinearGradient(gradient, start: CGPoint(x: cx - dx * half, y: cy - dy * half),
+                                   end: CGPoint(x: cx + dx * half, y: cy + dy * half), options: options)
+        case .radial:
+            let c = CGPoint(x: box.minX + g.cx * box.width, y: box.minY + g.cy * box.height)
+            let r = max(0.5, g.radius.value(at: t) * hypot(box.width, box.height) / 2)
+            let out = max(0, shift) * r
+            ctx.drawRadialGradient(gradient, startCenter: c, startRadius: out, endCenter: c, endRadius: r + out, options: options)
         }
     }
 
     private func drawText(_ layer: MotionLayer, at t: Double, in ctx: CGContext) {
         guard let layout = textLayout(layer, at: t) else { return }
+        let (bw, bh) = (layout.box.width, layout.box.height)
+        if let g = layer.gradient {
+            // Draw the letters, then paint the gradient only where they are.
+            let box = CGRect(x: -bw / 2, y: -bh / 2, width: bw, height: bh)
+            if layer.textAnimators.isEmpty {
+                ctx.beginTransparencyLayer(in: box.insetBy(dx: -layer.fontSize, dy: -layer.fontSize), auxiliaryInfo: nil)
+            } else {
+                ctx.beginTransparencyLayer(auxiliaryInfo: nil)
+            }
+            drawTextBody(layer, layout, at: t, in: ctx)
+            ctx.saveGState()
+            ctx.setBlendMode(.sourceIn)
+            drawGradient(g, in: box, at: t, in: ctx)
+            ctx.restoreGState()
+            ctx.endTransparencyLayer()
+        } else {
+            drawTextBody(layer, layout, at: t, in: ctx)
+        }
+    }
+
+    private func drawTextBody(_ layer: MotionLayer, _ layout: (setter: CTFramesetter, box: CGSize, shownUTF16: Int),
+                              at t: Double, in ctx: CGContext) {
         let (bw, bh) = (layout.box.width, layout.box.height)
         ctx.saveGState()
         // Local y-up space with origin at the text box's bottom-left.
@@ -513,6 +782,26 @@ public final class FrameRenderer {
 
 // MARK: - Particles
 
+extension LineCap {
+    var cgLineCap: CGLineCap {
+        switch self {
+        case .butt: return .butt
+        case .round: return .round
+        case .square: return .square
+        }
+    }
+}
+
+extension LineJoin {
+    var cgLineJoin: CGLineJoin {
+        switch self {
+        case .miter: return .miter
+        case .round: return .round
+        case .bevel: return .bevel
+        }
+    }
+}
+
 extension BlendMode {
     var cgBlendMode: CGBlendMode {
         switch self {
@@ -704,6 +993,25 @@ extension FrameRenderer {
         case .image, .video:
             let r = imageFrame(src, at: t).rect
             return MotionScene.rectPoint(r.width, r.height, r1, r2, edge)
+        case .path:
+            let shape = src.pathShape(at: t)
+            guard !shape.isEmpty else { return nil }
+            let key = "path|\(shape.hashValue)"
+            let outline: GlyphOutline
+            if let cached = glyphCache[key] { outline = cached } else {
+                if glyphCache.count > 64 { glyphCache.removeAll() }
+                outline = GlyphOutline(path: shape.cgPath)
+                glyphCache[key] = outline
+            }
+            if !edge, shape.subpaths.contains(where: \.closed) {
+                let seed = Noise.mix(UInt64(r1 * 9_007_199_254_740_992) ^ (UInt64(r2 * 9_007_199_254_740_992) << 1))
+                let b = outline.bounds
+                for i in 0..<24 {
+                    let q = CGPoint(x: b.minX + Noise.unit(2 * i, seed) * b.width, y: b.minY + Noise.unit(2 * i + 1, seed) * b.height)
+                    if outline.path.contains(q, using: src.fillRule == .evenodd ? .evenOdd : .winding) { return q }
+                }
+            }
+            return outline.pointOnOutline(r1)
         default:
             return nil
         }

@@ -86,6 +86,8 @@ struct ContentView: View {
                         .help("Add rectangle")
                     Button { store.addLayer(.ellipse) } label: { Label("Ellipse", systemImage: "circle") }
                         .help("Add ellipse")
+                    Button { store.addLayer(.path) } label: { Label("Path", systemImage: "scribble.variable") }
+                        .help("Add a vector path (edit its shape in the inspector or ask Claude)")
                     Button { store.addLayer(.text) } label: { Label("Text", systemImage: "textformat") }
                         .help("Add text (⇧⌘T)")
                     Button { store.addImageLayer() } label: { Label("Image", systemImage: "photo") }
@@ -180,11 +182,11 @@ final class PreviewRenderer {
     @ObservationIgnored private let queue = DispatchQueue(label: "VeyMotion.preview", qos: .userInteractive)
     @ObservationIgnored private let renderer = FrameRenderer() // only used on `queue`
     @ObservationIgnored private var busy = false
-    @ObservationIgnored private var pending: (scene: MotionScene, time: Double, scale: Double)?
+    @ObservationIgnored private var pending: (scene: MotionScene, time: Double, scale: Double, fast: Bool)?
 
-    /// Call on the main thread.
-    func request(_ scene: MotionScene, at time: Double, scale: Double) {
-        pending = (scene, time, scale)
+    /// Call on the main thread. `fast` (while playing) renders motion blur with fewer samples.
+    func request(_ scene: MotionScene, at time: Double, scale: Double, fast: Bool = false) {
+        pending = (scene, time, scale, fast)
         renderNext()
     }
 
@@ -198,6 +200,7 @@ final class PreviewRenderer {
         pending = nil
         busy = true
         queue.async { [renderer] in
+            renderer.motionBlurSamples = job.fast ? 4 : 8
             let img = renderer.makeImage(job.scene, at: job.time, scale: job.scale)
             DispatchQueue.main.async {
                 self.image = img
@@ -249,7 +252,9 @@ struct CanvasView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             // Before the new document's first frame (declared first, so it runs first; the queue is serial).
             .onChange(of: store.documentRevision) { preview.clearCaches() }
-            .onChange(of: key, initial: true) { _, k in preview.request(store.scene, at: k.time, scale: k.scale) }
+            .onChange(of: key, initial: true) { _, k in
+                preview.request(store.scene, at: k.time, scale: k.scale, fast: store.isPlaying)
+            }
             // An image file overwritten in place (e.g. by write_asset) leaves the scene unchanged.
             .onChange(of: AssetLibrary.shared.assets) { preview.request(store.scene, at: key.time, scale: key.scale) }
         }
@@ -271,12 +276,20 @@ struct SelectionBox: View {
     let unit: Double
 
     var body: some View {
-        let (w, h) = boxSize
         let screen = scene.worldTransform(of: layer, at: time)
-        Path(CGRect(x: -w / 2, y: -h / 2, width: w, height: h))
+        Path(box)
             .applying(screen.concatenating(CGAffineTransform(scaleX: unit, y: unit)))
             .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 1.5, dash: [5, 3]))
             .allowsHitTesting(false)
+    }
+
+    private var box: CGRect {
+        if layer.type == .path {
+            let b = layer.pathShape(at: time).cgPath.boundingBoxOfPath
+            return b.isNull ? .zero : b
+        }
+        let (w, h) = boxSize
+        return CGRect(x: -w / 2, y: -h / 2, width: w, height: h)
     }
 
     private var boxSize: (Double, Double) {

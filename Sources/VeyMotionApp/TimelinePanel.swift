@@ -144,7 +144,7 @@ extension MotionLayer {
         let hex: UInt32
         switch type {
         case .text: hex = 0x8B5CF6            // purple
-        case .rect, .ellipse: hex = 0x3B82F6  // blue
+        case .rect, .ellipse, .path: hex = 0x3B82F6  // blue
         case .image: hex = 0xEC4899           // pink
         case .video: hex = 0xE11D48           // rose
         case .particles: hex = 0xF59E0B       // amber
@@ -167,14 +167,15 @@ extension MotionLayer {
         case .audio: return transcript ?? path.map { ($0 as NSString).lastPathComponent }
         case .particles: return particles.preset?.title ?? "Custom"
         case .rect, .ellipse: return nil
+        case .path: return d.isAnimated ? "Morph" : nil
         }
     }
 
     /// The layer's own color, shown as a swatch on shape/text clips.
     var timelineSwatch: Color? {
         switch type {
-        case .rect, .ellipse: return fill.value(at: 0).color
-        case .text: return color.value(at: 0).color
+        case .rect, .ellipse, .path: return (gradient?.stops.first?.color ?? fill.value(at: 0)).color
+        case .text: return (gradient?.stops.first?.color ?? color.value(at: 0)).color
         default: return nil
         }
     }
@@ -396,6 +397,7 @@ struct TimelinePanel: View {
         switch l.type {
         case .rect: return "rectangle.fill"
         case .ellipse: return "circle.fill"
+        case .path: return "scribble.variable"
         case .text: return "textformat"
         case .image: return "photo"
         case .video: return "film"
