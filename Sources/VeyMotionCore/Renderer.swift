@@ -819,12 +819,13 @@ struct GlyphOutline {
         bounds = path.boundingBoxOfPath
         var segs: [(a: CGPoint, b: CGPoint)] = []
         var start = CGPoint.zero, cur = CGPoint.zero
-        path.applyWithBlock { el in
-            let e = el.pointee, p = e.points
-            func curve(_ n: Int, _ at: (Double) -> CGPoint) {
-                var last = cur
+        path.applyWithBlock { (el: UnsafePointer<CGPathElement>) in
+            let e: CGPathElement = el.pointee
+            let p: UnsafeMutablePointer<CGPoint> = e.points
+            func curve(_ n: Int, _ at: (CGFloat) -> CGPoint) {
+                var last: CGPoint = cur
                 for i in 1...n {
-                    let q = at(Double(i) / Double(n))
+                    let q: CGPoint = at(CGFloat(i) / CGFloat(n))
                     segs.append((last, q)); last = q
                 }
                 cur = last
@@ -833,18 +834,11 @@ struct GlyphOutline {
             case .moveToPoint: start = p[0]; cur = p[0]
             case .addLineToPoint: segs.append((cur, p[0])); cur = p[0]
             case .addQuadCurveToPoint:
-                let p0 = cur, c = p[0], p1 = p[1]
-                curve(6) { t in
-                    let u = 1 - t
-                    return CGPoint(x: u * u * p0.x + 2 * u * t * c.x + t * t * p1.x, y: u * u * p0.y + 2 * u * t * c.y + t * t * p1.y)
-                }
+                let p0: CGPoint = cur, c: CGPoint = p[0], p1: CGPoint = p[1]
+                curve(6) { t in GlyphOutline.quad(p0, c, p1, t) }
             case .addCurveToPoint:
-                let p0 = cur, c1 = p[0], c2 = p[1], p1 = p[2]
-                curve(8) { t in
-                    let u = 1 - t
-                    let a = u * u * u, b = 3 * u * u * t, c = 3 * u * t * t, d = t * t * t
-                    return CGPoint(x: a * p0.x + b * c1.x + c * c2.x + d * p1.x, y: a * p0.y + b * c1.y + c * c2.y + d * p1.y)
-                }
+                let p0: CGPoint = cur, c1: CGPoint = p[0], c2: CGPoint = p[1], p1: CGPoint = p[2]
+                curve(8) { t in GlyphOutline.cubic(p0, c1, c2, p1, t) }
             case .closeSubpath: segs.append((cur, start)); cur = start
             @unknown default: break
             }
@@ -852,6 +846,23 @@ struct GlyphOutline {
         segments = segs
         var total = 0.0
         lengths = segs.map { s in total += hypot(s.b.x - s.a.x, s.b.y - s.a.y); return total }
+    }
+
+    private static func quad(_ p0: CGPoint, _ c: CGPoint, _ p1: CGPoint, _ t: CGFloat) -> CGPoint {
+        let u: CGFloat = 1 - t
+        let a: CGFloat = u * u, b: CGFloat = 2 * u * t, d: CGFloat = t * t
+        let x: CGFloat = a * p0.x + b * c.x + d * p1.x
+        let y: CGFloat = a * p0.y + b * c.y + d * p1.y
+        return CGPoint(x: x, y: y)
+    }
+
+    private static func cubic(_ p0: CGPoint, _ c1: CGPoint, _ c2: CGPoint, _ p1: CGPoint, _ t: CGFloat) -> CGPoint {
+        let u: CGFloat = 1 - t
+        let a: CGFloat = u * u * u, b: CGFloat = 3 * u * u * t
+        let c: CGFloat = 3 * u * t * t, d: CGFloat = t * t * t
+        let x: CGFloat = a * p0.x + b * c1.x + c * c2.x + d * p1.x
+        let y: CGFloat = a * p0.y + b * c1.y + c * c2.y + d * p1.y
+        return CGPoint(x: x, y: y)
     }
 
     func pointOnOutline(_ r: Double) -> CGPoint? {
