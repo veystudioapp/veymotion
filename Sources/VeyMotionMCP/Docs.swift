@@ -361,6 +361,30 @@ enum Docs {
         }
       },
       {
+        "name": "shatter_image",
+        "description": "Break an image into irregular shards that fly apart, like broken glass or an exploding photo. Give either `layer` (an existing image layer: its file, position and size are reused, and it is replaced by the shards) or `path` (an asset name or absolute path to place a new shattered image). Before `at`, the shards sit together and look like the whole picture; from `at` to `at`+duration they fly apart.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "layer": { "type": "string", "description": "An existing image layer id to shatter in place (removed and replaced by the shards)." },
+            "path": { "type": "string", "description": "Asset name or absolute path of an image, when not shattering an existing layer." },
+            "x": { "type": "number", "description": "Center position (path mode only; default scene center)." },
+            "y": { "type": "number" },
+            "width": { "type": "number", "description": "Placed size (path mode only; default the image's natural size)." },
+            "height": { "type": "number" },
+            "at": { "type": "number", "description": "Scene time the explosion begins (default: the layer's start, or 0)." },
+            "duration": { "type": "number", "default": 0.8, "description": "Seconds the pieces take to fly apart." },
+            "pieces": { "type": "integer", "default": 40, "description": "Roughly how many shards (4–400)." },
+            "direction": { "type": "string", "enum": ["out", "down", "up"], "description": "out (default): radial explosion. down/up: pieces mostly fall or burst upward." },
+            "distance": { "type": "number", "default": 1, "description": "Multiplier on how far pieces fly." },
+            "spin": { "type": "number", "default": 1, "description": "Multiplier on how much pieces rotate as they fly." },
+            "fadeOut": { "type": "boolean", "default": true, "description": "Fade pieces out after they finish flying." },
+            "seed": { "type": "integer", "description": "Random seed; same seed + pieces always shatters the same way." },
+            "id": { "type": "string", "description": "Prefix for the shard layer ids (e.g. \"dog\" → dog-1, dog-2, …). Default: the source layer's id, or \"shatter\"." }
+          }
+        }
+      },
+      {
         "name": "set_parent",
         "description": "Make a layer follow another layer's position, rotation and scale (or unlink it with parent null). By default the layer's x/y are converted so it does not jump at `time`.",
         "inputSchema": {

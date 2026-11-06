@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import VeyMotionCore
 
@@ -318,6 +319,97 @@ public final class MCPServer {
             return text("Applied \(preset.rawValue) to \(done.joined(separator: ", ")) from \(start)s for \(duration)s"
                 + (done.count > 1 ? " (stagger \(stagger)s)" : "")
                 + (skipped.isEmpty ? "" : "; skipped (not applicable): \(skipped.joined(separator: ", "))"))
+
+        case "shatter_image":
+            let scene = host.currentScene()
+            var sourcePath: String, px: Double, py: Double, pw: Double?, ph: Double?, start: Double, prefix: String
+            if let sourceId = a["layer"] as? String, !sourceId.isEmpty {
+                let l = try scene.layer(sourceId)
+                guard l.type == .image, let p = l.path else { throw ToolError("'\(sourceId)' is not an image layer with a file") }
+                sourcePath = p
+                px = l.x.value(at: l.start); py = l.y.value(at: l.start)
+                pw = l.width?.value(at: l.start); ph = l.height?.value(at: l.start)
+                start = number(a["at"]) ?? l.start
+                prefix = (a["id"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? sourceId
+            } else {
+                sourcePath = try string(a, "path")
+                px = number(a["x"]) ?? Double(scene.width) / 2
+                py = number(a["y"]) ?? Double(scene.height) / 2
+                pw = number(a["width"]); ph = number(a["height"])
+                start = number(a["at"]) ?? 0
+                prefix = (a["id"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "shatter"
+            }
+            let url = try AssetStore.existing(sourcePath)
+            guard let (image, natural) = AssetStore.loadImage(url) else { throw ToolError("Cannot read image at '\(sourcePath)'") }
+            let placedW = pw ?? natural.width, placedH = ph ?? natural.height
+            let duration = max(0.05, number(a["duration"]) ?? 0.8)
+            let pieces = min(max(Int(number(a["pieces"]) ?? 40), 4), 400)
+            let seed = Int(number(a["seed"]) ?? 0)
+            let distance = max(0, number(a["distance"]) ?? 1)
+            let spin = max(0, number(a["spin"]) ?? 1)
+            let direction = (a["direction"] as? String) ?? "out"
+            guard ["out", "down", "up"].contains(direction) else { throw ToolError("`direction` must be \"out\", \"down\" or \"up\"") }
+            let fadeOut = a["fadeOut"] as? Bool ?? true
+
+            let shards = try ImageShatter.shards(of: image, count: pieces, seed: seed)
+            guard !shards.isEmpty else { throw ToolError("Could not shatter the image") }
+            // Shard rects are in the decoded CGImage's own pixel space, which for a rasterized SVG differs from
+            // `natural` (its vector size): scale against the pixels, not the natural size used only for placement.
+            let pixelW = Double(image.width), pixelH = Double(image.height)
+            let scaleX = placedW / pixelW, scaleY = placedH / pixelH
+            let originX = px - placedW / 2, originY = py - placedH / 2
+            let folder = AssetStore.routed(nil, default: "shatter")
+            let end = start + duration
+            let imgCenter = CGPoint(x: pixelW / 2, y: pixelH / 2)
+
+            var layers: [MotionLayer] = []
+            for (i, shard) in shards.enumerated() {
+                let id = "\(prefix)-\(i + 1)"
+                let asset = try AssetStore.write(shard.png, name: "\(id).png", folder: folder)
+                let x0 = originX + shard.rect.midX * scaleX, y0 = originY + shard.rect.midY * scaleY
+                var l = MotionLayer(id: id, name: id, type: .image, x: x0, y: y0)
+                l.path = asset.path
+                l.width = .constant(shard.rect.width * scaleX)
+                l.height = .constant(shard.rect.height * scaleY)
+
+                let key = Noise.hash("shatter.\(prefix).\(seed).\(i)")
+                func r(_ j: Int) -> Double { Noise.unit(j, key) }
+                var dx = shard.centroid.x - imgCenter.x, dy = shard.centroid.y - imgCenter.y
+                let mag = (dx * dx + dy * dy).squareRoot()
+                if mag < 1 { let angle = r(0) * 2 * .pi; dx = cos(angle); dy = sin(angle) } else { dx /= mag; dy /= mag }
+                switch direction {
+                case "down": dy = dy * 0.4 + 0.8; dx *= 0.5
+                case "up": dy = dy * 0.4 - 0.8; dx *= 0.5
+                default: break
+                }
+                let travel = max(placedW, placedH) * distance * (0.6 + 0.8 * r(1))
+                let endX = x0 + dx * travel * scaleX, endY = y0 + dy * travel * scaleY
+                let endRotation = (r(2) - 0.5) * 720 * spin
+
+                l.x = AnimValue.make([MotionKeyframe(t: start, v: x0, easing: .linear),
+                                      MotionKeyframe(t: end, v: endX, easing: .curve(.cubic, .out))], fallback: x0)
+                l.y = AnimValue.make([MotionKeyframe(t: start, v: y0, easing: .linear),
+                                      MotionKeyframe(t: end, v: endY, easing: .curve(.cubic, .out))], fallback: y0)
+                l.rotation = AnimValue.make([MotionKeyframe(t: start, v: 0, easing: .linear),
+                                            MotionKeyframe(t: end, v: endRotation, easing: .curve(.cubic, .out))], fallback: 0)
+                if fadeOut {
+                    let fadeEnd = min(scene.duration, end + duration * 0.7)
+                    l.opacity = AnimValue.make([MotionKeyframe(t: end, v: 1, easing: .linear),
+                                               MotionKeyframe(t: fadeEnd, v: 0, easing: .easeIn)], fallback: 1)
+                    l.end = fadeEnd
+                }
+                layers.append(l)
+            }
+
+            if let sourceId = a["layer"] as? String, !sourceId.isEmpty, scene.layers.contains(where: { $0.id == sourceId }) {
+                try host.mutate("Shatter Image") { s in
+                    try s.removeLayer(sourceId)
+                    for l in layers { s.addLayer(l) }
+                }
+            } else {
+                try host.mutate("Shatter Image") { s in for l in layers { s.addLayer(l) } }
+            }
+            return text("Shattered into \(layers.count) pieces ('\(prefix)-1'…'\(prefix)-\(layers.count)'), exploding \(direction) from \(start)s over \(duration)s.")
 
         case "set_parent":
             let id = try string(a, "id")
