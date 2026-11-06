@@ -300,6 +300,9 @@ private struct AttachmentThumb: View {
             .frame(width: 52, height: 52)
             .clipShape(RoundedRectangle(cornerRadius: 6))
             .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3)))
+            .overlay(alignment: .bottomLeading) {
+                if let t = attachment.time { FrameTimeBadge(time: t, compact: true).padding(2) }
+            }
             .overlay(alignment: .topTrailing) {
                 Button { chat.removeAttachment(attachment.id) } label: {
                     Image(systemName: "xmark.circle.fill")
@@ -312,6 +315,22 @@ private struct AttachmentThumb: View {
                 .help("Remove")
             }
             .onHover { hover = $0 }
+    }
+}
+
+/// The scene time a canvas frame was taken at, over its thumbnail.
+struct FrameTimeBadge: View {
+    let time: Double
+    var compact = false
+
+    var body: some View {
+        Text(String(format: "%.2fs", time))
+            .font(.system(size: compact ? 9 : 10, weight: .semibold).monospacedDigit())
+            .foregroundStyle(.white)
+            .padding(.horizontal, compact ? 3 : 5)
+            .padding(.vertical, compact ? 1 : 2)
+            .background(Capsule().fill(.black.opacity(0.65)))
+            .help(String(format: "Canvas frame at %.2fs", time))
     }
 }
 

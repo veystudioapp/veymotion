@@ -7,6 +7,7 @@ struct VeyMotionApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @State private var store = SceneStore.shared
     @State private var chat = ChatStore.shared
+    @State private var annotations = AnnotationStore.shared
 
     init() {
         AudioAnalysisCache.waitsOnMainThread = false
@@ -43,13 +44,23 @@ struct VeyMotionApp: App {
                 Button("Export Video…") { store.exportVideo() }.keyboardShortcut("e")
                 Button("Publish Video…") { store.showPublish = true }.keyboardShortcut("e", modifiers: [.command, .shift])
             }
+            // While marking up a frame, Undo/Redo/Delete act on the marks, not the scene.
             CommandGroup(replacing: .undoRedo) {
-                Button(store.undoStack.last.map { "Undo \($0.label)" } ?? "Undo") { store.undo() }
-                    .keyboardShortcut("z")
-                    .disabled(!store.canUndo)
-                Button(store.redoStack.last.map { "Redo \($0.label)" } ?? "Redo") { store.redo() }
-                    .keyboardShortcut("z", modifiers: [.command, .shift])
-                    .disabled(!store.canRedo)
+                if annotations.isActive {
+                    Button("Undo Mark") { annotations.undo() }
+                        .keyboardShortcut("z")
+                        .disabled(!annotations.canUndo)
+                    Button("Redo Mark") { annotations.redo() }
+                        .keyboardShortcut("z", modifiers: [.command, .shift])
+                        .disabled(!annotations.canRedo)
+                } else {
+                    Button(store.undoStack.last.map { "Undo \($0.label)" } ?? "Undo") { store.undo() }
+                        .keyboardShortcut("z")
+                        .disabled(!store.canUndo)
+                    Button(store.redoStack.last.map { "Redo \($0.label)" } ?? "Redo") { store.redo() }
+                        .keyboardShortcut("z", modifiers: [.command, .shift])
+                        .disabled(!store.canRedo)
+                }
             }
             CommandMenu("Layer") {
                 Button("Add Rectangle") { store.addLayer(.rect) }
@@ -61,7 +72,12 @@ struct VeyMotionApp: App {
                 Button("Add Audio File…") { store.addAudioLayer() }
                 Divider()
                 Button("Duplicate") { store.duplicateSelected() }.keyboardShortcut("d").disabled(store.selection == nil)
-                Button("Delete") { store.deleteSelected() }.keyboardShortcut(.delete).disabled(store.selection == nil)
+                if annotations.isActive {
+                    Button(annotations.selection != nil ? "Delete Mark" : "Clear Marks") { annotations.delete() }
+                        .keyboardShortcut(.delete).disabled(annotations.items.isEmpty)
+                } else {
+                    Button("Delete") { store.deleteSelected() }.keyboardShortcut(.delete).disabled(store.selection == nil)
+                }
             }
             // Shortcuts all use ⌘ so they never steal keystrokes from text fields.
             // Bare Space also toggles playback (AppDelegate monitor, skipped while editing text).
@@ -111,7 +127,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { e in
             guard e.keyCode == 49, // space
                   e.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty,
-                  let window = e.window, window.attachedSheet == nil, !(window.firstResponder is NSText)
+                  let window = e.window, window.attachedSheet == nil, !(window.firstResponder is NSText),
+                  !AnnotationStore.shared.isActive // playing would drop the marks
             else { return e }
             SceneStore.shared.togglePlay()
             return nil

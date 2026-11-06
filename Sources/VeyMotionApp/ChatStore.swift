@@ -23,7 +23,7 @@ final class ChatStore {
     }
 
     enum Kind {
-        case user(String, images: [NSImage])
+        case user(String, images: [Attachment])
         case assistant(String, messageId: String)
         case tool(ToolCall)
         case image(NSImage, time: Double?)
@@ -42,6 +42,10 @@ final class ChatStore {
         var image: NSImage
         var mediaType: String
         var data: Data
+        /// Told to Claude with the message (not shown in the transcript), e.g. what an annotated frame is.
+        var note: String?
+        /// Scene time of a canvas frame, shown as a badge on the image.
+        var time: Double?
     }
 
     /// Used until (or if) `claude` has answered which models it offers.
@@ -225,19 +229,21 @@ final class ChatStore {
         let sent = attachments
         if text.isEmpty { text = "(see the attached image\(sent.count == 1 ? "" : "s"))" }
         let images = sent.map { ClaudeCodeAgent.ImageAttachment(mediaType: $0.mediaType, data: $0.data) }
+        let notes = sent.compactMap(\.note)
+        let agentText = notes.isEmpty ? text : (notes + [text]).joined(separator: "\n")
         input = ""
         attachments = []
-        append(.user(text, images: sent.map(\.image)))
+        append(.user(text, images: sent))
         isBusy = true
         stoppedByUser = false
         retriedFresh = false
-        lastSentText = text
+        lastSentText = agentText
         lastSentImages = images
         stderrTail = ""
         setActivity("Thinking…")
         turnStart = (text, scene.scene)
         do {
-            try agent.send(contextLine() + "\n" + text, images: images)
+            try agent.send(contextLine() + "\n" + agentText, images: images)
         } catch {
             isBusy = false
             activity = nil
@@ -307,6 +313,11 @@ final class ChatStore {
         } else if let png = Self.pngData(image, maxSide: 2000) {
             attachments.append(Attachment(image: image, mediaType: "image/png", data: png))
         }
+    }
+
+    /// A canvas frame with the user's marks drawn on it (JPEG, already sized for the API).
+    func attachAnnotatedFrame(_ jpeg: Data, image: NSImage, time: Double, note: String) {
+        attachments.append(Attachment(image: image, mediaType: "image/jpeg", data: jpeg, note: note, time: time))
     }
 
     func attachImage(file url: URL) {

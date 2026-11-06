@@ -190,7 +190,11 @@ public final class FrameRenderer {
             drawLayer(layer, scene: scene, at: t, in: ctx, copy: copy, alphaScale: alphaScale)
             return
         }
-        let times = (0..<n).map { t + shutter * ((Double($0) + 0.5) / Double(n) - 0.5) }
+        let nd = Double(n)
+        let times: [Double] = (0..<n).map { i -> Double in
+            let frac: Double = (Double(i) + 0.5) / nd - 0.5
+            return t + shutter * frac
+        }
         let (w, h) = pixelSize
         let frame = CGRect(x: 0, y: 0, width: w, height: h)
         let area = (motionBounds(layer, scene: scene, times: times, copy: copy) ?? frame).integral.intersection(frame)

@@ -220,6 +220,7 @@ struct CanvasView: View {
     @Environment(SceneStore.self) private var store
     @Environment(\.displayScale) private var displayScale
     @State private var preview = PreviewRenderer()
+    private let annotations = AnnotationStore.shared
 
     private struct FrameKey: Equatable {
         var revision: Int
@@ -248,13 +249,27 @@ struct CanvasView: View {
                         .frame(width: fit.width, height: fit.height)
                         .shadow(color: .black.opacity(0.35), radius: 12, y: 4)
                 }
-                if let layer = store.selectedLayer, layer.type.isVisual, layer.type != .text,
+                if !annotations.isActive, let layer = store.selectedLayer, layer.type.isVisual, layer.type != .text,
                    layer.isVisible(at: store.time, sceneDuration: scene.duration) {
                     SelectionBox(layer: layer, scene: scene, time: store.time, unit: fit.width / Double(scene.width))
                         .frame(width: fit.width, height: fit.height)
                 }
+                if annotations.isActive {
+                    AnnotationOverlay(annotations: annotations, unit: fit.width / Double(scene.width))
+                        .frame(width: fit.width, height: fit.height)
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .overlay(alignment: .top) {
+                if annotations.isActive {
+                    AnnotationToolbar(annotations: annotations, unit: fit.width / Double(scene.width))
+                        .padding(.top, 10)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
+            }
+            // Marks belong to the frame they were drawn on: leaving it (playing, another document) drops them.
+            .onChange(of: store.documentRevision) { annotations.close() }
+            .onChange(of: store.isPlaying) { _, playing in if playing { annotations.close() } }
             // Before the new document's first frame (declared first, so it runs first; the queue is serial).
             .onChange(of: store.documentRevision) { preview.clearCaches() }
             .onChange(of: key, initial: true) { _, k in
@@ -342,6 +357,15 @@ struct TransportBar: View {
                 Text("\(s.width)×\(s.height) · \(s.fps) fps")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                Button {
+                    let a = AnnotationStore.shared
+                    withAnimation(.easeOut(duration: 0.15)) { a.isActive ? a.close() : a.begin() }
+                } label: {
+                    Image(systemName: "pencil.tip.crop.circle")
+                        .foregroundStyle(AnnotationStore.shared.isActive ? Color.accentColor : Color.primary)
+                }
+                .help("Pause and mark up this frame, then send it to Claude (⇧⌘A)")
+                .keyboardShortcut("a", modifiers: [.command, .shift])
                 Button { withAnimation(.easeOut(duration: 0.2)) { showTimeline.toggle() } } label: {
                     Image(systemName: showTimeline ? "chevron.down" : "chevron.up")
                 }

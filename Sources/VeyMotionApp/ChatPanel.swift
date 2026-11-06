@@ -86,11 +86,14 @@ private struct ChatItemView: View {
                     HStack(spacing: 4) {
                         Spacer(minLength: 30)
                         ForEach(images.indices, id: \.self) { i in
-                            Image(nsImage: images[i])
+                            Image(nsImage: images[i].image)
                                 .resizable()
                                 .aspectRatio(contentMode: .fit)
                                 .frame(maxWidth: images.count == 1 ? 200 : 90, maxHeight: images.count == 1 ? 160 : 90)
                                 .clipShape(RoundedRectangle(cornerRadius: 6))
+                                .overlay(alignment: .bottomLeading) {
+                                    if let t = images[i].time { FrameTimeBadge(time: t).padding(4) }
+                                }
                         }
                     }
                 }
