@@ -105,6 +105,20 @@ final class ChatStore {
     @ObservationIgnored private var needsRestart = false
     @ObservationIgnored private var retriedFresh = false
 
+    /// The scene as one prompt left it. `prompt` is nil for the scene before the first prompt.
+    struct Version: Identifiable, Codable {
+        var id = UUID()
+        var date = Date()
+        var prompt: String?
+        var scene: MotionScene
+    }
+
+    static let maxVersions = 100
+    /// Snapshots taken after each prompt that changed the scene, oldest first.
+    private(set) var versions: [Version] = []
+    /// The prompt being worked on and the scene before it.
+    @ObservationIgnored private var turnStart: (prompt: String, scene: MotionScene)?
+
     /// One project's conversation while another project is open.
     private struct Conversation {
         var items: [Item] = []
@@ -112,6 +126,7 @@ final class ChatStore {
         var attachments: [Attachment] = []
         var sessionId: String?
         var forkSession = false
+        var versions: [Version] = []
     }
 
     /// The project the shown conversation belongs to (nil = loose scene).
@@ -220,12 +235,61 @@ final class ChatStore {
         lastSentImages = images
         stderrTail = ""
         setActivity("Thinking…")
+        turnStart = (text, scene.scene)
         do {
             try agent.send(contextLine() + "\n" + text, images: images)
         } catch {
             isBusy = false
             activity = nil
+            turnStart = nil
             append(.notice("Could not start Claude Code: \(error.localizedDescription)", isError: true))
+        }
+    }
+
+    // MARK: - Versions
+
+    /// Keeps the scene as the finished (or stopped) prompt left it, if the prompt changed it.
+    private func recordVersion() {
+        guard let start = turnStart else { return }
+        turnStart = nil
+        let now = scene.scene
+        guard now != start.scene else { return }
+        if versions.isEmpty { versions.append(Version(prompt: nil, scene: start.scene)) }
+        versions.append(Version(prompt: start.prompt, scene: now))
+        if versions.count > Self.maxVersions { versions.removeFirst(versions.count - Self.maxVersions) }
+        saveVersions()
+    }
+
+    /// Puts a version's scene back (one undo step).
+    func restore(_ version: Version) {
+        var s = version.scene
+        _ = s.refreshMediaInfo()
+        scene.apply("Restore Version") { $0 = s }
+    }
+
+    private func saveVersions() {
+        guard let project else { return }
+        let url = ProjectStore.versionsURL(project)
+        guard !versions.isEmpty else {
+            try? FileManager.default.removeItem(at: url)
+            return
+        }
+        let saved = versions.map { v -> Version in
+            var v = v
+            v.scene = v.scene.relativizingPaths(to: project)
+            return v
+        }
+        guard let data = try? SceneJSON.encode(saved, pretty: false) else { return }
+        try? SceneJSON.write(data, to: url)
+    }
+
+    private static func loadVersions(_ project: URL) -> [Version] {
+        guard let data = try? Data(contentsOf: ProjectStore.versionsURL(project)),
+              let saved = try? JSONDecoder().decode([Version].self, from: data) else { return [] }
+        return saved.map { v in
+            var v = v
+            v.scene.resolvePaths(relativeTo: project)
+            return v
         }
     }
 
@@ -307,12 +371,14 @@ final class ChatStore {
         guard isBusy else { return }
         stoppedByUser = true
         agent?.stop()
+        recordVersion()
         isBusy = false
         activity = nil
         append(.notice("Stopped. Your next message continues the same conversation.", isError: false))
     }
 
     func newChat() {
+        recordVersion()
         stoppedByUser = true
         agent?.reset()
         agent = nil
@@ -335,16 +401,24 @@ final class ChatStore {
             parkConversation()
             project = url
             restoreConversation()
-        case let .moved(_, to):
+        case let .moved(from, to):
             // Same conversation, new place; Read's folders changed with it.
             project = to
+            for i in versions.indices { versions[i].scene.replaceFolder(from.path, with: to.path) }
+            if let start = turnStart {
+                var s = start.scene
+                s.replaceFolder(from.path, with: to.path)
+                turnStart = (start.prompt, s)
+            }
             saveConversation()
+            saveVersions()
             if isBusy { needsRestart = true } else { restartAgent() }
         case let .adopted(url):
             // The loose scene's conversation becomes the new project's.
             parked[""] = nil
             project = url
             saveConversation()
+            saveVersions()
             if isBusy { needsRestart = true } else { restartAgent() }
         }
     }
@@ -360,6 +434,7 @@ final class ChatStore {
             a.stop()
         }
         agent = nil
+        recordVersion()
         if isBusy {
             append(.notice("Stopped because you switched projects. Your next message here continues the conversation.",
                            isError: false))
@@ -371,13 +446,18 @@ final class ChatStore {
         resumeSessionId = session
         saveConversation()
         parked[Self.key(project)] = Conversation(items: items, input: input, attachments: attachments,
-                                                 sessionId: session, forkSession: forkNextSession)
+                                                 sessionId: session, forkSession: forkNextSession, versions: versions)
     }
 
     /// Shows the open project's conversation: from this run if it was open before, else from its folder.
     private func restoreConversation() {
-        let c = parked.removeValue(forKey: Self.key(project)) ?? project.flatMap(Self.loadConversation) ?? Conversation()
+        let c = parked.removeValue(forKey: Self.key(project)) ?? project.map { p in
+            var c = Self.loadConversation(p) ?? Conversation()
+            c.versions = Self.loadVersions(p)
+            return c
+        } ?? Conversation()
         items = c.items
+        versions = c.versions
         input = c.input
         attachments = c.attachments
         resumeSessionId = c.sessionId
@@ -527,6 +607,7 @@ final class ChatStore {
             isBusy = false
             activity = nil
             retriedFresh = false
+            recordVersion()
             if isError {
                 append(.notice(result ?? "Claude Code reported an error.", isError: true))
             }
@@ -560,6 +641,7 @@ final class ChatStore {
                 }
                 return
             }
+            recordVersion()
             if !stoppedByUser && (code != 0 || wasBusy) {
                 let detail = stderrTail.trimmingCharacters(in: .whitespacesAndNewlines)
                 append(.notice("Claude Code exited (code \(code)).\(detail.isEmpty ? "" : "\n" + detail)", isError: true))

@@ -27,9 +27,12 @@ public enum ProjectStore {
     /// The project's Claude conversation (transcript + session id), kept with the project so it follows
     /// renames and moves.
     public static let chatFileName = ".chat.json"
+    /// The scene after each Claude prompt that changed it (the chat's Versions list).
+    public static let versionsFileName = ".versions.json"
 
     public static func sceneURL(_ project: URL) -> URL { project.appendingPathComponent(sceneFileName) }
     public static func chatURL(_ project: URL) -> URL { project.appendingPathComponent(chatFileName) }
+    public static func versionsURL(_ project: URL) -> URL { project.appendingPathComponent(versionsFileName) }
     public static func assetsURL(_ project: URL) -> URL {
         project.appendingPathComponent(assetsFolderName, isDirectory: true)
     }

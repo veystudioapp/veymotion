@@ -4,7 +4,7 @@ import VeyMotionCore
 
 struct ContentView: View {
     @Environment(SceneStore.self) private var store
-    @State private var showJSON = false
+    @State private var showVersions = false
     @State private var showVoice = false
     @AppStorage("rightPanelTab") private var rightTab: RightPanelTab = .inspector
     @AppStorage("leftPanelTab") private var leftTab: LeftPanelTab = .layers
@@ -115,8 +115,11 @@ struct ContentView: View {
                 }
                 .help("Show or hide the Timeline (⌃⌘T)")
                 .keyboardShortcut("t", modifiers: [.control, .command])
-                Button { showJSON = true } label: { Label("Scene JSON", systemImage: "curlybraces") }
-                    .help("View or edit the scene JSON")
+                Button { showVersions.toggle() } label: {
+                    Label("Versions", systemImage: "clock.arrow.circlepath")
+                }
+                .help("The scene after each prompt to Claude")
+                .popover(isPresented: $showVersions, arrowEdge: .bottom) { VersionsPopover() }
                 Button {
                     if showInspector && rightTab == .claude {
                         rightTab = .inspector
@@ -143,7 +146,6 @@ struct ContentView: View {
         .navigationTitle(store.project?.lastPathComponent ?? store.fileURL?.deletingPathExtension().lastPathComponent ?? "Untitled")
         .navigationSubtitle([store.project != nil ? "Project" : nil, store.isDirty ? "Edited" : nil]
             .compactMap { $0 }.joined(separator: " — "))
-        .sheet(isPresented: $showJSON) { JSONEditorSheet() }
         .sheet(isPresented: $showVoice) { VoiceOverSheet() }
         .sheet(isPresented: Bindable(store).showExport) { ExportSheet() }
         .sheet(isPresented: Bindable(store).showPublish) { PublishSheet() }
@@ -500,43 +502,96 @@ struct StatusBar: View {
     }
 }
 
-// MARK: - JSON editor
+// MARK: - Versions
 
-struct JSONEditorSheet: View {
+/// The scene after each prompt to Claude, newest first; any of them can be put back.
+struct VersionsPopover: View {
     @Environment(SceneStore.self) private var store
-    @Environment(\.dismiss) private var dismiss
-    @State private var draft = ""
-    @State private var error: String?
+    @Environment(ChatStore.self) private var chat
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Scene JSON").font(.headline)
-            TextEditor(text: $draft)
-                .font(.system(size: 12, design: .monospaced))
-                .frame(minWidth: 720, minHeight: 520)
-            if let error { Text(error).foregroundStyle(.red).font(.caption) }
-            HStack {
-                Button("Copy") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(draft, forType: .string)
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Versions").font(.headline).padding(12)
+            Divider()
+            if chat.versions.isEmpty {
+                Text("Each prompt to Claude that changes the scene is kept here, so you can go back to it.")
+                    .font(.callout).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(12)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(Array(chat.versions.enumerated().reversed()), id: \.element.id) { i, v in
+                            VersionRow(version: v, number: i, isCurrent: v.scene == store.scene) { chat.restore(v) }
+                            Divider()
+                        }
+                    }
                 }
-                Spacer()
-                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("Apply") { applyDraft() }.keyboardShortcut(.defaultAction)
+                .frame(maxHeight: 520)
             }
         }
-        .padding(16)
-        .onAppear { draft = SceneJSON.string(store.scene) }
+        .frame(width: 380)
+    }
+}
+
+private struct VersionRow: View {
+    let version: ChatStore.Version
+    let number: Int
+    let isCurrent: Bool
+    let restore: () -> Void
+    @State private var thumb: NSImage?
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 5).fill(Color.secondary.opacity(0.12))
+                if let thumb { Image(nsImage: thumb).resizable().aspectRatio(contentMode: .fit) }
+            }
+            .frame(width: 96, height: 54)
+            .clipShape(RoundedRectangle(cornerRadius: 5))
+            .overlay(RoundedRectangle(cornerRadius: 5)
+                .stroke(isCurrent ? Color.accentColor : Color.secondary.opacity(0.25), lineWidth: isCurrent ? 2 : 1))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(version.prompt ?? "Before Claude's changes")
+                    .font(.callout).lineLimit(3)
+                    .foregroundStyle(version.prompt == nil ? .secondary : .primary)
+                HStack(spacing: 4) {
+                    if version.prompt != nil { Text("v\(number)") }
+                    Text(version.date, format: .relative(presentation: .named))
+                    Text("·")
+                    Text(String(format: "%.1fs · %d layers", version.scene.duration, version.scene.layers.count))
+                }
+                .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer(minLength: 0)
+            if isCurrent {
+                Text("Current").font(.caption).foregroundStyle(.secondary)
+            } else {
+                Button("Restore", action: restore).controlSize(.small)
+                    .help("Put this version back (undo with ⌘Z)")
+            }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .help(version.prompt ?? "")
+        .onAppear(perform: loadThumb)
     }
 
-    private func applyDraft() {
-        do {
-            var s = try SceneJSON.decode(MotionScene.self, from: Data(draft.utf8))
-            s.refreshMediaInfo()
-            store.apply("Edit JSON") { $0 = s }
-            dismiss()
-        } catch let e {
-            error = e.localizedDescription
+    private static var cache: [UUID: NSImage] = [:]
+    private static let queue = DispatchQueue(label: "VeyMotion.versionThumbnails", qos: .userInitiated)
+    private static let renderer = FrameRenderer()
+
+    private func loadThumb() {
+        let id = version.id
+        if let cached = Self.cache[id] { thumb = cached; return }
+        let scene = version.scene
+        Self.queue.async {
+            let scale = 192 / Double(max(scene.width, 1))
+            let cg = Self.renderer.makeImage(scene, at: scene.duration / 2, scale: scale)
+            DispatchQueue.main.async {
+                let image = cg.map { NSImage(cgImage: $0, size: NSSize(width: $0.width, height: $0.height)) }
+                if let image { Self.cache[id] = image }
+                thumb = image
+            }
         }
     }
 }
