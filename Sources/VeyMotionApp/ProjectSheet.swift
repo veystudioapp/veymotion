@@ -112,7 +112,7 @@ struct ProjectsScreen: View {
                     ContentUnavailableView.search(text: search)
                 } else {
                     ScrollView {
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 240, maximum: 340), spacing: 20)], spacing: 24) {
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 240, maximum: 340), spacing: 20, alignment: .top)], spacing: 24) {
                             ForEach(shown) { p in
                                 ProjectCard(project: p, isOpen: p.url == store.project, isSelected: p.url == selection)
                                     .onTapGesture(count: 2) { open(p.url) }
@@ -201,16 +201,18 @@ private struct ProjectCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.12))
-                if let thumb {
-                    Image(nsImage: thumb).resizable().aspectRatio(contentMode: .fit)
-                } else {
-                    Image(systemName: "film").font(.title).foregroundStyle(.tertiary)
+            // Every card uses the same 16:9 frame so grid rows stay even; the scene is fitted
+            // inside it (portrait scenes get side bars instead of a tall card).
+            Color.secondary.opacity(0.12)
+                .aspectRatio(16 / 9, contentMode: .fit)
+                .frame(maxWidth: .infinity)
+                .overlay {
+                    if let thumb {
+                        Image(nsImage: thumb).resizable().aspectRatio(contentMode: .fit)
+                    } else {
+                        Image(systemName: "film").font(.title).foregroundStyle(.tertiary)
+                    }
                 }
-            }
-            .aspectRatio(CGFloat(max(project.width, 1)) / CGFloat(max(project.height, 1)), contentMode: .fit)
-            .frame(maxWidth: .infinity)
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .overlay(RoundedRectangle(cornerRadius: 8)
                 .stroke(isSelected ? Color.accentColor : Color.secondary.opacity(0.25), lineWidth: isSelected ? 3 : 1))

@@ -219,6 +219,7 @@ struct RowLabel: View {
 
 /// One diamond per animatable track: hollow grey = not animated (click to animate), hollow accent = animated
 /// with no key at the playhead (click to add), filled = key at the playhead (click to delete).
+/// Animated tracks also get ◀ ▶ to jump the playhead to the previous / next key.
 struct KeyframeButton: View {
     @Environment(SceneStore.self) private var store
     let layer: MotionLayer
@@ -230,7 +231,32 @@ struct KeyframeButton: View {
     var body: some View {
         let tolerance = 0.5 / Double(store.scene.fps)
         let animated = layer.isAnimated(track)
-        let keyHere = layer.keyTimes(track).first { abs($0 - store.panelTime) < tolerance }
+        let times = layer.keyTimes(track)
+        let now = store.panelTime
+        let keyHere = times.first { abs($0 - now) < tolerance }
+        HStack(spacing: 0) {
+            if animated { jump("chevron.left", to: times.last { $0 < now - tolerance }, help: "Previous keyframe") }
+            diamond(animated: animated, keyHere: keyHere)
+            if animated { jump("chevron.right", to: times.first { $0 > now + tolerance }, help: "Next keyframe") }
+        }
+    }
+
+    private func jump(_ symbol: String, to t: Double?, help: String) -> some View {
+        Button {
+            if let t { store.pause(); store.seek(t) }
+        } label: {
+            Image(systemName: symbol)
+                .font(.system(size: 7, weight: .bold))
+                .frame(width: 9, height: 24)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(t == nil ? Color.secondary.opacity(0.3) : Color.secondary)
+        .disabled(t == nil)
+        .help(help)
+    }
+
+    private func diamond(animated: Bool, keyHere: Double?) -> some View {
         Button {
             if !animated {
                 store.toggleAnimation(layer.id, track)
@@ -242,7 +268,7 @@ struct KeyframeButton: View {
         } label: {
             Image(systemName: keyHere != nil ? "diamond.fill" : "diamond")
                 .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(keyHere != nil ? Color.yellow : animated ? Color.accentColor : Color.secondary.opacity(0.5))
+                .foregroundStyle(keyHere != nil || animated ? Color.accentColor : Color.secondary.opacity(0.5))
                 .frame(width: 16, height: 24)
                 .contentShape(Rectangle())
         }

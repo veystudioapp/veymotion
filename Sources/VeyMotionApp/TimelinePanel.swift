@@ -85,7 +85,7 @@ enum TimelineRow: Identifiable {
     var height: CGFloat {
         switch self {
         case .group: return 24
-        case .layer: return 40
+        case .layer: return 34
         case .property: return 22
         }
     }
@@ -302,7 +302,7 @@ struct TimelinePanel: View {
             Button { showKeys.toggle() } label: {
                 Label("Keyframes", systemImage: showKeys ? "diamond.fill" : "diamond").font(.caption)
             }
-            .help(showKeys ? "Hide keyframes on clips" : "Show keyframes on clips")
+            .help(showKeys ? "Hide keyframes on the selected clip" : "Show keyframes on the selected clip")
             if scene.audioLayers.contains(where: { $0.role != .voice }) {
                 Button { snapBeats.toggle() } label: {
                     Label("Beats", systemImage: snapBeats ? "metronome.fill" : "metronome").font(.caption)
@@ -491,13 +491,16 @@ struct TimelinePanel: View {
                     .offset(y: 3)
                     .allowsHitTesting(false)
             }
-            ForEach(Array((showKeys ? times : []).enumerated()), id: \.offset) { _, t in
-                KeyDiamond(x: tl.x(t), y: height - 8, easing: commonEasing(l, at: t), onClip: true,
-                           selected: tl.selectedKey == KeySelection(layerId: l.id, property: nil, t: t),
+            // Like CapCut: keyframes only on the selected clip, so the other clips stay clean.
+            ForEach(Array((showKeys && store.selection == l.id ? times : []).enumerated()), id: \.offset) { _, t in
+                let tracks = l.animatedTracks.filter { l.hasKey($0, at: t, tolerance: MotionScene.keyTimeTolerance) }
+                KeyDiamond(x: tl.x(t), y: height - 9, easing: commonEasing(l, at: t), onClip: true,
+                           selected: atPlayhead(t) || tl.selectedKey == KeySelection(layerId: l.id, property: nil, t: t),
                            onTap: { selectKey(l.id, nil, t) },
                            onDrag: { dx, ended in dragKey(l.id, nil, t, dx: dx, ended: ended) },
                            onEasing: { e in try? store.apply("Change Easing") { try $0.setEasing(l.id, track: nil, at: t, easing: e) } },
                            onDelete: { try? store.apply("Delete Keyframes") { try $0.deleteKeyframes(l.id, track: nil, at: t) } })
+                    .help(String(format: "%.2fs: %@", t, tracks.map(\.title).joined(separator: ", ")))
             }
         }
     }
@@ -543,7 +546,7 @@ struct TimelinePanel: View {
             }
             ForEach(Array(kfs.enumerated()), id: \.offset) { _, k in
                 KeyDiamond(x: tl.x(k.t), y: height / 2, easing: k.easing,
-                           selected: tl.selectedKey == KeySelection(layerId: l.id, property: p, t: k.t),
+                           selected: atPlayhead(k.t) || tl.selectedKey == KeySelection(layerId: l.id, property: p, t: k.t),
                            onTap: { selectKey(l.id, p, k.t) },
                            onDrag: { dx, ended in dragKey(l.id, p, k.t, dx: dx, ended: ended) },
                            onEasing: { e in try? store.apply("Change Easing") { try $0.setEasing(l.id, track: p, at: k.t, easing: e) } },
@@ -566,6 +569,11 @@ struct TimelinePanel: View {
             }
         }
         Button("Delete layer", role: .destructive) { try? store.apply("Delete Layer") { try $0.removeLayer(l.id) } }
+    }
+
+    /// A key within half a frame of the playhead (held while playing, so rows don't redraw every frame).
+    private func atPlayhead(_ t: Double) -> Bool {
+        abs(t - store.panelTime) < 0.5 / Double(max(store.scene.fps, 1))
     }
 
     private func commonEasing(_ l: MotionLayer, at t: Double) -> Easing? {
@@ -755,23 +763,29 @@ struct TimelineBar: View {
         .gesture(DragGesture(minimumDistance: 2, coordinateSpace: .global)
             .onChanged { onMove($0.translation.width, false) }
             .onEnded { onMove($0.translation.width, true) })
-        .overlay(alignment: .leading) { if showHandles, let onTrimStart { TrimHandle(onDrag: onTrimStart) } }
-        .overlay(alignment: .trailing) { if showHandles, let onTrimEnd { TrimHandle(onDrag: onTrimEnd) } }
+        .overlay(alignment: .leading) {
+            if showHandles, let onTrimStart { TrimHandle(shown: selected && clip != nil, onDrag: onTrimStart) }
+        }
+        .overlay(alignment: .trailing) {
+            if showHandles, let onTrimEnd { TrimHandle(shown: selected && clip != nil, onDrag: onTrimEnd) }
+        }
         .offset(x: x0)
     }
 }
 
 extension TimelineBar {
-    /// iMovie-style clip: solid color, icon + name + detail, duration, optional filmstrip,
-    /// striped where the layer cannot be seen, yellow outline when selected.
+    /// CapCut-style clip: muted color, one label line at the top (keyframes sit below it), optional filmstrip,
+    /// striped where the layer cannot be seen, white outline and edge handles when selected.
     @ViewBuilder func clipBody(_ clip: ClipInfo, width w: Double) -> some View {
-        let shape = RoundedRectangle(cornerRadius: 6)
-        ZStack(alignment: .leading) {
-            shape.fill(color.opacity(0.88))
+        let shape = RoundedRectangle(cornerRadius: 4)
+        ZStack(alignment: .topLeading) {
+            // A dark base under the layer color gives a muted tone that keeps white text readable.
+            shape.fill(Color.black.opacity(0.45))
+            shape.fill(color.opacity(0.62))
             if let thumb = clip.thumbnail {
-                ThumbStrip(image: thumb, height: height, visible: clip.visible).opacity(0.85)
-                LinearGradient(colors: [color.opacity(0.95), color.opacity(0)], startPoint: .leading, endPoint: .trailing)
-                    .frame(width: min(w, 180))
+                ThumbStrip(image: thumb, height: height, visible: clip.visible).opacity(0.7)
+                LinearGradient(colors: [Color.black.opacity(0.55), .clear], startPoint: .top, endPoint: .bottom)
+                    .frame(height: 18)
             }
             ForEach(Array(clip.hidden.enumerated()), id: \.offset) { _, r in
                 HiddenSpan()
@@ -781,33 +795,30 @@ extension TimelineBar {
             }
             // Keep the label in view when the clip starts left of the visible area.
             let lead = min(clip.visible.lowerBound, max(0, w - 80))
-            HStack(spacing: 6) {
-                Image(systemName: clip.icon).font(.system(size: 10, weight: .semibold))
+            HStack(spacing: 5) {
+                Image(systemName: clip.icon).font(.system(size: 9, weight: .semibold))
                 if let swatch = clip.swatch {
-                    Circle().fill(swatch).frame(width: 8, height: 8)
+                    Circle().fill(swatch).frame(width: 7, height: 7)
                         .overlay(Circle().stroke(Color.white.opacity(0.8), lineWidth: 1))
                 }
-                VStack(alignment: .leading, spacing: 0) {
-                    Text(label).font(.caption.weight(.semibold)).lineLimit(1)
-                    if let detail = clip.detail, height >= 30 {
-                        Text(detail).font(.caption2).lineLimit(1).opacity(0.85)
-                    }
+                Text(label).font(.caption2.weight(.semibold)).lineLimit(1)
+                if let detail = clip.detail {
+                    Text(detail).font(.caption2).lineLimit(1).opacity(0.7)
                 }
                 Spacer(minLength: 4)
-                if w - lead > 120 {
+                if selected, w - lead > 120 {
                     Text(String(format: "%.1fs", clip.duration))
                         .font(.caption2.monospacedDigit().weight(.medium))
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 1)
-                        .background(Capsule().fill(Color.black.opacity(0.22)))
+                        .opacity(0.85)
                 }
             }
             .foregroundStyle(.white)
-            .shadow(color: .black.opacity(0.25), radius: 1, y: 0.5)
-            .padding(.leading, 8 + lead)
-            .padding(.trailing, 8)
+            .shadow(color: .black.opacity(0.3), radius: 1, y: 0.5)
+            .padding(.leading, 7 + lead)
+            .padding(.trailing, 10)
+            .padding(.top, 3)
             .frame(width: w, alignment: .leading)
-            shape.strokeBorder(selected ? Color.yellow : Color.black.opacity(0.18), lineWidth: selected ? 2.5 : 1)
+            shape.strokeBorder(selected ? Color.white : Color.white.opacity(0.08), lineWidth: selected ? 2 : 1)
         }
         .clipShape(shape)
     }
@@ -880,14 +891,21 @@ final class TimelineThumbs {
 }
 
 struct TrimHandle: View {
+    /// Selected clip: a white grip bar on the edge, always visible.
+    var shown = false
     let onDrag: (Double, Bool) -> Void
     @State private var hovering = false
 
     var body: some View {
-        RoundedRectangle(cornerRadius: 2)
-            .fill(Color.primary.opacity(hovering ? 0.35 : 0.0001))
+        ZStack {
+            RoundedRectangle(cornerRadius: 2)
+                .fill(shown ? Color.white : Color.primary.opacity(hovering ? 0.35 : 0.0001))
+            if shown {
+                Capsule().fill(Color.black.opacity(0.45)).frame(width: 1.5).padding(.vertical, 8)
+            }
+        }
             .frame(width: 6)
-            .padding(.vertical, 3)
+            .padding(.vertical, shown ? 0 : 3)
             .contentShape(Rectangle())
             .onHover { inside in
                 hovering = inside
@@ -905,6 +923,7 @@ struct KeyDiamond: View {
     let easing: Easing?
     /// Drawn on a layer clip: smaller and white, so it reads as a marker rather than the clip's start.
     var onClip = false
+    /// On the playhead or clicked: drawn in the accent color, slightly larger.
     let selected: Bool
     let onTap: () -> Void
     let onDrag: (Double, Bool) -> Void
@@ -913,10 +932,14 @@ struct KeyDiamond: View {
     @State private var editingBezier = false
 
     var body: some View {
-        let size: CGFloat = onClip ? (easing == .hold ? 6 : 8) : (easing == .hold ? 8 : 10)
-        Image(systemName: easing == .hold ? "square.fill" : "diamond.fill")
-            .font(.system(size: size))
-            .foregroundStyle(selected ? Color.accentColor : onClip ? Color.white : Color.yellow)
+        let hold = easing == .hold
+        let size: CGFloat = onClip ? (hold ? 7 : 10) : (hold ? 8 : 11)
+        let shape = KeyShape(square: hold)
+        // Accent with a white edge when on the playhead (or selected), like the filled diamond in the inspector.
+        shape.fill(selected ? Color.accentColor : onClip ? Color.white : Color.yellow)
+            .overlay(shape.stroke(Color.white, lineWidth: selected ? 1.5 : 0))
+            .frame(width: size, height: size)
+            .scaleEffect(selected ? 1.25 : 1)
             .shadow(color: .black.opacity(0.35), radius: 0.5, y: 0.5)
             .frame(width: 14, height: 14)
             .contentShape(Rectangle())
@@ -939,6 +962,22 @@ struct KeyDiamond: View {
                 }
             }
             .offset(x: x - 7, y: y - 7)
+    }
+}
+
+/// A keyframe marker: a diamond, or a square for `hold` keys.
+struct KeyShape: Shape {
+    let square: Bool
+
+    func path(in r: CGRect) -> Path {
+        if square { return Path(r) }
+        var p = Path()
+        p.move(to: CGPoint(x: r.midX, y: r.minY))
+        p.addLine(to: CGPoint(x: r.maxX, y: r.midY))
+        p.addLine(to: CGPoint(x: r.midX, y: r.maxY))
+        p.addLine(to: CGPoint(x: r.minX, y: r.midY))
+        p.closeSubpath()
+        return p
     }
 }
 
