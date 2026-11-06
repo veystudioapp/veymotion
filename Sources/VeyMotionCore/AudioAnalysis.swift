@@ -376,37 +376,63 @@ public struct AudioAnalysis: Sendable {
 /// Analyses and envelopes per file, shared by the renderer (any thread), tools and the UI.
 /// Files that cannot be decoded are remembered as failures so they are not retried every frame.
 public enum AudioAnalysisCache {
-    private static let lock = NSLock()
+    /// Analyses run outside the lock (decoding a song takes seconds), so lookups of other files never wait on them.
+    private static let cond = NSCondition()
     nonisolated(unsafe) private static var results: [String: Result<AudioAnalysis, Error>] = [:]
     nonisolated(unsafe) private static var envelopes: [String: [Float]] = [:]
+    nonisolated(unsafe) private static var inFlight = Set<String>()
+    nonisolated(unsafe) private static var generation = 0
+    private static let noWaitKey = "VeyMotion.AudioAnalysisCache.noWait"
+
+    /// Posted on the main thread whenever an analysis finishes.
+    public static let didAnalyze = Notification.Name("VeyMotion.AudioAnalysisCache.didAnalyze")
 
     /// Analyzes the file on first use (blocking) and caches the result.
     public static func analysis(path: String) throws -> AudioAnalysis {
-        lock.lock(); defer { lock.unlock() }
-        return try resultLocked(path).get()
+        // Non-nil when waiting.
+        try result(path, wait: true)!.get()
     }
 
     /// The cached analysis if it is ready (never blocks on decoding).
     public static func cached(path: String) -> AudioAnalysis? {
-        guard lock.try() else { return nil }
-        defer { lock.unlock() }
+        cond.lock(); defer { cond.unlock() }
         return try? results[path]?.get()
     }
 
-    /// Smoothed envelope of a band (see `AudioAnalysis.envelope`); nil if the file cannot be analyzed.
+    /// Off in the app, so inspector/canvas reads never freeze the UI. The CLI renders on its main thread and must wait.
+    nonisolated(unsafe) public static var waitsOnMainThread = true
+
+    /// Runs `body` (e.g. a preview frame) without waiting for analyses: audio-reactive values read as 0 until
+    /// their file is analyzed in the background, then `didAnalyze` is posted.
+    public static func withoutWaiting<T>(_ body: () throws -> T) rethrows -> T {
+        let d = Thread.current.threadDictionary
+        let old = d[noWaitKey]
+        d[noWaitKey] = true
+        defer { d[noWaitKey] = old }
+        return try body()
+    }
+
+    /// Smoothed envelope of a band (see `AudioAnalysis.envelope`); nil if the file cannot be analyzed (or, when
+    /// not waiting, is not analyzed yet).
     public static func envelope(path: String, band: AudioBand, release: Double) -> [Float]? {
         let key = "\(path)|\(band.rawValue)|\((release * 1000).rounded())"
-        lock.lock(); defer { lock.unlock() }
-        if let e = envelopes[key] { return e }
-        guard let a = try? resultLocked(path).get() else { return nil }
-        let e = a.envelope(band, release: release)
-        envelopes[key] = e
-        return e
+        cond.lock()
+        let e = envelopes[key]
+        cond.unlock()
+        if let e { return e }
+        let wait = (waitsOnMainThread || !Thread.isMainThread) && Thread.current.threadDictionary[noWaitKey] == nil
+        guard let a = try? result(path, wait: wait)?.get() else { return nil }
+        let env = a.envelope(band, release: release)
+        cond.lock()
+        envelopes[key] = env
+        cond.unlock()
+        return env
     }
 
     /// Forgets a file (e.g. after it was overwritten), or everything.
     public static func invalidate(path: String? = nil) {
-        lock.lock(); defer { lock.unlock() }
+        cond.lock(); defer { cond.unlock() }
+        generation += 1
         if let path {
             results[path] = nil
             envelopes = envelopes.filter { !$0.key.hasPrefix(path + "|") }
@@ -416,11 +442,39 @@ public enum AudioAnalysisCache {
         }
     }
 
-    private static func resultLocked(_ path: String) -> Result<AudioAnalysis, Error> {
-        if let r = results[path] { return r }
+    /// The file's analysis; nil only when not waiting and it is not ready (it is then started in the background).
+    private static func result(_ path: String, wait: Bool) -> Result<AudioAnalysis, Error>? {
+        cond.lock(); defer { cond.unlock() }
+        while true {
+            if let r = results[path] { return r }
+            guard inFlight.contains(path) else { break }
+            guard wait else { return nil }
+            cond.wait()
+        }
+        inFlight.insert(path)
+        let gen = generation
+        guard wait else {
+            DispatchQueue.global(qos: .userInitiated).async {
+                let r = Result { try AudioAnalysis.analyze(path: path) }
+                cond.lock()
+                finish(path, r, generation: gen)
+                cond.unlock()
+            }
+            return nil
+        }
+        cond.unlock()
         let r = Result { try AudioAnalysis.analyze(path: path) }
-        results[path] = r
+        cond.lock()
+        finish(path, r, generation: gen)
         return r
+    }
+
+    /// Call with `cond` locked. A result that started before an `invalidate` is not kept.
+    private static func finish(_ path: String, _ r: Result<AudioAnalysis, Error>, generation gen: Int) {
+        inFlight.remove(path)
+        if gen == generation { results[path] = r }
+        cond.broadcast()
+        DispatchQueue.main.async { NotificationCenter.default.post(name: didAnalyze, object: path) }
     }
 }
 

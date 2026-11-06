@@ -68,7 +68,9 @@ The same `MCPServer` is served three ways: HTTP on `127.0.0.1:19790/mcp` (`Trans
   caches per path (failures too) and is shared by `analyze_audio`, the timeline (`BeatCache` warms it) and the
   renderer. `audioReact` is evaluated inside `MotionLayer.value`, which has no scene: `MotionScene.layers`/`duration`
   `didSet` call `resolveAudioLinks`, which stores each reaction's source file and timing in `AudioReact.link`
-  (not saved). Renaming an audio layer repoints `source` in `updateLayer`.
+  (not saved). Renaming an audio layer repoints `source` in `updateLayer`. The canvas renders inside
+  `AudioAnalysisCache.withoutWaiting` and the app's main thread never waits (`waitsOnMainThread = false`): reactions
+  read 0 until the file is analyzed in the background, then `didAnalyze` triggers a redraw. Export and the CLI wait.
 - Video sound and transcription (`Transcribe.swift`): `MediaAudio.read` decodes any file's sound (AVAudioFile first,
   AVAssetReader for movies; the latter decodes nothing in sandboxed processes, so test the mixer with WAV there).
   `soundLayers` (audio layers + video layers with an audio track at speed 1) is what `AudioMixer` plays; `audioLayers`

@@ -203,7 +203,10 @@ final class PreviewRenderer {
         busy = true
         queue.async { [renderer] in
             renderer.motionBlurSamples = job.fast ? 4 : 8
-            let img = renderer.makeImage(job.scene, at: job.time, scale: job.scale)
+            // Opening a project with music-reactive layers must not hold the canvas until the song is analyzed.
+            let img = AudioAnalysisCache.withoutWaiting {
+                renderer.makeImage(job.scene, at: job.time, scale: job.scale)
+            }
             DispatchQueue.main.async {
                 self.image = img
                 self.busy = false
@@ -259,6 +262,9 @@ struct CanvasView: View {
             }
             // An image file overwritten in place (e.g. by write_asset) leaves the scene unchanged.
             .onChange(of: AssetLibrary.shared.assets) { preview.request(store.scene, at: key.time, scale: key.scale) }
+            .onReceive(NotificationCenter.default.publisher(for: AudioAnalysisCache.didAnalyze)) { _ in
+                preview.request(store.scene, at: key.time, scale: key.scale, fast: store.isPlaying)
+            }
         }
         .background(Color(nsColor: .underPageBackgroundColor))
         // Drop images/audio from the Assets panel or Finder to add them as layers.

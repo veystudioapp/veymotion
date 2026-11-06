@@ -1,11 +1,16 @@
 import AppKit
 import SwiftUI
+import VeyMotionCore
 
 @main
 struct VeyMotionApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @State private var store = SceneStore.shared
     @State private var chat = ChatStore.shared
+
+    init() {
+        AudioAnalysisCache.waitsOnMainThread = false
+    }
 
     var body: some Scene {
         WindowGroup("VeyMotion") {
