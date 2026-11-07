@@ -122,18 +122,137 @@ struct MeshWarp {
             let w = h[6] * p.x + h[7] * p.y + 1
             p = CGPoint(x: (h[0] * p.x + h[1] * p.y + h[2]) / w, y: (h[3] * p.x + h[4] * p.y + h[5]) / w)
         }
-        if abs(rotX) > 0.01 || abs(rotY) > 0.01 {
-            // Turn around the layer's vertical axis (rotationY, + = right side goes back), then its horizontal one
-            // (rotationX, + = top goes back), then project with the eye `distance` px in front of the layer.
-            let a = rotY * .pi / 180, b = rotX * .pi / 180
-            let x1 = p.x * cos(a), z1 = p.x * sin(a)
-            // (y, z) turned by b; y points down, so a positive b sends the top (y < 0) away (z > 0).
-            let y2 = p.y * cos(b) + z1 * sin(b), z2 = -p.y * sin(b) + z1 * cos(b)
-            let depth = max(distance + z2, distance * 0.05)
-            let s = distance / depth
-            p = CGPoint(x: x1 * s, y: y2 * s)
+        if rotates {
+            let r = turned(p)
+            let s = distance / max(distance + r.z, distance * 0.05)
+            p = CGPoint(x: r.x * s, y: r.y * s)
         }
         return p
+    }
+
+    private var rotates: Bool { abs(rotX) > 0.01 || abs(rotY) > 0.01 }
+
+    /// Turns a point around the layer's vertical axis (rotationY, + = right side goes back), then its horizontal one
+    /// (rotationX, + = top goes back); z is the distance added between the point and the eye.
+    private func turned(_ p: CGPoint) -> (x: Double, y: Double, z: Double) {
+        let a = rotY * .pi / 180, b = rotX * .pi / 180
+        let x1 = p.x * cos(a), z1 = p.x * sin(a)
+        // (y, z) turned by b; y points down, so a positive b sends the top (y < 0) away (z > 0).
+        return (x1, p.y * cos(b) + z1 * sin(b), -p.y * sin(b) + z1 * cos(b))
+    }
+
+    /// Without puppet pins, rotation + perspective and corner pin are projective, so the whole warp of `box` is the
+    /// homography through its four corners: [h0…h7] with h8 = 1. Nil when there are pins, or when the plane reaches
+    /// behind the eye or a crossed corner pin folds it (the line at infinity crosses the box).
+    func projectiveMap(over box: CGRect) -> [Double]? {
+        guard pins.isEmpty, box.width > 0, box.height > 0 else { return nil }
+        let corners = [CGPoint(x: box.minX, y: box.minY), CGPoint(x: box.maxX, y: box.minY),
+                       CGPoint(x: box.maxX, y: box.maxY), CGPoint(x: box.minX, y: box.maxY)]
+        var pinned = corners
+        if let h = homography {
+            for (i, p) in corners.enumerated() {
+                let w = h[6] * p.x + h[7] * p.y + 1
+                guard w > 1e-6 else { return nil }
+                pinned[i] = CGPoint(x: (h[0] * p.x + h[1] * p.y + h[2]) / w, y: (h[3] * p.x + h[4] * p.y + h[5]) / w)
+            }
+        }
+        // The same clamp `map` applies: past it the projection is no longer the plane's.
+        if rotates, pinned.contains(where: { distance + turned($0).z < distance * 0.05 + 1e-6 }) { return nil }
+        guard let h = Self.homography(from: corners, to: corners.map(map)) else { return nil }
+        for p in corners where h[6] * p.x + h[7] * p.y + 1 <= 1e-6 { return nil }
+        return h
+    }
+
+    /// Draws `src` (premultiplied RGBA bitmap of the layer flat: row 0 at flat.minY, columns across flat) into `ctx`
+    /// warped by the homography `h` (layer space to warped layer space). Every device pixel is mapped back to the
+    /// source and sampled bilinearly 2×2 times, so there are no seams and the edges stay antialiased.
+    static func drawProjective(_ src: CGContext, flat: CGRect, homography h: [Double], in ctx: CGContext) {
+        guard let sp = src.data?.assumingMemoryBound(to: UInt8.self), src.bitsPerPixel == 32 else { return }
+        let sw = src.width, sh = src.height, srb = src.bytesPerRow
+        let m = ctx.ctm
+        // Device box of the warped layer, within what the context can show.
+        var box = CGRect.null
+        for p in [CGPoint(x: flat.minX, y: flat.minY), CGPoint(x: flat.maxX, y: flat.minY),
+                  CGPoint(x: flat.maxX, y: flat.maxY), CGPoint(x: flat.minX, y: flat.maxY)] {
+            let w = h[6] * p.x + h[7] * p.y + 1
+            let q = CGPoint(x: (h[0] * p.x + h[1] * p.y + h[2]) / w, y: (h[3] * p.x + h[4] * p.y + h[5]) / w)
+            box = box.union(CGRect(origin: q.applying(m), size: .zero))
+        }
+        box = box.intersection(ctx.boundingBoxOfClipPath.applying(m)).integral
+        guard !box.isNull, box.width >= 1, box.height >= 1, box.width * box.height <= 8192 * 8192,
+              let inv = invert3(h) else { return }
+        let dw = Int(box.width), dh = Int(box.height)
+        guard let dst = CGContext(data: nil, width: dw, height: dh, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: src.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)!,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
+              let dp = dst.data?.assumingMemoryBound(to: UInt8.self) else { return }
+        let drb = dst.bytesPerRow
+        // device px → layer (inverse CTM) → flat layer (inverse homography) → source px (pixel centers at integers).
+        let mi = m.inverted()
+        let toLayer: [Double] = [mi.a, mi.c, mi.tx, mi.b, mi.d, mi.ty, 0, 0, 1]
+        let kx = Double(sw) / flat.width, ky = Double(sh) / flat.height
+        let toSource: [Double] = [kx, 0, -flat.minX * kx - 0.5, 0, ky, -flat.minY * ky - 0.5, 0, 0, 1]
+        let t = mul3(toSource, mul3(inv, toLayer))
+        let offs: [Double] = [-0.25, 0.25]
+        @inline(__always) func texel(_ x: Int, _ y: Int) -> (Float, Float, Float, Float) {
+            guard x >= 0, y >= 0, x < sw, y < sh else { return (0, 0, 0, 0) }
+            let q = sp + y * srb + x * 4
+            return (Float(q[0]), Float(q[1]), Float(q[2]), Float(q[3]))
+        }
+        for row in 0..<dh {
+            let out = dp + row * drb
+            for col in 0..<dw {
+                var r: Float = 0, g: Float = 0, b: Float = 0, a: Float = 0
+                for oy in offs {
+                    // Memory row 0 is the top of the device box (device y points up).
+                    let y = Double(box.maxY) - Double(row) - 0.5 + oy
+                    for ox in offs {
+                        let x = Double(box.minX) + Double(col) + 0.5 + ox
+                        let w = t[6] * x + t[7] * y + t[8]
+                        guard w > 1e-9 else { continue }
+                        let sx = (t[0] * x + t[1] * y + t[2]) / w, sy = (t[3] * x + t[4] * y + t[5]) / w
+                        guard sx > -1, sy > -1, sx < Double(sw), sy < Double(sh) else { continue }
+                        let x0 = Int(sx.rounded(.down)), y0 = Int(sy.rounded(.down))
+                        let fx = Float(sx - Double(x0)), fy = Float(sy - Double(y0))
+                        let p00 = texel(x0, y0), p10 = texel(x0 + 1, y0), p01 = texel(x0, y0 + 1), p11 = texel(x0 + 1, y0 + 1)
+                        let w00 = (1 - fx) * (1 - fy), w10 = fx * (1 - fy), w01 = (1 - fx) * fy, w11 = fx * fy
+                        r += p00.0 * w00 + p10.0 * w10 + p01.0 * w01 + p11.0 * w11
+                        g += p00.1 * w00 + p10.1 * w10 + p01.1 * w01 + p11.1 * w11
+                        b += p00.2 * w00 + p10.2 * w10 + p01.2 * w01 + p11.2 * w11
+                        a += p00.3 * w00 + p10.3 * w10 + p01.3 * w01 + p11.3 * w11
+                    }
+                }
+                guard a > 0 else { continue }
+                let q = out + col * 4
+                q[0] = UInt8(min(255, r / 4 + 0.5)); q[1] = UInt8(min(255, g / 4 + 0.5))
+                q[2] = UInt8(min(255, b / 4 + 0.5)); q[3] = UInt8(min(255, a / 4 + 0.5))
+            }
+        }
+        guard let image = dst.makeImage() else { return }
+        ctx.saveGState()
+        ctx.concatenate(mi) // device space: the image lands on whole pixels, no resampling
+        ctx.draw(image, in: box)
+        ctx.restoreGState()
+    }
+
+    /// Row-major 3×3 product a·b (a homography given as 8 values gets h8 = 1).
+    private static func mul3(_ a: [Double], _ b: [Double]) -> [Double] {
+        let a = a.count == 8 ? a + [1] : a, b = b.count == 8 ? b + [1] : b
+        var r = [Double](repeating: 0, count: 9)
+        for i in 0..<3 { for j in 0..<3 { r[i * 3 + j] = a[i * 3] * b[j] + a[i * 3 + 1] * b[3 + j] + a[i * 3 + 2] * b[6 + j] } }
+        return r
+    }
+
+    /// Inverse of a homography [h0…h7] (h8 = 1), as 9 values; nil when singular.
+    private static func invert3(_ h: [Double]) -> [Double]? {
+        let m = h.count == 8 ? h + [1] : h
+        let c00 = m[4] * m[8] - m[5] * m[7], c01 = m[5] * m[6] - m[3] * m[8], c02 = m[3] * m[7] - m[4] * m[6]
+        let det = m[0] * c00 + m[1] * c01 + m[2] * c02
+        guard abs(det) > 1e-12 else { return nil }
+        let r: [Double] = [c00, m[2] * m[7] - m[1] * m[8], m[1] * m[5] - m[2] * m[4],
+                           c01, m[0] * m[8] - m[2] * m[6], m[2] * m[3] - m[0] * m[5],
+                           c02, m[1] * m[6] - m[0] * m[7], m[0] * m[4] - m[1] * m[3]]
+        return r.map { $0 / det }
     }
 
     // MARK: Moving least squares (similarity), Schaefer et al. 2006

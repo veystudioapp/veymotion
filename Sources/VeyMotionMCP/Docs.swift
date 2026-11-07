@@ -270,8 +270,11 @@ enum Docs {
 
     2.5D AND WARPS (every visual layer except particles; the layer is drawn flat, then warped)
     - rotationX (degrees, + tips the top back), rotationY (+ turns the right side back), perspective (viewing distance
-      px, default 1200; smaller = stronger). Animatable: card flips, panels swinging in, a title tilting into place,
-      a group (whole UI card) turning in 3D. hideBackface: true hides the layer while it faces away (past 90°): a
+      px, default 1200; smaller = stronger). Animatable: card flips, panels swinging in, a group (whole UI card)
+      turning in 3D. Text: perspective makes letters lean and shrink unevenly, which reads as crooked, so do not put
+      rotationX/Y on text (or on a group holding text) unless the user asks for a 3D/tilt look. Even then, make it a
+      short entrance/exit that ends at 0 so text that stays on screen is flat, keep any held tilt under ~10°, and
+      prefer turning the card behind the text. hideBackface: true hides the layer while it faces away (past 90°): a
       two-sided card = two layers at the same place, back one starting at rotationY 180, both animating +180.
       Cube-like transitions: the outgoing group rotationY 0 → -90 while the incoming goes 90 → 0.
     - cornerPin: {"tl":[x,y],"tr":[x,y],"br":[x,y],"bl":[x,y]} (layer px around its center) pins the layer's box

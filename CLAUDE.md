@@ -155,10 +155,12 @@ over the canvas (UI-only, never in the scene), and "Add to chat" renders the fra
   entitlements"): test it in the app. Object tracking works in the sandbox on image sequences. `timeRemap` overrides
   `videoTime` (and silences the clip's sound).
 - Mesh warps (`Mesh.swift`): when a layer has `rotationX/Y`, `cornerPin` or moving `pins`
-  (`rotationXYOrPinned` is the cheap pre-check), `drawContent` draws it flat into a bitmap at device resolution,
-  maps a 12×12 (pins: 20×20) grid through `MeshWarp.map` (MLS puppet → homography → 3D rotation + projection) and
-  draws each cell as two triangles clipped and affine-mapped. Triangles are grown ~1 device px around their incenter
-  so neighbors overlap (growing from the centroid left hairline seams on thin triangles). `contentBounds` returns
+  (`rotationXYOrPinned` is the cheap pre-check), `drawContent` draws it flat into a bitmap at 2× device resolution
+  (+2 device px transparent margin). Without moving pins the warp (corner pin homography → 3D rotation + projection)
+  is one homography (`MeshWarp.projectiveMap`), and `drawProjective` maps every device pixel back through it
+  (2×2 bilinear samples): no seams. Pins (MLS) go through a 20×20 grid of triangles, clipped *without*
+  antialiasing so each pixel is drawn once (antialiased clips leave hairline seams; grown to overlap, they draw the
+  seams twice and notch every glyph edge). `contentBounds` returns
   the warped bounds; `wipeBox`/`meshBox` must use `flatContentBounds` (calling `contentBounds` from them recurses).
 - Grading (`Grading.swift`) runs in `PixelEffects.applyBeforeBlur` after the color matrix: one 256-entry tone table
   (levels + Fritsch–Carlson curve), gradient map, then a trilinear .cube LUT (`CubeLUT.load`, cached by mtime).

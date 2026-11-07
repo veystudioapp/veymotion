@@ -601,14 +601,20 @@ public final class FrameRenderer {
         return b.width > 0 && b.height > 0 ? b : flat
     }
 
-    /// Draws the layer flat into a bitmap at device resolution, then each cell of a grid over it as two triangles
-    /// mapped by an affine transform onto the warped grid.
+    /// Draws the layer flat into a bitmap at twice the device resolution, then warps it: per pixel through one
+    /// homography for rotation/corner pin, or for puppet pins each cell of a grid as two triangles mapped by an
+    /// affine transform onto the warped grid.
     private func drawWarped(_ layer: MotionLayer, scene: MotionScene, warp: MeshWarp, flat: CGRect, at t: Double,
                             in ctx: CGContext) {
         let m = ctx.ctm
         let scale = max(0.05, abs(m.a * m.d - m.b * m.c).squareRoot())
-        // Never more than 4096 px a side (a corner pin can blow a small layer up a lot; the cap keeps memory sane).
-        let k = min(scale, 4096 / max(flat.width, 1), 4096 / max(flat.height, 1))
+        // A transparent margin of a couple of device px, so the picture's own edges (a rect or image filling its
+        // box) are antialiased by the resampling instead of cut by the bitmap's edge or a triangle clip.
+        let flat = flat.insetBy(dx: -2 / scale, dy: -2 / scale)
+        // Twice the device resolution keeps text crisp where perspective magnifies it and gives the resampling
+        // something to average where it shrinks. Never more than 4096 px a side (a corner pin can blow a small layer
+        // up a lot; the cap keeps memory sane).
+        let k = min(scale * 2, 4096 / max(flat.width, 1), 4096 / max(flat.height, 1))
         let pw = max(1, Int((flat.width * k).rounded(.up))), ph = max(1, Int((flat.height * k).rounded(.up)))
         guard let off = Self.bitmap(pw, ph) else { return }
         off.setShouldAntialias(true)
@@ -618,6 +624,10 @@ public final class FrameRenderer {
         off.scaleBy(x: Double(pw) / flat.width, y: -Double(ph) / flat.height)
         off.translateBy(x: -flat.minX, y: -flat.minY)
         drawFlatContent(layer, scene: scene, at: t, in: off)
+        if let h = warp.projectiveMap(over: flat) {
+            MeshWarp.drawProjective(off, flat: flat, homography: h, in: ctx)
+            return
+        }
         guard let image = off.makeImage() else { return }
         let n = warp.cells
         var grid = [[CGPoint]](repeating: [], count: n + 1)
@@ -627,8 +637,9 @@ public final class FrameRenderer {
                 grid[j].append(warp.map(p))
             }
         }
-        // Each triangle's clip grows by about a device pixel so neighbors overlap instead of leaving hairline seams.
-        let grow = 1.0 / scale
+        // Triangles are clipped without antialiasing, so neighbors share their edge pixels exactly: each pixel is
+        // drawn once. (Antialiased clips either leave hairline seams or, grown to overlap, draw the seams twice,
+        // which notches every glyph edge along the grid lines.)
         func drawTriangle(_ s: [CGPoint], _ d: [CGPoint]) {
             // Affine taking source (flat layer px) to destination (warped layer px).
             let (s0, s1, s2) = (s[0], s[1], s[2]), (d0, d1, d2) = (d[0], d[1], d[2])
@@ -638,22 +649,11 @@ public final class FrameRenderer {
             let ux = d1.x - d0.x, uy = d1.y - d0.y, vx = d2.x - d0.x, vy = d2.y - d0.y
             let a = ux * ia + vx * ic, b = uy * ia + vy * ic, c = ux * ib + vx * id, dd = uy * ib + vy * id
             let tx = d0.x - a * s0.x - c * s0.y, ty = d0.y - b * s0.x - dd * s0.y
-            // Grow the triangle around its incenter so every edge moves out by `grow` (thin triangles included).
-            let la = hypot(d2.x - d1.x, d2.y - d1.y), lb = hypot(d2.x - d0.x, d2.y - d0.y), lc = hypot(d1.x - d0.x, d1.y - d0.y)
-            let per = la + lb + lc
-            guard per > 1e-9 else { return }
-            let ix = (la * d0.x + lb * d1.x + lc * d2.x) / per, iy = (la * d0.y + lb * d1.y + lc * d2.y) / per
-            let area = abs((d1.x - d0.x) * (d2.y - d0.y) - (d2.x - d0.x) * (d1.y - d0.y)) / 2
-            let r = 2 * area / per
-            guard r > 1e-9 else { return }
-            let f = min((r + grow) / r, 4)
             let path = CGMutablePath()
-            for (k, p) in d.enumerated() {
-                let q = CGPoint(x: ix + (p.x - ix) * f, y: iy + (p.y - iy) * f)
-                if k == 0 { path.move(to: q) } else { path.addLine(to: q) }
-            }
+            path.addLines(between: d)
             path.closeSubpath()
             ctx.saveGState()
+            ctx.setShouldAntialias(false)
             ctx.addPath(path)
             ctx.clip()
             ctx.concatenate(CGAffineTransform(a: a, b: b, c: c, d: dd, tx: tx, ty: ty))

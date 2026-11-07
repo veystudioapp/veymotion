@@ -78,6 +78,15 @@ struct ContentView: View {
             ToolbarItemGroup(placement: .primaryAction) {
                 addMenu
                 Button {
+                    let a = AnnotationStore.shared
+                    withAnimation(.easeOut(duration: 0.15)) { a.isActive ? a.close() : a.begin() }
+                } label: {
+                    Label("Annotate", systemImage: "pencil.tip.crop.circle")
+                        .foregroundStyle(AnnotationStore.shared.isActive ? Color.accentColor : Color.primary)
+                }
+                .help("Pause and mark up this frame, then send it to Claude (⇧⌘A)")
+                .keyboardShortcut("a", modifiers: [.command, .shift])
+                Button {
                     if showInspector && rightTab == .claude {
                         rightTab = .inspector
                     } else {
@@ -405,15 +414,6 @@ struct TransportBar: View {
                 Text("\(s.width)×\(s.height) · \(s.fps) fps")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Button {
-                    let a = AnnotationStore.shared
-                    withAnimation(.easeOut(duration: 0.15)) { a.isActive ? a.close() : a.begin() }
-                } label: {
-                    Image(systemName: "pencil.tip.crop.circle")
-                        .foregroundStyle(AnnotationStore.shared.isActive ? Color.accentColor : Color.primary)
-                }
-                .help("Pause and mark up this frame, then send it to Claude (⇧⌘A)")
-                .keyboardShortcut("a", modifiers: [.command, .shift])
                 Button { withAnimation(.easeOut(duration: 0.2)) { showTimeline.toggle() } } label: {
                     Image(systemName: showTimeline ? "chevron.down" : "chevron.up")
                 }
