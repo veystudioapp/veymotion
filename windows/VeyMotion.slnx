@@ -1,0 +1,13 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/VeyMotion.App/VeyMotion.App.csproj">
+      <Platform Project="x64" />
+    </Project>
+    <Project Path="src/VeyMotion.Core/VeyMotion.Core.csproj" />
+    <Project Path="src/VeyMotion.Mcp/VeyMotion.Mcp.csproj" />
+    <Project Path="src/vmotion/vmotion.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/VeyMotion.Core.Tests/VeyMotion.Core.Tests.csproj" />
+  </Folder>
+</Solution>

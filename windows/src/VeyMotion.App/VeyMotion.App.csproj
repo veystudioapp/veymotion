@@ -1,0 +1,48 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- WinUI 3, unpackaged and self-contained: `dotnet run` works without Visual Studio or an installed runtime. -->
+  <PropertyGroup>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <RootNamespace>VeyMotion.App</RootNamespace>
+    <AssemblyName>VeyMotion</AssemblyName>
+    <UseWinUI>true</UseWinUI>
+    <WindowsPackageType>None</WindowsPackageType>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <Platforms>x64;ARM64</Platforms>
+    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">win-$([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant())</RuntimeIdentifier>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.260921001" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.28000.2957" />
+    <PackageReference Include="Microsoft.Graphics.Win2D" Version="1.4.0" />
+    <PackageReference Include="System.Speech" Version="10.0.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\VeyMotion.Core\VeyMotion.Core.csproj" />
+    <ProjectReference Include="..\VeyMotion.Mcp\VeyMotion.Mcp.csproj" />
+  </ItemGroup>
+
+  <!-- The in-app chat runs `vmotion`; debug builds get a copy in <app>\cli\ (release bundles put vmotion.exe next to
+       VeyMotion.exe). -->
+  <Target Name="CopyVmotionCli" AfterTargets="Build" Condition="'$(Configuration)' == 'Debug'">
+    <MSBuild Projects="..\vmotion\vmotion.csproj" Targets="Build" Properties="Configuration=$(Configuration)" />
+    <ItemGroup>
+      <_VmotionCli Include="..\vmotion\bin\$(Configuration)\net10.0\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_VmotionCli)" DestinationFolder="$(OutDir)cli\%(RecursiveDir)" SkipUnchangedFiles="true" />
+  </Target>
+
+  <!-- Unpackaged `dotnet publish` leaves out the app's own resources (VeyMotion.pri, *.xbf); without them the
+       published app crashes at startup (0xC000027B). -->
+  <Target Name="PublishXamlResources" AfterTargets="Publish">
+    <ItemGroup>
+      <_XamlResources Include="$(OutDir)$(TargetName).pri;$(OutDir)**\*.xbf" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_XamlResources)" SkipUnchangedFiles="true"
+          DestinationFiles="@(_XamlResources->'$(PublishDir)%(RecursiveDir)%(Filename)%(Extension)')" />
+  </Target>
+</Project>

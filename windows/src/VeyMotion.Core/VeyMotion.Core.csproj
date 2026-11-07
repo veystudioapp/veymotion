@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Platform-neutral: model, JSON, scene ops. Rendering (Win2D) lives in a Windows-only project. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>VeyMotion.Core</RootNamespace>
+  </PropertyGroup>
+</Project>

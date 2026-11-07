@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Tool layer (MCP JSON-RPC), control pipe and the Claude Code agent. Port of Sources/VeyMotionMCP. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>VeyMotion.Mcp</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\VeyMotion.Core\VeyMotion.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- The tool schemas and scene reference stay single-sourced in the macOS code; Docs.cs reads them from here. -->
+    <EmbeddedResource Include="..\..\..\Sources\VeyMotionMCP\Docs.swift" LogicalName="Docs.swift" />
+  </ItemGroup>
+</Project>
