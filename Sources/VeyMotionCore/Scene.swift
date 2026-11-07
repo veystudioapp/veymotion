@@ -1,7 +1,7 @@
 import Foundation
 
 public enum LayerType: String, Codable, CaseIterable, Sendable {
-    case rect, ellipse, path, text, image, video, audio, particles
+    case rect, ellipse, path, text, image, video, audio, particles, generator
 
     /// Drawn in the frame (audio layers are not).
     public var isVisual: Bool { self != .audio }
@@ -47,6 +47,20 @@ public enum AnimProperty: String, Codable, CaseIterable, Sendable {
     case volume
     /// Particles: multipliers on the system's rate, speed and size, read when each particle is born.
     case emission, particleSpeed, particleSize
+    /// Color correction: brightness, contrast and saturation -1…1 (0 = unchanged), hue in degrees, tint 0…1.
+    case brightness, contrast, saturation, hue, tint
+    /// Transition completion 0…1 (0 = whole layer shows, 1 = wiped away), shaped by `wipeStyle`.
+    case wipe
+    /// Keying (with `keyColor`): chroma distance that is removed, and the soft range above it.
+    case keyTolerance, keySoftness
+    /// Distort: wave warp and ripple amplitudes (px) sharing a wavelength (px) and speed (cycles/s); twirl (degrees at
+    /// the center) and bulge (-1 pinch…1) within distortRadius (px); turbulent displacement (px).
+    case waveWarp, ripple, waveLength, waveSpeed, twirl, bulge, distortRadius, turbulence
+    /// Stylize: posterize (color levels, 0 = off), pixelate (block px), rgbSplit (px), glitch, grain, scanlines and
+    /// vignette (0…1).
+    case posterize, pixelate, rgbSplit, glitch, grain, scanlines, vignette
+    /// Blur along a direction (length px, blurAngle degrees) and toward the layer's center (0…1).
+    case directionalBlur, blurAngle, zoomBlur
 
     /// Value a layer has when the property is not set.
     public var defaultValue: Double {
@@ -59,6 +73,11 @@ public enum AnimProperty: String, Codable, CaseIterable, Sendable {
         case .shadowY: return 8
         case .shadowBlur: return 16
         case .glowRadius: return 24
+        case .keyTolerance: return 0.2
+        case .keySoftness: return 0.1
+        case .waveLength: return 120
+        case .waveSpeed: return 1
+        case .distortRadius: return 300
         default: return 0
         }
     }
@@ -67,7 +86,11 @@ public enum AnimProperty: String, Codable, CaseIterable, Sendable {
     static let extras: [AnimProperty] = [.scaleX, .scaleY, .skewX, .skewY, .anchorX, .anchorY, .trim, .trimStart,
                                          .trimOffset, .letterSpacing, .blur, .shadowX, .shadowY, .shadowBlur,
                                          .shadowOpacity, .glow, .glowRadius, .pathProgress,
-                                         .emission, .particleSpeed, .particleSize]
+                                         .emission, .particleSpeed, .particleSize,
+                                         .brightness, .contrast, .saturation, .hue, .tint, .wipe,
+                                         .keyTolerance, .keySoftness, .waveWarp, .ripple, .waveLength, .waveSpeed,
+                                         .twirl, .bulge, .distortRadius, .turbulence, .posterize, .pixelate, .rgbSplit,
+                                         .glitch, .grain, .scanlines, .vignette, .directionalBlur, .blurAngle, .zoomBlur]
 
     public var title: String {
         switch self {
@@ -103,6 +126,32 @@ public enum AnimProperty: String, Codable, CaseIterable, Sendable {
         case .emission: return "Emission"
         case .particleSpeed: return "Particle Speed"
         case .particleSize: return "Particle Size"
+        case .brightness: return "Brightness"
+        case .contrast: return "Contrast"
+        case .saturation: return "Saturation"
+        case .hue: return "Hue"
+        case .tint: return "Tint"
+        case .wipe: return "Wipe"
+        case .keyTolerance: return "Key Tolerance"
+        case .keySoftness: return "Key Softness"
+        case .waveWarp: return "Wave Warp"
+        case .ripple: return "Ripple"
+        case .waveLength: return "Wavelength"
+        case .waveSpeed: return "Wave Speed"
+        case .twirl: return "Twirl"
+        case .bulge: return "Bulge"
+        case .distortRadius: return "Distort Radius"
+        case .turbulence: return "Turbulence"
+        case .posterize: return "Posterize"
+        case .pixelate: return "Pixelate"
+        case .rgbSplit: return "RGB Split"
+        case .glitch: return "Glitch"
+        case .grain: return "Grain"
+        case .scanlines: return "Scanlines"
+        case .vignette: return "Vignette"
+        case .directionalBlur: return "Directional Blur"
+        case .blurAngle: return "Blur Angle"
+        case .zoomBlur: return "Zoom Blur"
         }
     }
 
@@ -110,7 +159,9 @@ public enum AnimProperty: String, Codable, CaseIterable, Sendable {
     public var isFractional: Bool {
         switch self {
         case .scale, .scaleX, .scaleY, .opacity, .trim, .trimStart, .trimOffset, .reveal, .shadowOpacity, .glow,
-             .pathProgress, .volume, .emission, .particleSpeed, .particleSize: return true
+             .pathProgress, .volume, .emission, .particleSpeed, .particleSize,
+             .brightness, .contrast, .saturation, .tint, .wipe, .keyTolerance, .keySoftness, .waveSpeed, .bulge,
+             .glitch, .grain, .scanlines, .vignette, .zoomBlur: return true
         default: return false
         }
     }
@@ -193,6 +244,14 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
     public var motionBlur: Double
     /// Linear or radial fill (shapes, paths, text); replaces the solid fill/color.
     public var gradient: Gradient?
+    /// Color the `tint` property maps white to (nil = white, i.e. black and white).
+    public var tintColor: RGBA?
+    /// Shape of the `wipe` transition (nil = linear, left to right).
+    public var wipeStyle: WipeStyle?
+    /// Color keyed out (green/blue screen); nil = no keying.
+    public var keyColor: RGBA?
+    /// Plays the layer's animation at this many frames per second (stop-motion look); nil = every frame.
+    public var posterizeTime: Double?
 
     // Shape (rect/ellipse) and image size. Image defaults to its natural size.
     public var width: AnimValue?
@@ -224,6 +283,9 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
 
     // Particles (width/height are the emitter's size)
     public var particles: ParticleSystem
+
+    // Generator (width/height are its box)
+    public var generator: Generator
 
     // Video
     /// Playback rate (2 = twice as fast).
@@ -274,6 +336,10 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         repeater = nil
         motionBlur = 0
         gradient = nil
+        tintColor = nil
+        wipeStyle = nil
+        keyColor = nil
+        posterizeTime = nil
         width = nil
         height = nil
         cornerRadius = .constant(0)
@@ -294,6 +360,7 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         textAnimators = []
         path = nil
         particles = ParticleSystem()
+        generator = Generator()
         speed = 1
         playback = .once
         fps = nil
@@ -393,9 +460,14 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         case .image: list += [.width, .height]
         case .video: list += [.width, .height, .volume]
         case .particles: list += [.width, .height, .emission, .particleSpeed, .particleSize]
+        case .generator: list += [.width, .height, .cornerRadius, .strokeWidth]
         case .audio: break
         }
         list += [.blur, .shadowX, .shadowY, .shadowBlur, .shadowOpacity, .glow, .glowRadius]
+        list += [.brightness, .contrast, .saturation, .hue, .tint, .wipe]
+        list += [.posterize, .pixelate, .rgbSplit, .glitch, .grain, .scanlines, .vignette, .directionalBlur, .blurAngle,
+                 .zoomBlur, .waveWarp, .ripple, .waveLength, .waveSpeed, .twirl, .bulge, .distortRadius, .turbulence]
+        if keyColor != nil { list += [.keyTolerance, .keySoftness] }
         if motionPath != nil { list.append(.pathProgress) }
         return list
     }
@@ -404,6 +476,7 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         switch type {
         case .rect, .ellipse, .path: return [.fill, .stroke]
         case .text: return [.color]
+        case .generator: return generator.kind == .noise ? [] : [.fill]
         default: return []
         }
     }
@@ -539,7 +612,11 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         case scaleX, scaleY, skewX, skewY, anchorX, anchorY, trim, letterSpacing
         case trimStart, trimOffset, glow, glowRadius, glowColor, matte, repeater, motionBlur, gradient
         case blur, shadowX, shadowY, shadowBlur, shadowOpacity, shadowColor, pathProgress, blendMode
-        case emission, particleSpeed, particleSize, particles
+        case emission, particleSpeed, particleSize, particles, generator
+        case brightness, contrast, saturation, hue, tint, tintColor, wipe, wipeStyle
+        case keyColor, keyTolerance, keySoftness, waveWarp, ripple, waveLength, waveSpeed, twirl, bulge, distortRadius
+        case turbulence, posterize, pixelate, rgbSplit, glitch, grain, scanlines, vignette, directionalBlur, blurAngle
+        case zoomBlur, posterizeTime
         case parent, motionPath, loop, wiggle, audioReact, textAnimators
         case width, height, cornerRadius, fill, stroke, strokeWidth, lineCap, lineJoin, d, fillRule
         case text, fontSize, fontWeight, fontName, color, align, maxWidth
@@ -584,6 +661,7 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         }
         shadowColor = try c.decodeIfPresent(RGBA.self, forKey: .shadowColor) ?? shadowColor
         particles = try c.decodeIfPresent(ParticleSystem.self, forKey: .particles) ?? particles
+        generator = try c.decodeIfPresent(Generator.self, forKey: .generator) ?? generator
         blendMode = try c.decodeIfPresent(BlendMode.self, forKey: .blendMode)
             ?? (type == .particles ? particles.preset?.defaultBlendMode ?? .normal : .normal)
         glowColor = try c.decodeIfPresent(RGBA.self, forKey: .glowColor)
@@ -591,6 +669,10 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         repeater = try c.decodeIfPresent(Repeater.self, forKey: .repeater)
         motionBlur = min(max(try c.decodeIfPresent(Double.self, forKey: .motionBlur) ?? 0, 0), 720)
         gradient = try c.decodeIfPresent(Gradient.self, forKey: .gradient)
+        tintColor = try c.decodeIfPresent(RGBA.self, forKey: .tintColor)
+        wipeStyle = try c.decodeIfPresent(WipeStyle.self, forKey: .wipeStyle)
+        keyColor = try c.decodeIfPresent(RGBA.self, forKey: .keyColor)
+        posterizeTime = try c.decodeIfPresent(Double.self, forKey: .posterizeTime).flatMap { $0 > 0 ? $0 : nil }
         width = try c.decodeIfPresent(AnimValue.self, forKey: .width)
         height = try c.decodeIfPresent(AnimValue.self, forKey: .height)
         cornerRadius = try c.decodeIfPresent(AnimValue.self, forKey: .cornerRadius) ?? cornerRadius
@@ -675,7 +757,12 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         try c.encodeIfPresent(matte, forKey: .matte)
         try c.encodeIfPresent(repeater, forKey: .repeater)
         if motionBlur > 0 { try c.encode(motionBlur, forKey: .motionBlur) }
-        if type.isShape || type == .text { try c.encodeIfPresent(gradient, forKey: .gradient) }
+        // Written even before tint/wipe are set, so a patch that only sets the style survives the next round trip.
+        try c.encodeIfPresent(tintColor, forKey: .tintColor)
+        try c.encodeIfPresent(wipeStyle, forKey: .wipeStyle)
+        try c.encodeIfPresent(keyColor, forKey: .keyColor)
+        try c.encodeIfPresent(posterizeTime, forKey: .posterizeTime)
+        if type.isShape || type == .text || type == .generator { try c.encodeIfPresent(gradient, forKey: .gradient) }
         try c.encodeIfPresent(parent, forKey: .parent)
         try c.encodeIfPresent(motionPath, forKey: .motionPath)
         if !loop.isEmpty { try c.encode(loop, forKey: .loop) }
@@ -724,6 +811,13 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
             try c.encode(self[.height], forKey: .height)
             try c.encode(particles, forKey: .particles)
             try c.encodeIfPresent(path, forKey: .path)
+        case .generator:
+            try c.encode(generator, forKey: .generator)
+            try c.encode(self[.width], forKey: .width)
+            try c.encode(self[.height], forKey: .height)
+            if generator.kind != .noise { try c.encode(fill, forKey: .fill) }
+            if strokeWidth != .constant(0) { try c.encode(strokeWidth, forKey: .strokeWidth) }
+            if cornerRadius != .constant(0) { try c.encode(cornerRadius, forKey: .cornerRadius) }
         }
     }
 }
@@ -753,7 +847,8 @@ public struct MotionScene: Codable, Equatable, Sendable {
 
     /// Points every `audioReact` at its source audio layer's file and timing (nil when the source is missing).
     mutating func resolveAudioLinks() {
-        guard layers.contains(where: { !$0.audioReact.isEmpty }) else { return }
+        guard layers.contains(where: { !$0.audioReact.isEmpty || ($0.type == .generator && $0.generator.usesAudio) })
+        else { return }
         let audio = audioLayers
         let fallback = defaultReactSource
         // Resolved on a copy and assigned once: writing `layers` here re-enters this through `didSet`, and nesting
@@ -769,6 +864,14 @@ public struct MotionScene: Codable, Equatable, Sendable {
                 }
                 if react.link != link { resolved[i].audioReact[key]?.link = link; changed = true }
             }
+        }
+        for i in resolved.indices where resolved[i].type == .generator && resolved[i].generator.usesAudio {
+            let g = resolved[i].generator
+            let src = g.source.map { id in audio.first { $0.id == id } } ?? fallback
+            let link = src.flatMap { s in
+                s.path.map { AudioLink(path: $0, start: s.start, trimIn: s.trimIn, end: s.effectiveEnd(sceneDuration: duration)) }
+            }
+            if g.link != link { resolved[i].generator.link = link; changed = true }
         }
         if changed { layers = resolved }
     }

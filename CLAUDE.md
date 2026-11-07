@@ -123,6 +123,19 @@ over the canvas (UI-only, never in the scene), and "Add to chat" renders the fra
   (cached a week under Application Support/VeyMotion/cache), files come from the css2 API (static TTFs for non-browser
   user agents), and search previews use `text=` subset fonts. Layer tools report fonts that are missing or lack
   letters of the text (`fontNotes` in `MCPServer`).
+- Layer effects in the AE sense are plain `AnimProperty` extras (so keyframes, wiggle, audioReact and the timeline
+  work on them), with their non-animated settings in fields (`tintColor`, `wipeStyle`, `keyColor`, `posterizeTime`).
+  `Effects.swift`: color correction folds into one `ColorMatrix` (vImage, premultiplied: offsets go in the alpha
+  column); `WipeStyle.visibleRegion` is an even-odd path in layer space that `drawLayer` clips to (feathered = a
+  blurred gray mask). `PixelEffects.swift`: keying, distort (one inverse mapping, bilinear), posterize/pixelate,
+  directional/zoom blur (log-step doubling passes), RGB split/glitch/grain/scanlines/vignette, run in
+  `blurredLayer`'s bitmap before and after the gaussian; their reach widens that bitmap. Any active effect sends
+  the layer through that bitmap path, so keep new ones off by default (0). Random looks are seeded by layer id and
+  frame number, never carried between frames.
+- `generator` layers (`Generators.swift`): one type, `generator.kind` = spectrum | waveform | noise | lightning |
+  grid. Shapes come back as one filled `CGPath` (lines are stroked outlines) so fill/gradient apply; noise is an
+  image at ~1/3 device resolution. Audio kinds get their source through `MotionScene.resolveAudioLinks` (like
+  `audioReact`) and read `AudioAnalysis.spectrum` (40 log bands, each normalized on its own).
 - `blendMode` applies to every visual layer (set on the context before drawing; particles skip the opacity
   transparency layer and take opacity per particle, so they keep adding up).
 - Layer ids are unique: `addLayer` / `duplicateLayer` auto-suffix them (`title-2`), and renaming to a taken id throws.

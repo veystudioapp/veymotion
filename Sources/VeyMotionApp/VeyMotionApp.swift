@@ -70,6 +70,9 @@ struct VeyMotionApp: App {
                 Button("Add Image…") { store.addImageLayer() }
                 Button("Add Video or Image Sequence…") { store.addVideoLayer() }
                 Button("Add Audio File…") { store.addAudioLayer() }
+                Menu("Add Generator") {
+                    ForEach(GeneratorKind.allCases, id: \.self) { k in Button(k.title) { store.addGenerator(k) } }
+                }
                 Divider()
                 Button("Duplicate") { store.duplicateSelected() }.keyboardShortcut("d").disabled(store.selection == nil)
                 if annotations.isActive {

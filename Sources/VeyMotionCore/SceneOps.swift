@@ -2,11 +2,11 @@ import Foundation
 
 public enum Preset: String, CaseIterable, Codable, Sendable {
     // Entrances
-    case fadeIn, slideUp, slideDown, slideInLeft, slideInRight, popIn, zoomIn, blurIn, bounceIn, dropIn, flipIn, rotateIn
+    case fadeIn, slideUp, slideDown, slideInLeft, slideInRight, popIn, zoomIn, blurIn, bounceIn, dropIn, flipIn, rotateIn, wipeIn
     // Exits
-    case fadeOut, slideOutUp, slideOutDown, slideOutLeft, slideOutRight, popOut, zoomOut, blurOut, flipOut
+    case fadeOut, slideOutUp, slideOutDown, slideOutLeft, slideOutRight, popOut, zoomOut, blurOut, flipOut, wipeOut
     // Emphasis
-    case spin, pulse, heartbeat, shake, wobble, jello
+    case spin, pulse, heartbeat, shake, wobble, jello, glitchBurst
     // Shapes
     case drawOn
     // Text
@@ -35,12 +35,15 @@ public enum Preset: String, CaseIterable, Codable, Sendable {
         case .flipIn: return "Flip In"
         case .flipOut: return "Flip Out"
         case .rotateIn: return "Rotate In"
+        case .wipeIn: return "Wipe In"
+        case .wipeOut: return "Wipe Out"
         case .spin: return "Spin"
         case .pulse: return "Pulse"
         case .heartbeat: return "Heartbeat"
         case .shake: return "Shake"
         case .wobble: return "Wobble"
         case .jello: return "Jello"
+        case .glitchBurst: return "Glitch"
         case .drawOn: return "Draw On"
         case .typewriter: return "Typewriter"
         case .textRise: return "Letters Rise"
@@ -58,10 +61,10 @@ public enum Preset: String, CaseIterable, Codable, Sendable {
     public var group: Group {
         switch self {
         case .fadeIn, .slideUp, .slideDown, .slideInLeft, .slideInRight, .popIn, .zoomIn, .blurIn, .bounceIn, .dropIn,
-             .flipIn, .rotateIn: return .entrance
+             .flipIn, .rotateIn, .wipeIn: return .entrance
         case .fadeOut, .slideOutUp, .slideOutDown, .slideOutLeft, .slideOutRight, .popOut, .zoomOut, .blurOut,
-             .flipOut: return .exit
-        case .spin, .pulse, .heartbeat, .shake, .wobble, .jello: return .emphasis
+             .flipOut, .wipeOut: return .exit
+        case .spin, .pulse, .heartbeat, .shake, .wobble, .jello, .glitchBurst: return .emphasis
         case .drawOn: return .shape
         case .typewriter, .textRise, .textPop, .textDrop, .textLines, .textOut: return .text
         }
@@ -284,6 +287,13 @@ extension MotionScene {
             put(.rotation, [kf(s, r - 90, .linear), kf(e, r, .springWith(damping: 7, frequency: 9))])
             put(.scale, [kf(s, sc * 0.5, .linear), kf(e, sc, .curve(.back, .out))])
             fadeIn(0.4)
+        case .wipeIn:
+            // Without a wipe style, a soft edge sweeping left to right (the edge travels left as wipe goes 0 → 1).
+            if l.wipeStyle == nil { l.wipeStyle = WipeStyle(type: .linear, angle: 180, feather: 40) }
+            put(.wipe, [kf(s, 1, .linear), kf(e, 0, .curve(.cubic, .inOut))])
+        case .wipeOut:
+            if l.wipeStyle == nil { l.wipeStyle = WipeStyle(type: .linear, angle: 0, feather: 40) }
+            put(.wipe, [kf(s, 0, .linear), kf(e, 1, .curve(.cubic, .inOut))])
         case .spin:
             let r = l.rotation.value(at: s)
             put(.rotation, [kf(s, r, .linear), kf(e, r + 360, .easeInOut)])
@@ -300,6 +310,10 @@ extension MotionScene {
             oscillate(.rotation, amplitude: 10, count: 6)
         case .jello:
             oscillate(.skewX, amplitude: 14, count: 6)
+        case .glitchBurst:
+            put(.glitch, [kf(s, 0, .linear), kf(s + d * 0.1, 0.9, .hold), kf(s + d * 0.45, 0.35, .hold),
+                          kf(s + d * 0.7, 0.8, .hold), kf(e, 0, .hold)])
+            put(.rgbSplit, [kf(s, 0, .linear), kf(s + d * 0.1, 8, .hold), kf(e, 0, .hold)])
         case .drawOn:
             if l.stroke == nil {
                 l.stroke = .constant(l.fill.value(at: s))

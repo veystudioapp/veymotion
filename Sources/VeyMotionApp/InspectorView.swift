@@ -140,6 +140,11 @@ struct LayerInspector: View {
             InspectorSection(appearanceTitle) { appearance }
             if layer.type == .video, layer.path.map(MediaAudio.hasAudioTrack) ?? false { SpeechSection(layer: layer) }
             EffectsSection(layer: layer)
+            ColorSection(layer: layer)
+            WipeSection(layer: layer)
+            StylizeSection(layer: layer)
+            DistortSection(layer: layer)
+            KeyingSection(layer: layer)
             MotionSection(layer: layer)
             RepeaterSection(layer: layer)
             if layer.type == .text { TextAnimatorSection(layer: layer) }
@@ -153,6 +158,7 @@ struct LayerInspector: View {
         case .image: return "Image"
         case .video: return "Video"
         case .particles: return "Particles"
+        case .generator: return "Generator"
         default: return "Shape"
         }
     }
@@ -294,6 +300,8 @@ struct LayerInspector: View {
             }
         case .particles:
             ParticlesEditor(layer: layer)
+        case .generator:
+            GeneratorEditor(layer: layer)
         case .audio:
             EmptyView()
         }
@@ -414,6 +422,336 @@ struct EffectsSection: View {
                 }
             }
             MatteRow(layer: layer)
+        }
+    }
+}
+
+/// Color correction: brightness, contrast, saturation, hue and tint.
+struct ColorSection: View {
+    @Environment(SceneStore.self) private var store
+    let layer: MotionLayer
+
+    var body: some View {
+        let id = layer.id
+        InspectorSection("Color") {
+            AnimSlider(layer: layer, property: .brightness, label: "Brightness", range: -1...1)
+            AnimSlider(layer: layer, property: .contrast, label: "Contrast", range: -1...1)
+            AnimSlider(layer: layer, property: .saturation, label: "Saturation", range: -1...1)
+            Grid(horizontalSpacing: 8, verticalSpacing: 6) {
+                GridRow {
+                    AnimField(layer: layer, property: .hue, label: "Hue", unit: "°")
+                    Color.clear.frame(height: 1)
+                }
+            }
+            AnimSlider(layer: layer, property: .tint, label: "Tint")
+            if layer.value(.tint, at: store.panelTime) > 0 || layer[.tint].isAnimated {
+                ColorField("Tint", layer.tintColor ?? .white) { c in
+                    store.updateLayer(id, "Tint Color") { $0.tintColor = c }
+                }
+                .help("White maps to this color, black stays black")
+            }
+            let touched: [AnimProperty] = [.brightness, .contrast, .saturation, .hue, .tint]
+            if touched.contains(where: { layer.extra[$0] != nil }) {
+                Button("Reset Color") {
+                    store.updateLayer(id, "Reset Color") { l in
+                        for p in touched { l[p] = .constant(p.defaultValue) }
+                        l.tintColor = nil
+                    }
+                }
+                .controlSize(.small)
+            }
+        }
+    }
+}
+
+/// Transition that wipes the layer away (or in, animated 1 → 0).
+struct WipeSection: View {
+    @Environment(SceneStore.self) private var store
+    let layer: MotionLayer
+
+    var body: some View {
+        let id = layer.id
+        let style = layer.wipeStyle ?? WipeStyle()
+        InspectorSection("Wipe") {
+            AnimSlider(layer: layer, property: .wipe, label: "Wipe")
+                .help("0 = the whole layer shows, 100% = wiped away. Keyframe 100% → 0 to reveal it.")
+            HStack(spacing: 6) {
+                RowLabel("Type")
+                Picker("", selection: Binding(get: { style.type }, set: { v in
+                    store.updateLayer(id, "Wipe Type") { l in
+                        var s = l.wipeStyle ?? WipeStyle()
+                        s.type = v
+                        l.wipeStyle = s
+                    }
+                })) {
+                    ForEach(WipeType.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+                .labelsHidden()
+                .controlSize(.small)
+            }
+            Grid(horizontalSpacing: 8, verticalSpacing: 6) {
+                GridRow {
+                    if style.type == .iris || style.type == .blocks {
+                        Color.clear.frame(height: 1)
+                    } else {
+                        NumberField(style.type == .radial ? "Start" : "Angle", style.angle, unit: "°", digits: 0) { v in
+                            edit(id) { $0.angle = v }
+                        }
+                        .help(style.type == .radial ? "Where the hand starts: 0° = 12 o'clock"
+                              : "Direction the edge travels as the wipe goes up: 0° = rightward, 90° = down")
+                    }
+                    NumberField("Feather", style.feather, digits: 0) { v in edit(id) { $0.feather = max(0, v) } }
+                        .help("Soft edge width in px")
+                }
+                if style.type == .blinds || style.type == .blocks {
+                    GridRow {
+                        NumberField(style.type == .blinds ? "Stripes" : "Blocks", Double(style.count), digits: 0) { v in
+                            edit(id) { $0.count = min(max(Int(v), 1), 200) }
+                        }
+                        if style.type == .blocks {
+                            NumberField("Seed", Double(style.seed), digits: 0) { v in edit(id) { $0.seed = Int(v) } }
+                        } else {
+                            Color.clear.frame(height: 1)
+                        }
+                    }
+                }
+            }
+            if style.type == .radial || style.type == .iris {
+                Toggle(style.type == .radial ? "Counter-clockwise" : "Open from center",
+                       isOn: Binding(get: { style.reverse }, set: { v in edit(id) { $0.reverse = v } }))
+                    .toggleStyle(.checkbox)
+                    .controlSize(.small)
+            }
+        }
+    }
+
+    private func edit(_ id: String, _ change: @escaping (inout WipeStyle) -> Void) {
+        store.updateLayer(id, "Wipe") { l in
+            var s = l.wipeStyle ?? WipeStyle()
+            change(&s)
+            l.wipeStyle = s
+        }
+    }
+}
+
+/// Settings of a generator layer (spectrum, waveform, noise, lightning, grid).
+struct GeneratorEditor: View {
+    @Environment(SceneStore.self) private var store
+    let layer: MotionLayer
+
+    var body: some View {
+        let id = layer.id
+        let g = layer.generator
+        HStack(spacing: 6) {
+            RowLabel("Kind")
+            Picker("", selection: Binding(get: { g.kind }, set: { v in edit(id, "Generator") { $0.kind = v } })) {
+                ForEach(GeneratorKind.allCases, id: \.self) { Text($0.title).tag($0) }
+            }
+            .labelsHidden()
+            .controlSize(.small)
+        }
+        Grid(horizontalSpacing: 8, verticalSpacing: 6) {
+            GridRow {
+                AnimField(layer: layer, property: .width, label: "W")
+                AnimField(layer: layer, property: .height, label: "H")
+            }
+            switch g.kind {
+            case .spectrum, .waveform:
+                GridRow {
+                    NumberField(g.shapeValue == .line ? "Points" : "Bars", Double(g.countValue), digits: 0) { v in
+                        edit(id, "Generator") { $0.count = min(max(Int(v), 1), 512) }
+                    }
+                    NumberField("Gain", g.gainValue, unit: "×") { v in edit(id, "Generator") { $0.gain = max(0, v) } }
+                }
+                GridRow {
+                    if g.shapeValue == .line {
+                        AnimField(layer: layer, property: .strokeWidth, label: "Line")
+                    } else {
+                        AnimField(layer: layer, property: .cornerRadius, label: "Radius")
+                    }
+                    if g.kind == .waveform {
+                        NumberField("Window", g.windowValue, unit: "s") { v in edit(id, "Generator") { $0.window = max(0.1, v) } }
+                    } else {
+                        Color.clear.frame(height: 1)
+                    }
+                }
+            case .noise:
+                GridRow {
+                    NumberField("Size", g.scaleValue, digits: 0) { v in edit(id, "Generator") { $0.scale = max(1, v) } }
+                    NumberField("Detail", Double(g.detailValue), digits: 0) { v in
+                        edit(id, "Generator") { $0.detail = min(max(Int(v), 1), 8) }
+                    }
+                }
+                GridRow {
+                    NumberField("Evolve", g.speedValue, unit: "/s") { v in edit(id, "Generator") { $0.speed = v } }
+                    NumberField("Seed", Double(g.seedValue), digits: 0) { v in edit(id, "Generator") { $0.seed = Int(v) } }
+                }
+            case .lightning:
+                GridRow {
+                    NumberField("Strikes", g.speedValue, unit: "/s") { v in edit(id, "Generator") { $0.speed = max(0, v) } }
+                    NumberField("Branches", Double(g.detailValue), digits: 0) { v in
+                        edit(id, "Generator") { $0.detail = min(max(Int(v), 0), 8) }
+                    }
+                }
+                GridRow {
+                    AnimField(layer: layer, property: .strokeWidth, label: "Width")
+                    NumberField("Seed", Double(g.seedValue), digits: 0) { v in edit(id, "Generator") { $0.seed = Int(v) } }
+                }
+            case .grid:
+                GridRow {
+                    NumberField("Cell", g.scaleValue, digits: 0) { v in edit(id, "Generator") { $0.scale = max(2, v) } }
+                    NumberField("Scroll", g.speedValue, unit: "px/s", digits: 0) { v in edit(id, "Generator") { $0.speed = v } }
+                }
+                GridRow {
+                    AnimField(layer: layer, property: .strokeWidth, label: "Line")
+                    Color.clear.frame(height: 1)
+                }
+            }
+        }
+        if g.usesAudio {
+            let audio = store.scene.audioLayers
+            HStack(spacing: 6) {
+                RowLabel("Audio")
+                Picker("", selection: Binding(get: { g.source ?? "" }, set: { v in
+                    edit(id, "Generator Source") { $0.source = v.isEmpty ? nil : v }
+                })) {
+                    Text("Music (auto)").tag("")
+                    ForEach(audio) { Text($0.name).tag($0.id) }
+                }
+                .labelsHidden()
+                .controlSize(.small)
+            }
+            HStack(spacing: 6) {
+                RowLabel("Shape")
+                Picker("", selection: Binding(get: { g.shapeValue }, set: { v in edit(id, "Generator") { $0.shape = v } })) {
+                    ForEach(GeneratorShape.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .controlSize(.small)
+            }
+            if g.shapeValue != .circle {
+                Toggle("Mirror (grow from the middle)", isOn: Binding(get: { g.mirrorValue }, set: { v in
+                    edit(id, "Generator") { $0.mirror = v }
+                }))
+                .toggleStyle(.checkbox)
+                .controlSize(.small)
+            }
+            if audio.isEmpty {
+                Text("Add an audio layer: the visualizer follows it.").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        if g.kind == .noise {
+            let colors = g.colorsValue
+            ForEach(Array(colors.enumerated()), id: \.offset) { i, c in
+                ColorField(i == 0 ? "Low" : i == colors.count - 1 ? "High" : "Mid", c) { nc in
+                    edit(id, "Noise Color") { gen in
+                        var list = gen.colorsValue
+                        list[i] = nc
+                        gen.colors = list
+                    }
+                }
+            }
+        } else {
+            AnimColorField(layer: layer, property: .fill, label: "Color")
+            GradientRows(layer: layer)
+        }
+    }
+
+    private func edit(_ id: String, _ label: String, _ change: @escaping (inout Generator) -> Void) {
+        store.updateLayer(id, label) { change(&$0.generator) }
+    }
+}
+
+/// Pixelate, posterize, RGB split, glitch, grain, scanlines, vignette, directional/zoom blur and posterize time.
+struct StylizeSection: View {
+    @Environment(SceneStore.self) private var store
+    let layer: MotionLayer
+
+    var body: some View {
+        let id = layer.id
+        InspectorSection("Stylize") {
+            Grid(horizontalSpacing: 8, verticalSpacing: 6) {
+                GridRow {
+                    AnimField(layer: layer, property: .pixelate, label: "Pixelate")
+                    AnimField(layer: layer, property: .posterize, label: "Levels")
+                        .help("Posterize: number of color levels (0 = off, 2–8 for a poster look)")
+                }
+                GridRow {
+                    AnimField(layer: layer, property: .rgbSplit, label: "RGB split")
+                    AnimField(layer: layer, property: .directionalBlur, label: "Dir. blur")
+                }
+                GridRow {
+                    AnimField(layer: layer, property: .blurAngle, label: "Blur angle", unit: "°")
+                    NumberField("Step fps", layer.posterizeTime ?? 0, digits: 0) { v in
+                        store.updateLayer(id, "Posterize Time") { $0.posterizeTime = v > 0 ? v : nil }
+                    }
+                    .help("Posterize time: the layer only updates this many times a second (0 = off)")
+                }
+            }
+            AnimSlider(layer: layer, property: .zoomBlur, label: "Zoom blur", range: 0...0.9)
+            AnimSlider(layer: layer, property: .glitch, label: "Glitch")
+            AnimSlider(layer: layer, property: .grain, label: "Grain")
+            AnimSlider(layer: layer, property: .scanlines, label: "Scanlines")
+            AnimSlider(layer: layer, property: .vignette, label: "Vignette")
+        }
+    }
+}
+
+/// Wave warp, ripple, twirl, bulge and turbulent displacement around the layer's position.
+struct DistortSection: View {
+    @Environment(SceneStore.self) private var store
+    let layer: MotionLayer
+
+    var body: some View {
+        let t = store.panelTime
+        InspectorSection("Distort") {
+            Grid(horizontalSpacing: 8, verticalSpacing: 6) {
+                GridRow {
+                    AnimField(layer: layer, property: .waveWarp, label: "Wave")
+                    AnimField(layer: layer, property: .ripple, label: "Ripple")
+                }
+                GridRow {
+                    AnimField(layer: layer, property: .turbulence, label: "Turbulence")
+                    AnimField(layer: layer, property: .twirl, label: "Twirl", unit: "°")
+                }
+                if [.waveWarp, .ripple, .turbulence].contains(where: { layer.value($0, at: t) != 0 || layer[$0].isAnimated }) {
+                    GridRow {
+                        AnimField(layer: layer, property: .waveLength, label: "Length")
+                        AnimField(layer: layer, property: .waveSpeed, label: "Speed")
+                    }
+                }
+                if [.twirl, .bulge].contains(where: { layer.value($0, at: t) != 0 || layer[$0].isAnimated }) {
+                    GridRow {
+                        AnimField(layer: layer, property: .distortRadius, label: "Radius")
+                        Color.clear.frame(height: 1)
+                    }
+                }
+            }
+            AnimSlider(layer: layer, property: .bulge, label: "Bulge", range: -1...1)
+        }
+    }
+}
+
+/// Green/blue screen keying.
+struct KeyingSection: View {
+    @Environment(SceneStore.self) private var store
+    let layer: MotionLayer
+
+    var body: some View {
+        let id = layer.id
+        InspectorSection("Keying") {
+            Toggle("Key out a color", isOn: Binding(get: { layer.keyColor != nil }, set: { on in
+                store.updateLayer(id, "Keying") { $0.keyColor = on ? RGBA(hex: "#00B140") : nil }
+            }))
+            .toggleStyle(.checkbox)
+            .controlSize(.small)
+            .help("Removes a green or blue screen (or any color) from the layer")
+            if let key = layer.keyColor {
+                ColorField("Key", key) { c in store.updateLayer(id, "Key Color") { $0.keyColor = c } }
+                AnimSlider(layer: layer, property: .keyTolerance, label: "Tolerance")
+                AnimSlider(layer: layer, property: .keySoftness, label: "Softness")
+            }
         }
     }
 }

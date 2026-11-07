@@ -41,6 +41,10 @@ public struct AudioAnalysis: Sendable {
     public let onsets: [Onset]
     /// level/bass/mid/treble: 0…1 per frame (1 ≈ the file's loud parts).
     let bands: [AudioBand: [Float]]
+    /// Log-spaced bands from ~30 Hz to 11 kHz, `spectrumBands` per frame, each 0…1 against its own loud parts
+    /// (so the highs move as much as the bass, like a music visualizer).
+    var spectrum: [Float] = []
+    var spectrumBands = 0
 
     /// Envelope of a band at `frameRate`, with an instant attack and an exponential `release` (seconds).
     /// beat/downbeat: a pulse of 1 on each beat/bar that fades over `release`.
@@ -123,6 +127,8 @@ public struct AudioAnalysis: Sendable {
         var re = [Float](repeating: 0, count: half), im = [Float](repeating: 0, count: half)
         var power = [Float](repeating: 0, count: half)
         var logMag = [Float](repeating: 0, count: edges.count), prevLog = logMag
+        let specBands = edges.count - 1
+        var spectrum = [Float](repeating: 0, count: frames * specBands)
         let norm = Float(n) // vDSP's forward FFT is 2× the DFT; a full-scale sine under a Hann window ≈ n/4 × 2 = n/2
 
         for f in 0..<frames {
@@ -155,6 +161,7 @@ public struct AudioAnalysis: Sendable {
                 for k in edges[j]..<edges[j + 1] { p += power[k] }
                 logMag[j] = log(1 + 100 * sqrt(p) / norm)
                 fl += max(0, logMag[j] - prevLog[j])
+                spectrum[f * specBands + j] = logMag[j]
             }
             swap(&logMag, &prevLog)
             level[f] = sqrt(sum) / norm
@@ -166,10 +173,21 @@ public struct AudioAnalysis: Sendable {
 
         let bands: [AudioBand: [Float]] = [.level: normalized(level), .bass: normalized(bass),
                                            .mid: normalized(mid), .treble: normalized(treble)]
+        // Each spectrum band against its own loud parts.
+        for j in 0..<specBands {
+            let column = normalized((0..<frames).map { spectrum[$0 * specBands + j] })
+            for f in 0..<frames { spectrum[f * specBands + j] = column[f] }
+        }
+        func finish(_ a: AudioAnalysis) -> AudioAnalysis {
+            var a = a
+            a.spectrum = spectrum
+            a.spectrumBands = specBands
+            return a
+        }
         let onsetEnv = onsetStrength(flux)
         let onsets = pickOnsets(onsetEnv)
         guard let period = tempo(onsetEnv) else {
-            return AudioAnalysis(duration: duration, bpm: nil, beats: [], downbeats: [], onsets: onsets, bands: bands)
+            return finish(AudioAnalysis(duration: duration, bpm: nil, beats: [], downbeats: [], onsets: onsets, bands: bands))
         }
         var beatFrames = trackBeats(onsetEnv, period: period)
         // Drop beats in silence at the start and end.
@@ -205,8 +223,8 @@ public struct AudioAnalysis: Sendable {
             }
             downbeats = beats.enumerated().filter { $0.offset % 4 == best }.map(\.element)
         }
-        return AudioAnalysis(duration: duration, bpm: (bpm * 10).rounded() / 10, beats: beats, downbeats: downbeats,
-                             onsets: onsets, bands: bands)
+        return finish(AudioAnalysis(duration: duration, bpm: (bpm * 10).rounded() / 10, beats: beats,
+                                    downbeats: downbeats, onsets: onsets, bands: bands))
     }
 
     /// Scales so the loud parts (98th percentile) are 1.
@@ -412,6 +430,13 @@ public enum AudioAnalysisCache {
         return try body()
     }
 
+    /// The analysis for drawing a frame: waits like `envelope` does (not on the app's main thread or inside
+    /// `withoutWaiting`). nil when it cannot be analyzed or is not ready yet.
+    public static func forRendering(path: String) -> AudioAnalysis? {
+        let wait = (waitsOnMainThread || !Thread.isMainThread) && Thread.current.threadDictionary[noWaitKey] == nil
+        return try? result(path, wait: wait)?.get()
+    }
+
     /// Smoothed envelope of a band (see `AudioAnalysis.envelope`); nil if the file cannot be analyzed (or, when
     /// not waiting, is not analyzed yet).
     public static func envelope(path: String, band: AudioBand, release: Double) -> [Float]? {
@@ -479,6 +504,31 @@ public enum AudioAnalysisCache {
 }
 
 extension AudioAnalysis {
+    /// `count` spectrum values (0…1, low to high) at file time `t`: each band falls back over `release` seconds
+    /// after a peak, so bars rise fast and drop smoothly.
+    public func spectrum(at t: Double, count: Int, release: Double = 0.12) -> [Double] {
+        let nb = spectrumBands
+        guard nb > 0, count > 0 else { return [Double](repeating: 0, count: max(count, 0)) }
+        let frames = spectrum.count / nb
+        let f = Int((t * Self.frameRate).rounded(.down))
+        let back = max(1, Int(release * Self.frameRate * 3))
+        var bands = [Double](repeating: 0, count: nb)
+        if f >= 0 && f < frames + back {
+            for k in 0..<back {
+                let i = f - k
+                guard i >= 0, i < frames else { continue }
+                let decay = exp(-Double(k) / (release * Self.frameRate))
+                for j in 0..<nb { bands[j] = max(bands[j], Double(spectrum[i * nb + j]) * decay) }
+            }
+        }
+        // Resample to `count` values across the bands.
+        return (0..<count).map { c in
+            let x = count == 1 ? 0 : Double(c) / Double(count - 1) * Double(nb - 1)
+            let i = min(Int(x), nb - 2), fr = x - Double(i)
+            return nb == 1 ? bands[0] : bands[i] + (bands[i + 1] - bands[i]) * fr
+        }
+    }
+
     /// Linear interpolation into an envelope at file time `t`.
     static func sample(_ env: [Float], at t: Double) -> Double {
         let x = t * frameRate

@@ -14,7 +14,7 @@ enum Docs {
       Publishing is done by the user from the app (Export → Publish); you cannot post.
 
     LAYER
-    Common: id, name, type ("rect" | "ellipse" | "path" | "text" | "image" | "video" | "audio" | "particles"), start, end (seconds, end optional = scene end),
+    Common: id, name, type ("rect" | "ellipse" | "path" | "text" | "image" | "video" | "audio" | "particles" | "generator"), start, end (seconds, end optional = scene end),
             x, y, scale, rotation (degrees), opacity (0..1)
     rect/ellipse: width, height, cornerRadius (rect), fill "#RRGGBB[AA]", stroke, strokeWidth (see STROKES for trim)
     path: any vector shape. d = the shape in layer px around the layer's x/y (0,0 in d is at x/y and is the pivot for
@@ -38,6 +38,7 @@ enum Docs {
           The movie's own sound plays at speed 1 (silent at other speeds); volume (animatable, 1 = original, 0 = mute).
           sourceDuration / transcript / words are filled in by the app.
     particles: see PARTICLES.
+    generator: see GENERATORS.
     Optional on every visual layer (omit when unused):
       scaleX, scaleY (multiply scale; flip effects), skewX, skewY (degrees), anchorX, anchorY (pivot for rotation/scale/
       skew as an offset from the center in layer px, e.g. anchorX = -width/2 spins around the left edge; does not move the
@@ -45,13 +46,16 @@ enum Docs {
       shadowColor ("#000000"), parent, motionPath, pathProgress, loop, wiggle, audioReact (see below),
       blendMode ("normal" | "add" | "screen" | "multiply" | "overlay" | "lighten" | "darken"; "add"/"screen" make dark
       areas see-through, e.g. fire or smoke footage on black),
-      gradient (rect/ellipse/path/text), matte, repeater, motionBlur, glow, glowRadius, glowColor (see AFTER EFFECTS-STYLE
-      TOOLS)
+      gradient (rect/ellipse/path/text), matte, repeater, motionBlur, glow, glowRadius, glowColor, brightness, contrast,
+      saturation, hue, tint, tintColor, wipe, wipeStyle, keyColor, keyTolerance, keySoftness, waveWarp, ripple,
+      waveLength, waveSpeed, twirl, bulge, distortRadius, turbulence, posterize, pixelate, rgbSplit, glitch, grain,
+      scanlines, vignette, directionalBlur, blurAngle, zoomBlur, posterizeTime (see AFTER EFFECTS-STYLE TOOLS)
 
     ANIMATION
     Every number above (x, y, scale, scaleX, scaleY, rotation, skewX, skewY, anchorX, anchorY, opacity,
     width, height, cornerRadius, strokeWidth, trim, trimStart, trimOffset, reveal, letterSpacing, blur, shadowX, shadowY,
-    shadowBlur, shadowOpacity, glow, glowRadius, pathProgress, volume, emission, particleSpeed, particleSize), the colors
+    shadowBlur, shadowOpacity, glow, glowRadius, pathProgress, volume, emission, particleSpeed, particleSize, brightness,
+    contrast, saturation, hue, tint, wipe and the stylize/distort/keying numbers below), the colors
     fill, stroke and color, and a path's d (shapes) can be a plain value or
       {"keyframes":[{"t":0.5,"v":0},{"t":1.2,"v":1,"easing":"easeOut"}]}     (colors: "v":"#FF5500")
     - Never write the same key twice in one object (e.g. "y": 500 and "y": {"keyframes": ...}); only one would be used.
@@ -111,6 +115,44 @@ enum Docs {
       a real camera. It renders the layer several times per frame, so use it on the few fast-moving layers.
     - glow (strength 0..4, animatable), glowRadius (px, default 24), glowColor (optional tint): light around the layer —
       neon lines and logos, glowing text, light streaks. Best on bright layers over dark backgrounds.
+    - Color correction (every visual layer, all animatable, 0 = unchanged): brightness (-1..1, adds light), contrast
+      (-1 flat gray .. 1 double), saturation (-1 black and white .. 1 double), hue (degrees around the color wheel),
+      tint (0..1) with tintColor (white by default): maps the layer's brightness onto one color (duotone look, a
+      photo in brand color, black and white = tint 1). Use it to match footage and images to the palette, flash a
+      layer (brightness 0 → 0.6 → 0 on a beat), fade to black and white, or cycle hues (hue 0 → 360 + loop offset).
+    - wipe (0..1, animatable): transition that hides the layer, 0 = all of it shows, 1 = wiped away. Animate 1 → 0 to
+      reveal, 0 → 1 to hide. Its shape is wipeStyle (or just the type name, e.g. "wipeStyle":"iris"):
+        {"type":"linear","angle":180,"feather":40}
+      type: linear (straight edge) | radial (clock hand around the center) | iris (circle closing on the center) |
+      blinds (stripes) | blocks (random squares dissolve). angle: linear/blinds = direction the edge travels as wipe
+      goes 0 → 1 (0 = rightward, 90 = down), so reveal left → right = angle 180 with wipe 1 → 0; radial = where the
+      hand starts (0 = 12 o'clock). feather = soft edge in px (0 sharp; 30–80 looks smooth). count = stripes (blinds)
+      or blocks across (blocks), default 8. reverse: radial turns counter-clockwise; iris opens a hole from the center
+      instead. seed reshuffles blocks. Iris reveal = type iris with wipe 1 → 0. Presets wipeIn / wipeOut animate it
+      (soft left → right edge unless a wipeStyle is set). Wipes work in the layer's own space, so they turn and
+      scale with it; unlike a matte they need no extra layer.
+    - Stylize (every visual layer, animatable, 0 = off): pixelate (block size px; 40 → 0 = "depixelate" reveal),
+      posterize (number of color levels, 2–8 for a poster/comic look), rgbSplit (px: red right, blue left, negative
+      swaps; chromatic aberration), glitch (0..1: random bands jump sideways with split colors, new pattern ~12 times
+      a second; keyframe short bursts, or use preset glitchBurst), grain (0..1 film grain, changes every frame),
+      scanlines (0..1 CRT lines), vignette (0..1, darkens the layer's edges — use it on a full-frame image/video).
+    - Blurs: directionalBlur (length px) along blurAngle (degrees, 0 = horizontal) for speed lines and whip
+      transitions; zoomBlur (0..0.9) smears toward the layer's center (punch-in/zoom transitions). The plain blur
+      property is a gaussian.
+    - Distort (around the layer's position, in layer px): waveWarp (amplitude, a horizontal wave bending the layer up
+      and down) and ripple (amplitude, rings from the center) share waveLength (default 120) and waveSpeed (cycles per
+      second, default 1; 0 = still); twirl (degrees at the center, fading to 0 at distortRadius, default 300); bulge
+      (-1 pinch .. 1 magnify, within distortRadius); turbulence (px of smooth noisy displacement, its size is
+      waveLength, it flows with waveSpeed) for heat haze, water and liquid logos. Keyframe twirl 0 → 720 → 0 or
+      bulge 0 → 0.8 for transitions; keep amplitudes small (5–30) on text.
+    - Keying: keyColor ("#00B140") removes that color from the layer (green/blue screen footage or images) and
+      suppresses its spill on edges; keyTolerance (default 0.2) = how far from the key color is still removed,
+      keySoftness (default 0.1) = the soft range above it. Raise tolerance if the screen still shows, lower it if
+      the subject gets holes.
+    - posterizeTime (fps, not animatable): the layer's animation only updates that many times a second (8–12 =
+      stop-motion / hand-made look), the rest of the scene stays smooth.
+    - These effects work on the layer's pixels in a bitmap, so they cost more than shapes: use them on the layers
+      that need them, and prefer small areas over full-frame layers when you stack several.
     - Layers draw in list order (no 3D camera). For depth, combine scale, blur and parallax (far layers move less).
 
     FONTS
@@ -170,6 +212,30 @@ enum Docs {
     - The layer's end cuts every particle: to let them die out, set emission to 0 a lifetime before the end.
     - Cost: keep live particles under ~5000 (rate × lifetime + bursts). Large soft particles with add saturate to
       white: lower the colors' alpha or the rate rather than the size. A small blur (2–4) softens fire and smoke.
+
+    GENERATORS (music visualizers, audiograms, fractal noise, lightning, grids)
+    {"id":"viz","type":"generator","generator":{"kind":"spectrum","shape":"bars","count":48},"x":960,"y":820,
+     "width":1300,"height":260,"fill":"#4FD1C5","cornerRadius":4}
+    - The layer draws in its width × height box (centered on x/y) with its fill color, or gradient (e.g. a gradient
+      across a spectrum). Every layer property and effect applies: glow on a spectrum or lightning, blur on noise,
+      matte, wipe, color correction.
+    - kind spectrum: bars following the music's frequencies (low on the left). kind waveform: the loudness of the
+      last `window` seconds (default 4), newest on the right — an audiogram for podcasts and voice clips. Both:
+      source = audio layer id (default: the music layer, else the first audio layer); shape bars | line | circle (a
+      ring of bars around the center, for logos in the middle); count (bars or points; spectrum 48, waveform 64);
+      mirror (bars/line grow both ways from the middle; waveform default true); gain (× the values, default 1).
+      Line thickness = strokeWidth (default 4); bar rounding = cornerRadius. They read 0 while the audio is silent.
+    - kind noise: fractal noise filling the box. scale = feature size px (default 200), detail = octaves (1–8,
+      default 4), speed = how fast it evolves (default 0.3; 0 = still), colors = low → high values (default black →
+      white, e.g. ["#0B1026","#3B2C85","#F0A6CA"] for a nebula), seed. Use for smoke, clouds, textured or animated
+      backgrounds, and as a luma matte for organic reveals (matte mode "luma" + animate brightness/contrast).
+    - kind lightning: a bolt with `detail` branches (default 2) between from and to ({"x":..,"y":..} in layer px from
+      x/y; default the left and right edges of the box), re-striking `speed` times a second (default 12; 0 = frozen).
+      scale = how far it strays (default 15% of its length); strokeWidth = core width (default 4). Add glow 1–2 with
+      a blue glowColor, and flicker opacity or the layer's timing for strikes.
+    - kind grid: lines every `scale` px (default 80), strokeWidth wide (default 2), scrolling `speed` px/s (default 0).
+      For a retro horizon, put it on a wide layer and skewX / scaleY it.
+    - seed (all kinds) gives another random pattern.
 
     3D MODELS / RENDERS
     3D content comes in as rendered video: render in Blender (or any 3D app) to a PNG sequence with a transparent
@@ -331,7 +397,7 @@ enum Docs {
           "type": "object",
           "properties": {
             "id": { "type": "string" },
-            "property": { "type": "string", "enum": ["x", "y", "scale", "scaleX", "scaleY", "rotation", "skewX", "skewY", "anchorX", "anchorY", "opacity", "width", "height", "cornerRadius", "strokeWidth", "trim", "trimStart", "trimOffset", "reveal", "letterSpacing", "blur", "shadowX", "shadowY", "shadowBlur", "shadowOpacity", "glow", "glowRadius", "pathProgress", "volume", "emission", "particleSpeed", "particleSize", "fill", "stroke", "color", "d"] },
+            "property": { "type": "string", "enum": ["x", "y", "scale", "scaleX", "scaleY", "rotation", "skewX", "skewY", "anchorX", "anchorY", "opacity", "width", "height", "cornerRadius", "strokeWidth", "trim", "trimStart", "trimOffset", "reveal", "letterSpacing", "blur", "shadowX", "shadowY", "shadowBlur", "shadowOpacity", "glow", "glowRadius", "pathProgress", "volume", "emission", "particleSpeed", "particleSize", "brightness", "contrast", "saturation", "hue", "tint", "wipe", "keyTolerance", "keySoftness", "waveWarp", "ripple", "waveLength", "waveSpeed", "twirl", "bulge", "distortRadius", "turbulence", "posterize", "pixelate", "rgbSplit", "glitch", "grain", "scanlines", "vignette", "directionalBlur", "blurAngle", "zoomBlur", "fill", "stroke", "color", "d"] },
             "keyframes": {
               "type": "array",
               "items": {
@@ -352,7 +418,7 @@ enum Docs {
           "properties": {
             "id": { "type": "string" },
             "ids": { "type": "array", "items": { "type": "string" }, "description": "Several layers, in cascade order." },
-            "preset": { "type": "string", "enum": ["fadeIn", "slideUp", "slideDown", "slideInLeft", "slideInRight", "popIn", "zoomIn", "blurIn", "bounceIn", "dropIn", "flipIn", "rotateIn", "fadeOut", "slideOutUp", "slideOutDown", "slideOutLeft", "slideOutRight", "popOut", "zoomOut", "blurOut", "flipOut", "spin", "pulse", "heartbeat", "shake", "wobble", "jello", "drawOn", "typewriter", "textRise", "textPop", "textDrop", "textLines", "textOut"] },
+            "preset": { "type": "string", "enum": ["fadeIn", "slideUp", "slideDown", "slideInLeft", "slideInRight", "popIn", "zoomIn", "blurIn", "bounceIn", "dropIn", "flipIn", "rotateIn", "wipeIn", "fadeOut", "slideOutUp", "slideOutDown", "slideOutLeft", "slideOutRight", "popOut", "zoomOut", "blurOut", "flipOut", "wipeOut", "spin", "pulse", "heartbeat", "shake", "wobble", "jello", "glitchBurst", "drawOn", "typewriter", "textRise", "textPop", "textDrop", "textLines", "textOut"] },
             "start": { "type": "number" },
             "duration": { "type": "number", "default": 0.6 },
             "stagger": { "type": "number", "description": "Seconds between layers when several ids are given." }

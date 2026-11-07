@@ -204,6 +204,10 @@ vmotion render scene.json out.mp4
 - Animatable: `x`, `y`, `scale`, `scaleX`, `scaleY`, `rotation` (deg), `skewX`, `skewY`, `anchorX`, `anchorY`, `opacity`,
   `width`, `height`, `cornerRadius`, `strokeWidth`, `trim`/`trimStart`/`trimOffset` (trim paths), `reveal` (typewriter),
   `letterSpacing`, `blur`, `shadowX/Y/Blur/Opacity`, `glow`/`glowRadius`, `pathProgress`,
+  `brightness`/`contrast`/`saturation`/`hue`/`tint` (color correction), `wipe` (transition, 0 shown → 1 wiped away),
+  stylize `pixelate`/`posterize`/`rgbSplit`/`glitch`/`grain`/`scanlines`/`vignette`, `directionalBlur`/`blurAngle`/
+  `zoomBlur`, distort `waveWarp`/`ripple`/`waveLength`/`waveSpeed`/`twirl`/`bulge`/`distortRadius`/`turbulence`,
+  `keyTolerance`/`keySoftness`,
   `emission`/`particleSpeed`/`particleSize` (particles), the colors `fill`, `stroke`, `color`, and a path's shape `d`
   (keyframes morph between shapes).
   Each is a value or `{"keyframes": [...]}` (color keyframes use `"v": "#RRGGBB"`).
@@ -213,14 +217,17 @@ vmotion render scene.json out.mp4
 - Per layer: `blendMode` (`normal`, `add`, `screen`, `multiply`, `overlay`, `lighten`, `darken`), `loop` (`cycle`/`pingpong`/`offset` after the last key), `wiggle` (smooth noise), `audioReact` (follows the music), `parent`,
   `motionPath` (curve the layer follows, driven by `pathProgress`), `textAnimators` (staggered per char/word/line),
   `gradient` (linear/radial fill for shapes, paths and text), `matte` (track matte: alpha/luma, inverted),
-  `repeater` (stepped copies with compounding transform and delay), `motionBlur` (shutter angle), `glowColor`.
+  `repeater` (stepped copies with compounding transform and delay), `motionBlur` (shutter angle), `glowColor`,
+  `tintColor`, `wipeStyle` (`linear`, `radial` clock wipe, `iris`, `blinds`, `blocks` dissolve; angle, feather, count),
+  `keyColor` (green/blue screen keying), `posterizeTime` (stop-motion frame rate for one layer).
 - Layer types: `rect` (width, height, cornerRadius, fill, stroke, strokeWidth), `ellipse`,
   `path` (`d` = SVG path data or `star(5,200,80)` / `polygon(6,150)` / `circle(r)` / `ellipse(rx,ry)` / `rect(w,h,r)`,
   fill, stroke, fillRule, lineCap, lineJoin),
   `text` (text, fontSize, fontWeight, fontName = any installed font, a font file in the asset library, or a Google
   font imported with `search_stock`/`import_stock` kind `font`; color, align, maxWidth), `image` (path, width, height),
   `video` (path to a .mov/.mp4 or a folder of numbered images, width, height, trimIn, speed,
-  playback `once`/`hold`/`loop`, fps for image sequences), `particles` (see below).
+  playback `once`/`hold`/`loop`, fps for image sequences), `particles` (see below), `generator` (audio
+  `spectrum`/`waveform` visualizers in bars, line or circle; fractal `noise`; `lightning`; `grid`).
 - **Particles**: `{"type": "particles", "x": 960, "y": 900, "width": 220, "height": 0, "particles": {"preset": "fire"}}`.
   Presets: `fire`, `smoke`, `dust`, `sparks`, `snow`, `rain`, `confetti`, `bokeh`, `magic`, `explosion`; any field
   overrides the preset (rate, bursts, lifetime, speed, direction, spread, gravity, wind, drag, turbulence, floor/bounce,

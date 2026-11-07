@@ -90,7 +90,9 @@ public final class FrameRenderer {
     // MARK: - Layers
 
     /// Draws a layer with its track matte and repeater copies. `depth` limits mattes of mattes.
-    private func renderLayer(_ layer: MotionLayer, scene: MotionScene, at t: Double, in ctx: CGContext, depth: Int = 0) {
+    private func renderLayer(_ layer: MotionLayer, scene: MotionScene, at time: Double, in ctx: CGContext, depth: Int = 0) {
+        // Posterize time: the layer only changes `posterizeTime` times a second.
+        let t = layer.posterizeTime.map { fps in floor(time * fps + 1e-6) / fps } ?? time
         let rep = layer.repeater
         let n = rep.map { min(max($0.count, 1), Repeater.maxCount) } ?? 1
         let delay = rep?.delay ?? 0
@@ -254,6 +256,10 @@ public final class FrameRenderer {
         let opacity = min(max(layer.value(.opacity, at: t), 0), 1) * alphaScale
         guard opacity > 0.001 else { return }
         var m = transform(of: layer, scene: scene, at: t, copy: copy)
+        let wipe = layer.value(.wipe, at: t)
+        guard wipe < 0.9999 else { return }
+        // The wipe is in the layer's own space, also for world-space particles.
+        let wipeTransform = m
         if layer.type == .particles {
             currentParticles = scene.particles(of: layer, at: t) { [unowned self] src, tb, r1, r2, edge in
                 self.emitPoint(on: src, at: tb, r1, r2, edge)
@@ -264,14 +270,23 @@ public final class FrameRenderer {
         }
         guard abs(m.a * m.d - m.b * m.c) > 1e-8 else { return } // scaled to nothing
         let blur = max(0, layer.value(.blur, at: t))
+        let fx = PixelEffects(layer, at: t, fps: scene.fps)
+
+        // The wipe clips everything the layer draws: shadow, blur and glow included.
+        ctx.saveGState()
+        defer { ctx.restoreGState() }
+        if wipe > 0.0001 {
+            guard clipToWipe(layer, progress: wipe, scene: scene, transform: wipeTransform, at: t, copy: copy, in: ctx)
+            else { return }
+        }
 
         ctx.saveGState()
         ctx.setBlendMode(layer.blendMode.cgBlendMode)
         let shadowReach = applyShadow(layer, at: t, in: ctx)
         ctx.setAlpha(opacity)
-        if blur * pixelScale > 0.25 {
-            // The blurred layer is a device-pixel image of part of the frame: draw it 1:1 at its place.
-            if let blurred = blurredLayer(layer, scene: scene, transform: m, radius: blur, at: t) {
+        if blur * pixelScale > 0.25 || fx.isActive {
+            // The blurred or processed layer is a device-pixel image of part of the frame: draw it 1:1 at its place.
+            if let blurred = blurredLayer(layer, scene: scene, transform: m, radius: blur, fx: fx, at: t) {
                 drawDeviceImage(blurred.image, rect: blurred.rect, scene: scene, in: ctx)
             }
         } else {
@@ -292,15 +307,74 @@ public final class FrameRenderer {
             if grouped { ctx.endTransparencyLayer() }
         }
         ctx.restoreGState()
-        drawGlow(layer, scene: scene, transform: m, opacity: opacity, at: t, in: ctx)
+        drawGlow(layer, scene: scene, transform: m, opacity: opacity, fx: fx.isActive ? fx : nil, at: t, in: ctx)
+    }
+
+    /// Clips `ctx` (in scene space) to what the layer's wipe leaves visible. Returns false when nothing is.
+    private func clipToWipe(_ layer: MotionLayer, progress: Double, scene: MotionScene, transform m: CGAffineTransform,
+                            at t: Double, copy: CGAffineTransform?, in ctx: CGContext) -> Bool {
+        let style = layer.wipeStyle ?? WipeStyle()
+        var toScene = m
+        guard let region = style.visibleRegion(progress: progress, box: wipeBox(layer, scene: scene, at: t))?
+            .copy(using: &toScene) else { return false }
+        // Scene px per layer px, to turn the feather into a blur radius.
+        let scale = abs(m.a * m.d - m.b * m.c).squareRoot()
+        let sigma = style.feather * scale * pixelScale / 2
+        guard Self.boxSize(sigma) != nil else {
+            ctx.addPath(region)
+            ctx.clip(using: .evenOdd)
+            return true
+        }
+        // Soft edge: the region as a blurred gray mask over the area the layer can reach.
+        let (w, h) = pixelSize
+        let frame = CGRect(x: 0, y: 0, width: w, height: h)
+        let reach = Double(Self.blurReach(sigma))
+        let area = (motionBounds(layer, scene: scene, times: [t], copy: copy) ?? frame)
+            .insetBy(dx: -reach, dy: -reach).integral.intersection(frame)
+        guard !area.isNull, area.width >= 1, area.height >= 1, let off = offscreen(area, scene: scene) else { return false }
+        off.addPath(region)
+        off.setFillColor(CGColor(gray: 1, alpha: 1))
+        off.fillPath(using: .evenOdd)
+        Self.boxBlur(off, sigma: sigma)
+        guard let mask = Self.grayMask(off, luma: false, invert: false) else { return false }
+        // Same flip as for mattes: the mask is in device pixels with y pointing up.
+        let sx = Double(scene.width) / Double(w), sy = Double(scene.height) / Double(h)
+        let flip = CGAffineTransform(a: 1, b: 0, c: 0, d: -1, tx: 0, ty: CGFloat(scene.height))
+        ctx.concatenate(flip)
+        ctx.clip(to: CGRect(x: area.minX * sx, y: area.minY * sy, width: area.width * sx, height: area.height * sy), mask: mask)
+        ctx.concatenate(flip)
+        return true
+    }
+
+    /// Layer-local box a wipe sweeps across: what the layer shows, without the padding `contentBounds` adds.
+    private func wipeBox(_ layer: MotionLayer, scene: MotionScene, at t: Double) -> CGRect {
+        switch layer.type {
+        case .rect, .ellipse, .particles, .generator:
+            let w = max(layer.shapeWidth(at: t), 0), h = max(layer.shapeHeight(at: t), 0)
+            if layer.type == .particles, w < 1 || h < 1 { return particleBounds(layer) }
+            return CGRect(x: -w / 2, y: -h / 2, width: w, height: h)
+        case .path:
+            return layer.pathShape(at: t).cgPath.boundingBoxOfPath
+        case .image, .video:
+            return imageFrame(layer, at: t).rect
+        case .text:
+            if let box = textLayout(layer, at: t)?.box {
+                return CGRect(x: -box.width / 2, y: -box.height / 2, width: box.width, height: box.height)
+            }
+        case .audio:
+            break
+        }
+        return CGRect(x: -Double(scene.width) / 2, y: -Double(scene.height) / 2,
+                      width: Double(scene.width), height: Double(scene.height))
     }
 
     /// Light added on top of the layer: its blurred copy (or that shape in `glowColor`), `glow` times over.
     private func drawGlow(_ layer: MotionLayer, scene: MotionScene, transform m: CGAffineTransform, opacity: Double,
-                          at t: Double, in ctx: CGContext) {
+                          fx: PixelEffects?, at t: Double, in ctx: CGContext) {
         let strength = min(max(layer.value(.glow, at: t), 0), 4)
         guard strength > 0.001,
-              let g = blurredLayer(layer, scene: scene, transform: m, radius: max(1, layer.value(.glowRadius, at: t)), at: t)
+              let g = blurredLayer(layer, scene: scene, transform: m, radius: max(1, layer.value(.glowRadius, at: t)),
+                                   fx: fx, at: t)
         else { return }
         var image = g.image
         if let tint = layer.glowColor, let off = Self.bitmap(image.width, image.height) {
@@ -329,7 +403,46 @@ public final class FrameRenderer {
         case .text: drawText(layer, at: t, in: ctx)
         case .image, .video: drawImage(layer, at: t, in: ctx)
         case .particles: drawParticles(layer, alpha: alpha, in: ctx)
+        case .generator: drawGenerator(layer, at: t, in: ctx)
         case .audio: break
+        }
+    }
+
+    /// Generator layers: a filled outline (spectrum, waveform, lightning, grid) or a noise image, in the layer's box.
+    private func drawGenerator(_ layer: MotionLayer, at t: Double, in ctx: CGContext) {
+        let g = layer.generator
+        let w = max(layer.shapeWidth(at: t), 0), h = max(layer.shapeHeight(at: t), 0)
+        guard w > 0, h > 0 else { return }
+        let box = CGRect(x: -w / 2, y: -h / 2, width: w, height: h)
+        if g.kind == .noise {
+            // About one sample per 3 device pixels: noise is smooth, so it is drawn scaled up with interpolation.
+            let scale = abs(ctx.ctm.a * ctx.ctm.d - ctx.ctm.b * ctx.ctm.c).squareRoot()
+            let step = 3.0
+            let iw = min(max(Int((w * scale / step).rounded(.up)), 2), 1024)
+            let ih = min(max(Int((h * scale / step).rounded(.up)), 2), 1024)
+            guard let img = g.noiseImage(width: iw, height: ih, box: box, at: t, layerId: layer.id) else { return }
+            ctx.saveGState()
+            ctx.interpolationQuality = .high
+            ctx.translateBy(x: box.minX, y: box.maxY)
+            ctx.scaleBy(x: 1, y: -1)
+            ctx.draw(img, in: CGRect(origin: .zero, size: box.size))
+            ctx.restoreGState()
+            return
+        }
+        let width = layer.value(.strokeWidth, at: t)
+        let line = width > 0 ? width : (g.kind == .grid ? 2 : 4)
+        guard let path = g.path(in: box, at: t, line: line, radius: max(0, layer.value(.cornerRadius, at: t)),
+                                layerId: layer.id), !path.isEmpty else { return }
+        if let grad = layer.gradient {
+            ctx.saveGState()
+            ctx.addPath(path)
+            ctx.clip()
+            drawGradient(grad, in: box, at: t, in: ctx)
+            ctx.restoreGState()
+        } else if let fill = layer.color(.fill, at: t), fill.a > 0 {
+            ctx.addPath(path)
+            ctx.setFillColor(fill.cgColor)
+            ctx.fillPath()
         }
     }
 
@@ -347,27 +460,51 @@ public final class FrameRenderer {
         return max(abs(x), abs(y)) + 2 * blur
     }
 
-    /// Renders the layer alone and applies a gaussian blur (radius in scene pixels). Returns the blurred image and
-    /// the device-pixel rect of the frame it covers (bottom-left origin), or nil if nothing of it is in frame.
+    /// Renders the layer alone, applies its pixel effects and a gaussian blur (radius in scene pixels, 0 = none).
+    /// Returns the image and the device-pixel rect of the frame it covers (bottom-left origin), or nil if nothing of
+    /// it is in frame.
     private func blurredLayer(_ layer: MotionLayer, scene: MotionScene, transform m: CGAffineTransform,
-                              radius: Double, at t: Double) -> (image: CGImage, rect: CGRect)? {
+                              radius: Double, fx: PixelEffects? = nil, at t: Double) -> (image: CGImage, rect: CGRect)? {
         let (w, h) = pixelSize
         let sigma = radius * pixelScale / 2
         let frame = CGRect(x: 0, y: 0, width: w, height: h)
-        // Only the area the layer can reach once blurred, rather than the whole frame.
+        let toDevice = m.concatenating(CGAffineTransform(a: Double(w) / Double(scene.width), b: 0, c: 0,
+                                                         d: -Double(h) / Double(scene.height), tx: 0, ty: Double(h)))
+        // Device pixels per layer px.
+        let scale = abs(m.a * m.d - m.b * m.c).squareRoot() * pixelScale
+        // Only the area the layer can reach once blurred and processed, rather than the whole frame.
         var area = frame
         if let local = contentBounds(layer, at: t) {
-            let toDevice = m.concatenating(CGAffineTransform(a: Double(w) / Double(scene.width), b: 0, c: 0,
-                                                             d: -Double(h) / Double(scene.height), tx: 0, ty: Double(h)))
+            var box = local
+            if let fx {
+                let r = fx.reach(width: local.width)
+                box = box.insetBy(dx: -r, dy: -r)
+                // Twirl and bulge pull pixels around anywhere inside their radius.
+                if fx.twirl != 0 || fx.bulge != 0 {
+                    box = box.union(CGRect(x: -fx.radius, y: -fx.radius, width: 2 * fx.radius, height: 2 * fx.radius))
+                }
+                // Zoom blur smears outward from the origin, up to 1 / (1 - amount) times as far.
+                if fx.zoomBlur > 0.001 {
+                    let k = 1 / (1 - fx.zoomBlur)
+                    box = box.union(box.applying(CGAffineTransform(scaleX: k, y: k)))
+                }
+            }
             let reach = Double(Self.blurReach(sigma))
-            area = local.applying(toDevice).insetBy(dx: -reach, dy: -reach).integral.intersection(frame)
+            area = box.applying(toDevice).insetBy(dx: -reach, dy: -reach).integral.intersection(frame)
         }
         guard !area.isNull, area.width >= 1, area.height >= 1, let off = offscreen(area, scene: scene) else { return nil }
+        off.saveGState()
         off.concatenate(m)
         // Particles add up among themselves before the blurred result is blended with the frame.
         if layer.type == .particles { off.setBlendMode(layer.blendMode.cgBlendMode) }
         drawContent(layer, at: t, in: off)
+        off.restoreGState()
+        // The layer's origin in bitmap pixels (y down).
+        let o = CGPoint.zero.applying(toDevice)
+        let center = CGPoint(x: o.x - area.minX, y: area.maxY - o.y)
+        fx?.applyBeforeBlur(off, center: center, scale: scale)
         Self.boxBlur(off, sigma: sigma)
+        fx?.applyAfterBlur(off, center: center, scale: scale, pixelScale: pixelScale)
         guard let image = off.makeImage() else { return nil }
         return (image, area)
     }
@@ -394,6 +531,17 @@ public final class FrameRenderer {
                 .insetBy(dx: -pad, dy: -pad)
         case .particles:
             return particleBounds(layer)
+        case .generator:
+            let w = max(layer.shapeWidth(at: t), 0), h = max(layer.shapeHeight(at: t), 0)
+            var box = CGRect(x: -w / 2, y: -h / 2, width: w, height: h)
+            let g = layer.generator
+            if g.kind == .lightning {
+                // The bolt strays up to about twice `scale` from the line between its ends, which may lie outside.
+                for p in [g.from, g.to].compactMap({ $0 }) { box = box.union(CGRect(x: p.x, y: p.y, width: 0, height: 0)) }
+                let pad = 2 * g.spread(length: max(box.width, box.height))
+                box = box.insetBy(dx: -pad, dy: -pad)
+            }
+            return box.insetBy(dx: -max(layer.value(.strokeWidth, at: t), 4), dy: -max(layer.value(.strokeWidth, at: t), 4))
         case .audio:
             return nil
         }

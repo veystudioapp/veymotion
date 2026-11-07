@@ -102,6 +102,14 @@ struct ContentView: View {
                         Label("Particles", systemImage: "sparkles")
                     }
                     .help("Add particles: fire, smoke, dust, sparks, snow…")
+                    Menu {
+                        ForEach(GeneratorKind.allCases, id: \.self) { k in
+                            Button(k.title) { store.addGenerator(k) }
+                        }
+                    } label: {
+                        Label("Generate", systemImage: "waveform.path.ecg")
+                    }
+                    .help("Add a generator: audio spectrum, waveform, fractal noise, lightning, grid")
                     Button { store.addAudioLayer() } label: { Label("Audio", systemImage: "music.note") }
                         .help("Add audio file")
                     Button { showVoice = true } label: { Label("Voice-over", systemImage: "mic") }

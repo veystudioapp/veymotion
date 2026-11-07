@@ -490,6 +490,7 @@ extension LayerType {
         case .video: return "film"
         case .audio: return "waveform"
         case .particles: return "sparkles"
+        case .generator: return "waveform.path.ecg"
         }
     }
 }

@@ -260,9 +260,41 @@ final class SceneStore: SceneHost {
             l.role = (l.sourceDuration ?? 0) > 20 ? .music : .sfx
             if l.role == .music { l.duckTo = 0.3; l.fadeOut = 1.5 }
         case .particles: break
+        case .generator: return addGenerator(.spectrum)
         }
         var id = ""
         apply("Add Layer") { id = $0.addLayer(l) }
+        selection = id
+    }
+
+    /// Adds a generator sized for its kind: visualizers along the bottom, noise over the whole frame.
+    func addGenerator(_ kind: GeneratorKind) {
+        let w = Double(scene.width), h = Double(scene.height)
+        var l = MotionLayer(id: kind.rawValue, name: kind.title, type: .generator, x: w / 2, y: h / 2)
+        l.generator = Generator(kind: kind)
+        switch kind {
+        case .spectrum, .waveform:
+            l.width = .constant((w * 0.7).rounded()); l.height = .constant((h * 0.25).rounded())
+            l.y = .constant((h * 0.75).rounded())
+            l.fill = .constant(RGBA(hex: "#4FD1C5")!)
+            l.cornerRadius = .constant(4)
+        case .noise:
+            l.width = .constant(w); l.height = .constant(h)
+            l.generator.colors = [RGBA(hex: "#0B1026")!, RGBA(hex: "#3B2C85")!, RGBA(hex: "#F0A6CA")!]
+        case .lightning:
+            l.width = .constant((w * 0.5).rounded()); l.height = .constant((h * 0.2).rounded())
+            l.fill = .constant(RGBA(hex: "#CFE8FF")!)
+            l.strokeWidth = .constant(3)
+            l[.glow] = .constant(1.5)
+            l.glowColor = RGBA(hex: "#5AA9FF")
+        case .grid:
+            l.width = .constant(w); l.height = .constant(h)
+            l.fill = .constant(RGBA(hex: "#FF2E9A99")!)
+            l.strokeWidth = .constant(2)
+        }
+        l.start = time
+        var id = ""
+        apply("Add \(kind.title)") { id = $0.addLayer(l) }
         selection = id
     }
 
