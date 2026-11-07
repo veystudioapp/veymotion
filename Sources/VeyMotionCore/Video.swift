@@ -61,6 +61,12 @@ extension MotionLayer {
     /// Seconds into the source shown at scene time t (after trimIn, speed and playback), or nil if nothing is shown.
     public func videoTime(at t: Double) -> Double? {
         guard type == .video else { return nil }
+        if timeRemap != nil {
+            // Keyframed source time: hold before the first key, after the last, and clamp to the clip.
+            var s = max(0, value(.timeRemap, at: t))
+            if let total = sourceDuration, total > 0 { s = min(s, max(0, total - 1e-4)) }
+            return s
+        }
         var s = trimIn + max(0, t - start) * speed
         guard let total = sourceDuration, total > 0 else { return s }
         let lastFrame = max(0, total - 1e-4)

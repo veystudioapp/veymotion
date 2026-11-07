@@ -72,7 +72,7 @@ public struct Wiggle: Codable, Equatable, Hashable, Sendable {
 
 // MARK: - Audio react
 
-/// Where an audio layer's file plays in the scene. Filled in by `MotionScene.resolveAudioLinks`, not saved.
+/// Where an audio layer's file plays in the scene. Filled in by `MotionScene.resolveLinks`, not saved.
 public struct AudioLink: Equatable, Hashable, Sendable {
     public var path: String
     public var start: Double
@@ -279,17 +279,24 @@ public struct TextAnimator: Codable, Equatable, Hashable, Sendable {
     public var scale: Double
     /// Degrees.
     public var rotation: Double
+    /// Blur (px) and color of the away state (nil color = the text's own).
+    public var blur: Double
+    public var color: RGBA?
     public var seed: Int
 
     public init(unit: TextUnit = .char, mode: AnimatorMode = .in, start: Double = 0, duration: Double = 0.5,
                 stagger: Double = 0.04, order: StaggerOrder = .forward, easing: Easing? = nil,
-                opacity: Double = 0, x: Double = 0, y: Double = 0, scale: Double = 1, rotation: Double = 0, seed: Int = 0) {
+                opacity: Double = 0, x: Double = 0, y: Double = 0, scale: Double = 1, rotation: Double = 0,
+                blur: Double = 0, color: RGBA? = nil, seed: Int = 0) {
         self.unit = unit; self.mode = mode; self.start = start; self.duration = duration; self.stagger = stagger
         self.order = order; self.easing = easing ?? (mode == .in ? .easeOut : .easeIn)
-        self.opacity = opacity; self.x = x; self.y = y; self.scale = scale; self.rotation = rotation; self.seed = seed
+        self.opacity = opacity; self.x = x; self.y = y; self.scale = scale; self.rotation = rotation
+        self.blur = blur; self.color = color; self.seed = seed
     }
 
-    enum CodingKeys: String, CodingKey { case unit, mode, start, duration, stagger, order, easing, opacity, x, y, scale, rotation, seed }
+    enum CodingKeys: String, CodingKey {
+        case unit, mode, start, duration, stagger, order, easing, opacity, x, y, scale, rotation, blur, color, seed
+    }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -306,7 +313,28 @@ public struct TextAnimator: Codable, Equatable, Hashable, Sendable {
                   y: try c.decodeIfPresent(Double.self, forKey: .y) ?? 0,
                   scale: try c.decodeIfPresent(Double.self, forKey: .scale) ?? 1,
                   rotation: try c.decodeIfPresent(Double.self, forKey: .rotation) ?? 0,
+                  blur: max(0, try c.decodeIfPresent(Double.self, forKey: .blur) ?? 0),
+                  color: try c.decodeIfPresent(RGBA.self, forKey: .color),
                   seed: try c.decodeIfPresent(Int.self, forKey: .seed) ?? 0)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(unit, forKey: .unit)
+        try c.encode(mode, forKey: .mode)
+        try c.encode(start, forKey: .start)
+        try c.encode(duration, forKey: .duration)
+        try c.encode(stagger, forKey: .stagger)
+        if order != .forward { try c.encode(order, forKey: .order) }
+        try c.encode(easing, forKey: .easing)
+        if opacity != 0 { try c.encode(opacity, forKey: .opacity) }
+        if x != 0 { try c.encode(x, forKey: .x) }
+        if y != 0 { try c.encode(y, forKey: .y) }
+        if scale != 1 { try c.encode(scale, forKey: .scale) }
+        if rotation != 0 { try c.encode(rotation, forKey: .rotation) }
+        if blur != 0 { try c.encode(blur, forKey: .blur) }
+        try c.encodeIfPresent(color, forKey: .color)
+        if seed != 0 { try c.encode(seed, forKey: .seed) }
     }
 
     /// When the last unit finishes.
@@ -345,6 +373,10 @@ public struct GlyphState: Equatable {
     public var dy = 0.0
     public var scale = 1.0
     public var rotation = 0.0
+    /// Blur in px.
+    public var blur = 0.0
+    /// Color mixed over the text's own (with its alpha as the mix).
+    public var tint: RGBA?
 
     public static let rest = GlyphState()
     public var isRest: Bool { self == .rest }
@@ -363,6 +395,12 @@ extension MotionLayer {
                 states[i].dy += a.y * k
                 states[i].scale *= 1 + (a.scale - 1) * k
                 states[i].rotation += a.rotation * k
+                states[i].blur += a.blur * k
+                if let c = a.color, k > 0.001 {
+                    var mixed = c
+                    mixed.a = c.a * min(k, 1)
+                    states[i].tint = states[i].tint.map { RGBA.lerp($0, mixed, 0.5) } ?? mixed
+                }
             }
         }
         return states
@@ -432,9 +470,19 @@ extension MotionLayer {
 }
 
 extension MotionScene {
-    /// Maps a layer's local coordinates to scene pixels, through its chain of parents.
+    /// Maps a layer's local coordinates to framed scene pixels: through its chain of parents, then the camera.
     public func worldTransform(of layer: MotionLayer, at t: Double) -> CGAffineTransform {
-        var m = layer.localTransform(at: t)
+        sceneTransform(of: layer, at: t).concatenating(cameraTransform(for: layer, at: t))
+    }
+
+    /// Maps a layer's local coordinates to scene pixels before the camera (where world-space particles live).
+    public func sceneTransform(of layer: MotionLayer, at t: Double) -> CGAffineTransform {
+        layer.localTransform(at: t).concatenating(ancestorsTransform(of: layer, at: t))
+    }
+
+    /// The chain of parents' transforms (identity without a parent), before the camera.
+    func ancestorsTransform(of layer: MotionLayer, at t: Double) -> CGAffineTransform {
+        var m = CGAffineTransform.identity
         var seen: Set<String> = [layer.id]
         var next = layer.parent
         while let pid = next, !seen.contains(pid), let p = layers.first(where: { $0.id == pid }) {
@@ -445,11 +493,9 @@ extension MotionScene {
         return m
     }
 
-    /// The parent's world transform (identity without a parent).
+    /// Everything around a layer's own transform: its parents, then the camera as seen at its depth.
     public func parentTransform(of layer: MotionLayer, at t: Double) -> CGAffineTransform {
-        guard let pid = layer.parent, let p = layers.first(where: { $0.id == pid }), pid != layer.id else { return .identity }
-        if isAncestor(layer.id, of: pid) { return .identity }
-        return worldTransform(of: p, at: t)
+        ancestorsTransform(of: layer, at: t).concatenating(cameraTransform(for: layer, at: t))
     }
 
     /// True if `a` is `b` or one of `b`'s parents.

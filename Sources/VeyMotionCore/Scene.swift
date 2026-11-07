@@ -1,7 +1,7 @@
 import Foundation
 
 public enum LayerType: String, Codable, CaseIterable, Sendable {
-    case rect, ellipse, path, text, image, video, audio, particles, generator
+    case rect, ellipse, path, text, image, video, audio, particles, generator, group
 
     /// Drawn in the frame (audio layers are not).
     public var isVisual: Bool { self != .audio }
@@ -61,6 +61,19 @@ public enum AnimProperty: String, Codable, CaseIterable, Sendable {
     case posterize, pixelate, rgbSplit, glitch, grain, scanlines, vignette
     /// Blur along a direction (length px, blurAngle degrees) and toward the layer's center (0…1).
     case directionalBlur, blurAngle, zoomBlur
+    /// Text: the number shown in place of "{n}"; scramble (0…1 of the letters shown as random ones); offset along
+    /// `textPath` in px.
+    case counter, scramble, textOffset
+    /// Light: a bright band sweeping the layer (shine strength 0…2, shinePosition -0.5…1.5 across the box,
+    /// shineAngle degrees, shineWidth px), rays of light streaking out of its bright parts (rays strength,
+    /// raysLength 0…0.95), an outline around its alpha (px) and a glow inside its edges (strength, radius px).
+    case shine, shinePosition, shineAngle, shineWidth, rays, raysLength, outline, innerGlow, innerGlowRadius
+    /// Path operators (shapes): offsetPath (px, + grows), zigzag (amplitude px, ridges every waveLength/2),
+    /// wigglePath (amplitude px, bumps every waveLength/2, evolving with waveSpeed), pucker (-1 bloat … 1 pucker),
+    /// dashOffset (px along the dash pattern), taperStart/taperEnd (0…1 of the stroke thinning to a point).
+    case offsetPath, zigzag, wigglePath, pucker, dashOffset, taperStart, taperEnd
+    /// Video: the source second shown (keyframed: speed ramps, freeze frames, reverse). Replaces speed/trimIn.
+    case timeRemap
 
     /// Value a layer has when the property is not set.
     public var defaultValue: Double {
@@ -78,6 +91,11 @@ public enum AnimProperty: String, Codable, CaseIterable, Sendable {
         case .waveLength: return 120
         case .waveSpeed: return 1
         case .distortRadius: return 300
+        case .shineAngle: return 30
+        case .shineWidth: return 120
+        case .shinePosition: return 0.5
+        case .raysLength: return 0.6
+        case .innerGlowRadius: return 20
         default: return 0
         }
     }
@@ -90,7 +108,11 @@ public enum AnimProperty: String, Codable, CaseIterable, Sendable {
                                          .brightness, .contrast, .saturation, .hue, .tint, .wipe,
                                          .keyTolerance, .keySoftness, .waveWarp, .ripple, .waveLength, .waveSpeed,
                                          .twirl, .bulge, .distortRadius, .turbulence, .posterize, .pixelate, .rgbSplit,
-                                         .glitch, .grain, .scanlines, .vignette, .directionalBlur, .blurAngle, .zoomBlur]
+                                         .glitch, .grain, .scanlines, .vignette, .directionalBlur, .blurAngle, .zoomBlur,
+                                         .counter, .scramble, .textOffset,
+                                         .shine, .shinePosition, .shineAngle, .shineWidth, .rays, .raysLength, .outline,
+                                         .innerGlow, .innerGlowRadius, .offsetPath, .zigzag, .wigglePath, .pucker,
+                                         .dashOffset, .taperStart, .taperEnd]
 
     public var title: String {
         switch self {
@@ -152,6 +174,26 @@ public enum AnimProperty: String, Codable, CaseIterable, Sendable {
         case .directionalBlur: return "Directional Blur"
         case .blurAngle: return "Blur Angle"
         case .zoomBlur: return "Zoom Blur"
+        case .counter: return "Counter"
+        case .scramble: return "Scramble"
+        case .textOffset: return "Path Offset"
+        case .shine: return "Shine"
+        case .shinePosition: return "Shine Position"
+        case .shineAngle: return "Shine Angle"
+        case .shineWidth: return "Shine Width"
+        case .rays: return "Light Rays"
+        case .raysLength: return "Rays Length"
+        case .outline: return "Outline"
+        case .innerGlow: return "Inner Glow"
+        case .innerGlowRadius: return "Inner Glow Radius"
+        case .offsetPath: return "Offset Path"
+        case .zigzag: return "Zigzag"
+        case .wigglePath: return "Wiggle Path"
+        case .pucker: return "Pucker"
+        case .dashOffset: return "Dash Offset"
+        case .taperStart: return "Taper Start"
+        case .taperEnd: return "Taper End"
+        case .timeRemap: return "Time Remap"
         }
     }
 
@@ -161,7 +203,8 @@ public enum AnimProperty: String, Codable, CaseIterable, Sendable {
         case .scale, .scaleX, .scaleY, .opacity, .trim, .trimStart, .trimOffset, .reveal, .shadowOpacity, .glow,
              .pathProgress, .volume, .emission, .particleSpeed, .particleSize,
              .brightness, .contrast, .saturation, .tint, .wipe, .keyTolerance, .keySoftness, .waveSpeed, .bulge,
-             .glitch, .grain, .scanlines, .vignette, .zoomBlur: return true
+             .glitch, .grain, .scanlines, .vignette, .zoomBlur, .scramble, .shine, .shinePosition, .rays, .raysLength,
+             .innerGlow, .pucker, .taperStart, .taperEnd: return true
         default: return false
         }
     }
@@ -248,6 +291,21 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
     public var tintColor: RGBA?
     /// Shape of the `wipe` transition (nil = linear, left to right).
     public var wipeStyle: WipeStyle?
+    /// Camera parallax: 0 = moves with the camera as drawn, 1 = half as much (far away), -0.5 = twice as much (close).
+    public var depth: Double
+    /// Ignores the camera (HUD, captions, watermarks).
+    public var fixed: Bool
+    /// Properties driven by another layer's property (one hop), keyed by property name.
+    public var links: [String: PropertyLink]
+    /// Group: the layers inside it, drawn in its box (scene-sized unless width/height are set) with the group's
+    /// center at the box's center; their x/y are in that box like in a scene, their times are scene times.
+    public var children: [MotionLayer]
+    /// Colors of the shine band, the outline and the inner glow (nil = white).
+    public var shineColor: RGBA?
+    public var outlineColor: RGBA?
+    public var innerGlowColor: RGBA?
+    /// Stroke dash pattern in px (on, off, …); empty = solid.
+    public var dash: [Double]
     /// Color keyed out (green/blue screen); nil = no keying.
     public var keyColor: RGBA?
     /// Plays the layer's animation at this many frames per second (stop-motion look); nil = every frame.
@@ -277,6 +335,11 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
     public var maxWidth: Double?
     /// Per-character / word / line animations (staggered entrances and exits).
     public var textAnimators: [TextAnimator]
+    /// Decimals of the `counter` number shown for "{n}", and whether thousands are grouped ("1,234").
+    public var counterDecimals: Int
+    public var counterGrouping: Bool
+    /// The text runs along this path (layer px around the layer's center) instead of in lines.
+    public var textPath: MotionPath?
 
     // Image / video / audio file (a video can also be a folder of numbered images; particles: the sprite image)
     public var path: String?
@@ -294,6 +357,8 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
     public var playback: VideoPlayback
     /// Image sequences: frames per second of the images (set from the scene when the layer is added).
     public var fps: Double?
+    /// Source seconds shown over time (nil = play through speed/trimIn).
+    public var timeRemap: AnimValue?
 
     // Audio
     /// Gain (1 = original level), animatable.
@@ -338,6 +403,14 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         gradient = nil
         tintColor = nil
         wipeStyle = nil
+        depth = 0
+        fixed = false
+        links = [:]
+        children = []
+        shineColor = nil
+        outlineColor = nil
+        innerGlowColor = nil
+        dash = []
         keyColor = nil
         posterizeTime = nil
         width = nil
@@ -358,12 +431,16 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         align = .center
         maxWidth = nil
         textAnimators = []
+        counterDecimals = 0
+        counterGrouping = false
+        textPath = nil
         path = nil
         particles = ParticleSystem()
         generator = Generator()
         speed = 1
         playback = .once
         fps = nil
+        timeRemap = nil
         volume = .constant(1)
         role = .sfx
         trimIn = 0
@@ -387,6 +464,7 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
             case .volume: return volume
             case .width: return width ?? .constant(type.hasNaturalSize ? 0 : p.defaultValue)
             case .height: return height ?? .constant(type.hasNaturalSize ? 0 : p.defaultValue)
+            case .timeRemap: return timeRemap ?? .constant(0)
             case .cornerRadius: return cornerRadius
             case .strokeWidth: return strokeWidth
             default: return extra[p] ?? .constant(p.defaultValue)
@@ -403,6 +481,7 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
             case .volume: volume = newValue
             case .width: width = (type.hasNaturalSize && newValue == .constant(0)) ? nil : newValue
             case .height: height = (type.hasNaturalSize && newValue == .constant(0)) ? nil : newValue
+            case .timeRemap: timeRemap = newValue
             case .cornerRadius: cornerRadius = newValue
             case .strokeWidth: strokeWidth = newValue
             default: extra[p] = newValue == .constant(p.defaultValue) ? nil : newValue
@@ -427,9 +506,12 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         }
     }
 
-    /// Value of a property at time t, including loops, wiggle and audio react.
+    /// Value of a property at time t, including loops, wiggle, audio react and links to other layers.
     public func value(_ p: AnimProperty, at t: Double) -> Double {
-        self[p].value(at: t, loop: loop[p.rawValue]) + proceduralOffset(p, at: t)
+        if let link = links[p.rawValue], let track = link.track {
+            return track.value(at: t - link.delay) * link.multiply + link.add + proceduralOffset(p, at: t)
+        }
+        return self[p].value(at: t, loop: loop[p.rawValue]) + proceduralOffset(p, at: t)
     }
 
     /// What wiggle and audio react add to a property at time t.
@@ -456,11 +538,19 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         case .rect: list += [.width, .height, .cornerRadius, .strokeWidth, .trimStart, .trim, .trimOffset]
         case .ellipse: list += [.width, .height, .strokeWidth, .trimStart, .trim, .trimOffset]
         case .path: list += [.strokeWidth, .trimStart, .trim, .trimOffset]
-        case .text: list += [.reveal, .letterSpacing]
+        case .text:
+            list += [.reveal, .letterSpacing, .strokeWidth, .scramble]
+            if text.contains("{n}") { list.append(.counter) }
+            if textPath != nil { list.append(.textOffset) }
         case .image: list += [.width, .height]
-        case .video: list += [.width, .height, .volume]
+        case .video:
+            list += [.width, .height, .volume]
+            if timeRemap != nil { list.append(.timeRemap) }
         case .particles: list += [.width, .height, .emission, .particleSpeed, .particleSize]
-        case .generator: list += [.width, .height, .cornerRadius, .strokeWidth]
+        case .generator:
+            list += [.width, .height, .cornerRadius, .strokeWidth]
+            if generator.kind == .chart { list.append(.reveal) }
+        case .group: list += [.width, .height]
         case .audio: break
         }
         list += [.blur, .shadowX, .shadowY, .shadowBlur, .shadowOpacity, .glow, .glowRadius]
@@ -468,6 +558,11 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         list += [.posterize, .pixelate, .rgbSplit, .glitch, .grain, .scanlines, .vignette, .directionalBlur, .blurAngle,
                  .zoomBlur, .waveWarp, .ripple, .waveLength, .waveSpeed, .twirl, .bulge, .distortRadius, .turbulence]
         if keyColor != nil { list += [.keyTolerance, .keySoftness] }
+        list += [.shine, .shinePosition, .shineAngle, .shineWidth, .rays, .raysLength, .outline, .innerGlow, .innerGlowRadius]
+        if type.isShape {
+            list += [.offsetPath, .zigzag, .wigglePath, .pucker, .taperStart, .taperEnd]
+            if !dash.isEmpty { list.append(.dashOffset) }
+        }
         if motionPath != nil { list.append(.pathProgress) }
         return list
     }
@@ -475,8 +570,13 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
     public var applicableColors: [ColorProperty] {
         switch type {
         case .rect, .ellipse, .path: return [.fill, .stroke]
-        case .text: return [.color]
-        case .generator: return generator.kind == .noise ? [] : [.fill]
+        case .text: return [.color, .stroke]
+        case .generator:
+            switch generator.kind {
+            case .noise, .flare: return []
+            case .chart: return [.fill, .color]
+            default: return [.fill]
+            }
         default: return []
         }
     }
@@ -489,7 +589,7 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
     public var mediaLength: Double? {
         switch type {
         case .audio: return audioLength
-        case .video where playback == .once: return sourceDuration.map { max(0, $0 - trimIn) / max(speed, 0.01) }
+        case .video where playback == .once && timeRemap == nil: return sourceDuration.map { max(0, $0 - trimIn) / max(speed, 0.01) }
         default: return nil
         }
     }
@@ -616,11 +716,15 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         case brightness, contrast, saturation, hue, tint, tintColor, wipe, wipeStyle
         case keyColor, keyTolerance, keySoftness, waveWarp, ripple, waveLength, waveSpeed, twirl, bulge, distortRadius
         case turbulence, posterize, pixelate, rgbSplit, glitch, grain, scanlines, vignette, directionalBlur, blurAngle
-        case zoomBlur, posterizeTime
+        case zoomBlur, posterizeTime, depth, fixed, links, children, counterDecimals, counterGrouping, textPath
+        case counter, scramble, textOffset
+        case shine, shinePosition, shineAngle, shineWidth, rays, raysLength, outline, innerGlow, innerGlowRadius
+        case shineColor, outlineColor, innerGlowColor, dash
+        case offsetPath, zigzag, wigglePath, pucker, dashOffset, taperStart, taperEnd
         case parent, motionPath, loop, wiggle, audioReact, textAnimators
         case width, height, cornerRadius, fill, stroke, strokeWidth, lineCap, lineJoin, d, fillRule
         case text, fontSize, fontWeight, fontName, color, align, maxWidth
-        case path, speed, playback, fps
+        case path, speed, playback, fps, timeRemap
         case volume, role, trimIn, fadeIn, fadeOut, duckTo, sourceDuration, transcript, words
     }
 
@@ -672,6 +776,19 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         tintColor = try c.decodeIfPresent(RGBA.self, forKey: .tintColor)
         wipeStyle = try c.decodeIfPresent(WipeStyle.self, forKey: .wipeStyle)
         keyColor = try c.decodeIfPresent(RGBA.self, forKey: .keyColor)
+        shineColor = try c.decodeIfPresent(RGBA.self, forKey: .shineColor)
+        outlineColor = try c.decodeIfPresent(RGBA.self, forKey: .outlineColor)
+        innerGlowColor = try c.decodeIfPresent(RGBA.self, forKey: .innerGlowColor)
+        dash = (try c.decodeIfPresent([Double].self, forKey: .dash) ?? []).map { max(0, $0) }
+        if dash.allSatisfy({ $0 <= 0 }) { dash = [] }
+        depth = max(-0.9, try c.decodeIfPresent(Double.self, forKey: .depth) ?? 0)
+        fixed = try c.decodeIfPresent(Bool.self, forKey: .fixed) ?? false
+        links = try c.decodeIfPresent([String: PropertyLink].self, forKey: .links) ?? [:]
+        for k in links.keys where AnimProperty(rawValue: k) == nil {
+            throw DecodingError.dataCorruptedError(forKey: .links, in: c,
+                debugDescription: "Unknown property '\(k)' in links. Use one of \(AnimProperty.allCases.map(\.rawValue)).")
+        }
+        children = try c.decodeIfPresent([MotionLayer].self, forKey: .children) ?? []
         posterizeTime = try c.decodeIfPresent(Double.self, forKey: .posterizeTime).flatMap { $0 > 0 ? $0 : nil }
         width = try c.decodeIfPresent(AnimValue.self, forKey: .width)
         height = try c.decodeIfPresent(AnimValue.self, forKey: .height)
@@ -692,6 +809,9 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         align = try c.decodeIfPresent(TextAlign.self, forKey: .align) ?? align
         maxWidth = try c.decodeIfPresent(Double.self, forKey: .maxWidth)
         textAnimators = try c.decodeIfPresent([TextAnimator].self, forKey: .textAnimators) ?? []
+        counterDecimals = min(max(try c.decodeIfPresent(Int.self, forKey: .counterDecimals) ?? 0, 0), 6)
+        counterGrouping = try c.decodeIfPresent(Bool.self, forKey: .counterGrouping) ?? false
+        textPath = try c.decodeIfPresent(MotionPath.self, forKey: .textPath).flatMap { $0.points.count >= 2 ? $0 : nil }
         path = try c.decodeIfPresent(String.self, forKey: .path)
         speed = try c.decodeIfPresent(Double.self, forKey: .speed) ?? 1
         guard speed > 0 else {
@@ -699,6 +819,7 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         }
         playback = try c.decodeIfPresent(VideoPlayback.self, forKey: .playback) ?? .once
         fps = try c.decodeIfPresent(Double.self, forKey: .fps).flatMap { $0 > 0 ? $0 : nil }
+        timeRemap = try c.decodeIfPresent(AnimValue.self, forKey: .timeRemap)
         volume = try c.decodeIfPresent(AnimValue.self, forKey: .volume) ?? volume
         role = try c.decodeIfPresent(AudioRole.self, forKey: .role) ?? role
         trimIn = max(0, try c.decodeIfPresent(Double.self, forKey: .trimIn) ?? 0)
@@ -761,6 +882,13 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         try c.encodeIfPresent(tintColor, forKey: .tintColor)
         try c.encodeIfPresent(wipeStyle, forKey: .wipeStyle)
         try c.encodeIfPresent(keyColor, forKey: .keyColor)
+        try c.encodeIfPresent(shineColor, forKey: .shineColor)
+        try c.encodeIfPresent(outlineColor, forKey: .outlineColor)
+        try c.encodeIfPresent(innerGlowColor, forKey: .innerGlowColor)
+        if !dash.isEmpty && type.isShape { try c.encode(dash, forKey: .dash) }
+        if depth != 0 { try c.encode(depth, forKey: .depth) }
+        if fixed { try c.encode(fixed, forKey: .fixed) }
+        if !links.isEmpty { try c.encode(links, forKey: .links) }
         try c.encodeIfPresent(posterizeTime, forKey: .posterizeTime)
         if type.isShape || type == .text || type == .generator { try c.encodeIfPresent(gradient, forKey: .gradient) }
         try c.encodeIfPresent(parent, forKey: .parent)
@@ -790,6 +918,10 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
             try c.encode(align, forKey: .align)
             try c.encodeIfPresent(maxWidth, forKey: .maxWidth)
             if !textAnimators.isEmpty { try c.encode(textAnimators, forKey: .textAnimators) }
+            if stroke != nil { try c.encode(stroke, forKey: .stroke); try c.encode(strokeWidth, forKey: .strokeWidth) }
+            if counterDecimals != 0 { try c.encode(counterDecimals, forKey: .counterDecimals) }
+            if counterGrouping { try c.encode(counterGrouping, forKey: .counterGrouping) }
+            try c.encodeIfPresent(textPath, forKey: .textPath)
         case .image:
             try c.encodeIfPresent(path, forKey: .path)
             try c.encodeIfPresent(width, forKey: .width)
@@ -802,6 +934,7 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
             if speed != 1 { try c.encode(speed, forKey: .speed) }
             try c.encode(playback, forKey: .playback)
             try c.encodeIfPresent(fps, forKey: .fps)
+            try c.encodeIfPresent(timeRemap, forKey: .timeRemap)
             try c.encodeIfPresent(sourceDuration, forKey: .sourceDuration)
             if volume != .constant(1) { try c.encode(volume, forKey: .volume) }
             try c.encodeIfPresent(transcript, forKey: .transcript)
@@ -811,11 +944,22 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
             try c.encode(self[.height], forKey: .height)
             try c.encode(particles, forKey: .particles)
             try c.encodeIfPresent(path, forKey: .path)
+        case .group:
+            try c.encode(children, forKey: .children)
+            try c.encodeIfPresent(width, forKey: .width)
+            try c.encodeIfPresent(height, forKey: .height)
         case .generator:
             try c.encode(generator, forKey: .generator)
             try c.encode(self[.width], forKey: .width)
             try c.encode(self[.height], forKey: .height)
-            if generator.kind != .noise { try c.encode(fill, forKey: .fill) }
+            if generator.kind != .noise && generator.kind != .flare { try c.encode(fill, forKey: .fill) }
+            if generator.kind == .chart {
+                try c.encode(reveal, forKey: .reveal)
+                try c.encode(color, forKey: .color)
+                try c.encode(fontSize, forKey: .fontSize)
+                try c.encode(fontWeight, forKey: .fontWeight)
+                try c.encodeIfPresent(fontName, forKey: .fontName)
+            }
             if strokeWidth != .constant(0) { try c.encode(strokeWidth, forKey: .strokeWidth) }
             if cornerRadius != .constant(0) { try c.encode(cornerRadius, forKey: .cornerRadius) }
         }
@@ -826,17 +970,21 @@ public struct MotionScene: Codable, Equatable, Sendable {
     public var width: Int
     public var height: Int
     public var fps: Int
-    public var duration: Double { didSet { resolveAudioLinks() } }
+    public var duration: Double { didSet { resolveLinks() } }
     public var background: RGBA
+    /// Pans, zooms and turns the whole scene (nil = none). Layers with `depth` move less or more (parallax),
+    /// `fixed` layers not at all.
+    public var camera: Camera? { didSet { if camera != oldValue { resolveLinks() } } }
     /// Draw order: first is bottom-most.
-    /// Every change re-links `audioReact` to its audio layer, so `MotionLayer.value` can follow the music on its own.
-    public var layers: [MotionLayer] { didSet { resolveAudioLinks() } }
+    /// Every change re-links `audioReact` to its audio layer and `links` to their source tracks, so
+    /// `MotionLayer.value` can follow them on its own.
+    public var layers: [MotionLayer] { didSet { resolveLinks() } }
 
     public init(width: Int = 1920, height: Int = 1080, fps: Int = 30, duration: Double = 5,
                 background: RGBA = RGBA(hex: "#0E0E12")!, layers: [MotionLayer] = []) {
         self.width = width; self.height = height; self.fps = fps
         self.duration = duration; self.background = background; self.layers = layers
-        resolveAudioLinks()
+        resolveLinks()
     }
 
     /// The audio layer an `audioReact` follows when it names no source: the music, else the first audio layer.
@@ -845,16 +993,38 @@ public struct MotionScene: Codable, Equatable, Sendable {
         return audio.first { $0.role == .music } ?? audio.first
     }
 
-    /// Points every `audioReact` at its source audio layer's file and timing (nil when the source is missing).
-    mutating func resolveAudioLinks() {
-        guard layers.contains(where: { !$0.audioReact.isEmpty || ($0.type == .generator && $0.generator.usesAudio) })
-        else { return }
-        let audio = audioLayers
-        let fallback = defaultReactSource
+    /// Points every `audioReact` at its source audio layer's file and timing (nil when the source is missing), and
+    /// every property link at a copy of its source track.
+    mutating func resolveLinks() {
+        let all = allLayers
+        guard all.contains(where: {
+            !$0.audioReact.isEmpty || !$0.links.isEmpty || ($0.type == .generator && $0.generator.usesAudio)
+        }) else { return }
         // Resolved on a copy and assigned once: writing `layers` here re-enters this through `didSet`, and nesting
         // once per reaction overflowed the 512 KB stacks of background threads (project thumbnails).
         var resolved = layers
         var changed = false
+        Self.resolve(&resolved, audio: audioLayers, fallback: defaultReactSource, duration: duration,
+                     lookup: { id in Self.find(id, in: all) }, changed: &changed)
+        if changed { layers = resolved }
+    }
+
+    private static func resolve(_ resolved: inout [MotionLayer], audio: [MotionLayer], fallback: MotionLayer?,
+                                duration: Double, lookup: (String) -> MotionLayer?, changed: inout Bool) {
+        for i in resolved.indices where resolved[i].type == .group {
+            resolve(&resolved[i].children, audio: audio, fallback: fallback, duration: duration, lookup: lookup, changed: &changed)
+        }
+        for i in resolved.indices where !resolved[i].links.isEmpty {
+            for key in Array(resolved[i].links.keys) {
+                guard let link = resolved[i].links[key] else { continue }
+                var track: LinkedTrack?
+                if link.layer != resolved[i].id, let src = lookup(link.layer), let p = AnimProperty(rawValue: link.property) {
+                    track = LinkedTrack(value: src[p], loop: src.loop[p.rawValue], wiggle: src.wiggle[p.rawValue],
+                                        react: src.audioReact[p.rawValue], salt: Noise.hash("\(src.id).\(p.rawValue)"))
+                }
+                if resolved[i].links[key]?.track != track { resolved[i].links[key]?.track = track; changed = true }
+            }
+        }
         for i in resolved.indices where !resolved[i].audioReact.isEmpty {
             for key in Array(resolved[i].audioReact.keys) {
                 guard let react = resolved[i].audioReact[key] else { continue }
@@ -873,10 +1043,9 @@ public struct MotionScene: Codable, Equatable, Sendable {
             }
             if g.link != link { resolved[i].generator.link = link; changed = true }
         }
-        if changed { layers = resolved }
     }
 
-    enum CodingKeys: String, CodingKey { case width, height, fps, duration, background, layers }
+    enum CodingKeys: String, CodingKey { case width, height, fps, duration, background, camera, layers }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -887,9 +1056,10 @@ public struct MotionScene: Codable, Equatable, Sendable {
         duration = try c.decodeIfPresent(Double.self, forKey: .duration) ?? duration
         background = try c.decodeIfPresent(RGBA.self, forKey: .background) ?? background
         layers = try c.decodeIfPresent([MotionLayer].self, forKey: .layers) ?? []
+        camera = try c.decodeIfPresent(Camera.self, forKey: .camera)?.resolved(in: self)
         try validate()
         normalizeIds()
-        resolveAudioLinks()
+        resolveLinks()
     }
 
     public func validate() throws {
@@ -900,20 +1070,56 @@ public struct MotionScene: Codable, Equatable, Sendable {
         guard duration > 0, duration <= 600 else { throw SceneError.invalid("duration must be in (0, 600] seconds") }
     }
 
-    /// Gives every layer a unique, non-empty id.
+    /// Gives every layer (groups' children included) a unique, non-empty id.
     public mutating func normalizeIds() {
         var seen = Set<String>()
-        for i in layers.indices {
-            var id = layers[i].id.trimmingCharacters(in: .whitespaces)
-            if id.isEmpty { id = layers[i].type.rawValue }
+        Self.normalizeIds(&layers, seen: &seen)
+    }
+
+    static func normalizeIds(_ list: inout [MotionLayer], seen: inout Set<String>) {
+        for i in list.indices {
+            var id = list[i].id.trimmingCharacters(in: .whitespaces)
+            if id.isEmpty { id = list[i].type.rawValue }
             if seen.contains(id) {
                 var n = 2
                 while seen.contains("\(id)-\(n)") { n += 1 }
                 id = "\(id)-\(n)"
             }
             seen.insert(id)
-            layers[i].id = id
+            list[i].id = id
+            if list[i].type == .group { normalizeIds(&list[i].children, seen: &seen) }
         }
+    }
+
+    /// Every layer in draw order, groups' children after their group.
+    public var allLayers: [MotionLayer] {
+        layers.flatMap { l in [l] + (l.type == .group ? MotionScene(layers: l.children).allLayers : []) }
+    }
+
+    /// A layer anywhere in the tree.
+    public func findLayer(_ id: String) -> MotionLayer? {
+        Self.find(id, in: layers)
+    }
+
+    static func find(_ id: String, in list: [MotionLayer]) -> MotionLayer? {
+        for l in list {
+            if l.id == id { return l }
+            if l.type == .group, let c = find(id, in: l.children) { return c }
+        }
+        return nil
+    }
+
+    /// Edits a layer anywhere in the tree.
+    public mutating func withLayer(_ id: String, _ body: (inout MotionLayer) throws -> Void) throws {
+        guard try Self.edit(id, in: &layers, body) else { throw SceneError.layerNotFound(id) }
+    }
+
+    static func edit(_ id: String, in list: inout [MotionLayer], _ body: (inout MotionLayer) throws -> Void) throws -> Bool {
+        for i in list.indices {
+            if list[i].id == id { try body(&list[i]); return true }
+            if list[i].type == .group, try edit(id, in: &list[i].children, body) { return true }
+        }
+        return false
     }
 
     public var frameCount: Int { max(1, Int((duration * Double(fps)).rounded())) }

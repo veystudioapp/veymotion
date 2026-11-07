@@ -14,7 +14,7 @@ enum Docs {
       Publishing is done by the user from the app (Export → Publish); you cannot post.
 
     LAYER
-    Common: id, name, type ("rect" | "ellipse" | "path" | "text" | "image" | "video" | "audio" | "particles" | "generator"), start, end (seconds, end optional = scene end),
+    Common: id, name, type ("rect" | "ellipse" | "path" | "text" | "image" | "video" | "audio" | "particles" | "generator" | "group"), start, end (seconds, end optional = scene end),
             x, y, scale, rotation (degrees), opacity (0..1)
     rect/ellipse: width, height, cornerRadius (rect), fill "#RRGGBB[AA]", stroke, strokeWidth (see STROKES for trim)
     path: any vector shape. d = the shape in layer px around the layer's x/y (0,0 in d is at x/y and is the pivot for
@@ -36,9 +36,15 @@ enum Docs {
           playback ("once": the layer ends with the clip, default | "hold": last frame stays | "loop": starts over),
           fps (image sequences only: frames per second of the images; set to the render's rate, Blender's default is 24).
           The movie's own sound plays at speed 1 (silent at other speeds); volume (animatable, 1 = original, 0 = mute).
+          timeRemap: keyframes of the SOURCE second shown over scene time, replacing speed/trimIn (silent):
+          {"keyframes":[{"t":0,"v":0},{"t":1,"v":1},{"t":1.5,"v":4,"easing":"easeInOut"},{"t":3,"v":4,"easing":"hold"},
+          {"t":4,"v":2}]} = normal speed, a fast ramp through 3 seconds of footage, a 1.5 s freeze frame, then
+          reverse. Flat segments freeze, steep ones speed up, decreasing ones play backwards. Mark the layer's end
+          yourself (once-playback no longer ends it).
           sourceDuration / transcript / words are filled in by the app.
     particles: see PARTICLES.
     generator: see GENERATORS.
+    group: children (an array of layers, see GROUPS).
     Optional on every visual layer (omit when unused):
       scaleX, scaleY (multiply scale; flip effects), skewX, skewY (degrees), anchorX, anchorY (pivot for rotation/scale/
       skew as an offset from the center in layer px, e.g. anchorX = -width/2 spins around the left edge; does not move the
@@ -49,7 +55,8 @@ enum Docs {
       gradient (rect/ellipse/path/text), matte, repeater, motionBlur, glow, glowRadius, glowColor, brightness, contrast,
       saturation, hue, tint, tintColor, wipe, wipeStyle, keyColor, keyTolerance, keySoftness, waveWarp, ripple,
       waveLength, waveSpeed, twirl, bulge, distortRadius, turbulence, posterize, pixelate, rgbSplit, glitch, grain,
-      scanlines, vignette, directionalBlur, blurAngle, zoomBlur, posterizeTime (see AFTER EFFECTS-STYLE TOOLS)
+      scanlines, vignette, directionalBlur, blurAngle, zoomBlur, posterizeTime (see AFTER EFFECTS-STYLE TOOLS),
+      depth, fixed (see CAMERA), links (see LINKS)
 
     ANIMATION
     Every number above (x, y, scale, scaleX, scaleY, rotation, skewX, skewY, anchorX, anchorY, opacity,
@@ -115,6 +122,18 @@ enum Docs {
       a real camera. It renders the layer several times per frame, so use it on the few fast-moving layers.
     - glow (strength 0..4, animatable), glowRadius (px, default 24), glowColor (optional tint): light around the layer —
       neon lines and logos, glowing text, light streaks. Best on bright layers over dark backgrounds.
+    - Light (every visual layer): shine (strength 0..2) is a soft bright band across the layer, placed by
+      shinePosition (-0.5 before the left edge .. 1.5 past the right; animate 0 → 1 for a sweep, e.g. over a logo or
+      metallic title), shineAngle (default 30), shineWidth (px, default 120), shineColor. rays (strength 0..3)
+      streaks light out of the layer's bright parts (raysLength 0..0.95, default 0.6): god rays behind a logo or
+      text. outline (px) + outlineColor draws a band around the layer's shape (sticker look on cut-out images and
+      text). innerGlow (strength) + innerGlowRadius (px) + innerGlowColor lights the inside of the edges.
+    - Path operators (rect, ellipse, path; all animatable, 0 = off): offsetPath (px, grows/shrinks the outline),
+      zigzag (amplitude px; ridges every waveLength/2 — seals, badges), wigglePath (amplitude px; organic blobs,
+      hand-drawn wobble; evolves with waveSpeed, size waveLength/2), pucker (-1 bloat .. 1 pucker: stars from
+      polygons), dash [on, off, …] (px) + dashOffset (px, animate with loop offset for marching ants), taperStart /
+      taperEnd (0..1 of the stroke thinning to a point: brush strokes, swooshes; works with trim for a drawn-on
+      tapered line).
     - Color correction (every visual layer, all animatable, 0 = unchanged): brightness (-1..1, adds light), contrast
       (-1 flat gray .. 1 double), saturation (-1 black and white .. 1 double), hue (degrees around the color wheel),
       tint (0..1) with tintColor (white by default): maps the layer's brightness onto one color (duotone look, a
@@ -169,11 +188,24 @@ enum Docs {
     - Use 1–2 families per piece: e.g. a display or serif font for titles and a clean sans for the rest.
     - A font warning in a tool result means the name was not found or the font lacks some letters: fix it.
 
+    TEXT EXTRAS
+    - Counter: put "{n}" in the text and animate counter: {"text":"+{n}%","counter":{"keyframes":[{"t":0,"v":0},
+      {"t":2,"v":42,"easing":"easeOutExpo"}]}} counts up (counterDecimals 0–6, counterGrouping true → "1,234").
+    - scramble (0..1, animatable): that share of the letters shows as random characters flickering ~15 times a
+      second; keyframe 1 → 0 (or preset decode) for a hacker/decode reveal; 0 → 0.3 → 0 for a glitchy flicker.
+    - Outline: stroke (color) + strokeWidth (px) draw an outline around the letters (fill stays `color`; use
+      color "#00000000" for outline-only text).
+    - textPath: {"points":[[-500,120],[0,-60],[500,120]],"smooth":true,"closed":false} lays the text along a curve
+      (layer px from the layer's center, y down; the baseline sits on the path, letters turn with it). align picks
+      where it starts; textOffset (px, animatable) slides it along — on a closed circle with loop offset it spins
+      forever. Text animators still work per character on a path.
+
     TEXT ANIMATORS (per character / word / line, staggered)
     "textAnimators":[{"unit":"char","mode":"in","start":0.5,"duration":0.5,"stagger":0.04,"order":"forward",
-                      "easing":"easeOutBack","opacity":0,"y":40,"x":0,"scale":1,"rotation":0}]
+                      "easing":"easeOutBack","opacity":0,"y":40,"x":0,"scale":1,"rotation":0,"blur":0,"color":null}]
     - unit: char | word | line. mode: in (units arrive from the away state) | out (units leave to it).
-    - opacity/x/y/scale/rotation describe the AWAY state (x/y in px, y down); units animate between it and normal.
+    - opacity/x/y/scale/rotation/blur (px)/color describe the AWAY state (x/y in px, y down); units animate between
+      it and normal. Presets: textBlurIn (letters sharpen in), textFocus (words land from a big blur).
     - Unit i starts at start + rank·stagger; order: forward | reverse | center | edges | random (seed).
     - Use one "in" and optionally one "out" animator. The text*/typewriter presets create them for you.
 
@@ -213,6 +245,36 @@ enum Docs {
     - Cost: keep live particles under ~5000 (rate × lifetime + bursts). Large soft particles with add saturate to
       white: lower the colors' alpha or the rate rather than the size. A small blur (2–4) softens fire and smoke.
 
+    CAMERA (scene-level pan, zoom and rotation with parallax)
+    "camera": {"x":{"keyframes":[{"t":0,"v":960},{"t":4,"v":1400,"easing":"easeInOut"}]},"y":540,
+               "zoom":{"keyframes":[{"t":0,"v":1},{"t":4,"v":1.6}]},"rotation":0,"wiggle":{"x":{"amount":6,"frequency":1.2}}}
+    - x/y = the scene point shown at the frame's center (default the scene center), zoom (1 = as is, 2 = twice as
+      close), rotation (degrees). All animatable; wiggle on x/y/zoom/rotation gives a handheld feel. Set it with
+      update_scene {"changes":{"camera":{...}}} (null removes it). Every layer is framed by it: push in on a title,
+      pan across a long layout, slow drift over a photo, a whip to the next section (fast x move + directionalBlur).
+    - depth on a layer (default 0): how far it is. The camera's movement is divided by 1 + depth, so background
+      layers with depth 1–3 drift slowly, foreground ones with depth -0.3…-0.6 rush past: parallax from one camera
+      move. fixed: true keeps a layer where it is (captions, logos, HUDs).
+    - World-space particles follow the camera like everything else; group children see no camera of their own.
+
+    GROUPS (precomps)
+    {"id":"card","type":"group","x":960,"y":540,"children":[{...layer...},{...layer...}]}
+    - A group draws its children in a box (the scene size unless width/height are set) centered on x/y; children use
+      coordinates inside that box like in a scene (a child at 960,540 sits at the group's center in a 1920x1080
+      scene) and scene times. Children can parent and matte each other (ids are unique scene-wide); the group itself
+      takes every layer property and effect at once: scale/rotate/move the whole card, opacity, blur, glow, wipe,
+      color correction, repeater, matte, motionBlur. group_layers wraps existing layers; ungroup unwraps.
+    - Tools address children by id as usual (update_layer, set_keyframes, apply_preset); add or remove children
+      through update_layer on the group with a full "children" array.
+
+    LINKS (one property follows another layer's, like After Effects expressions)
+    "links":{"y":{"layer":"lead","property":"y","multiply":1,"add":80,"delay":0.1}}
+    - value = source × multiply + add, read delay seconds later (follow-through, trails: a chain of layers each
+      delayed a little more). The linked property's own keyframes are ignored; its wiggle/audioReact still add.
+      Any number property can follow any other (rotation ← x × 0.2 for a rolling wheel, scale ← opacity, width of
+      a bar ← audio-reacting value of another layer). One hop: a source that is itself linked gives its own
+      keyframes, not its link.
+
     GENERATORS (music visualizers, audiograms, fractal noise, lightning, grids)
     {"id":"viz","type":"generator","generator":{"kind":"spectrum","shape":"bars","count":48},"x":960,"y":820,
      "width":1300,"height":260,"fill":"#4FD1C5","cornerRadius":4}
@@ -235,6 +297,14 @@ enum Docs {
       a blue glowColor, and flicker opacity or the layer's timing for strikes.
     - kind grid: lines every `scale` px (default 80), strokeWidth wide (default 2), scrolling `speed` px/s (default 0).
       For a retro horizon, put it on a wide layer and skewX / scaleY it.
+    - kind chart: {"kind":"chart","chart":"bar","values":[12,30,18,42],"labels":["Q1","Q2","Q3","Q4"],
+      "colors":["#4FD1C5","#FFD93D","#FF6B6B","#A78BFA"]} — chart: bar | line | area | pie | donut. Animate the
+      layer's reveal 0 → 1 to grow it in (bars one by one, line drawn on, pie swept). Colors cycle per bar/slice
+      (line/area use the first); fill is used without colors. cornerRadius rounds bars, strokeWidth is the line
+      width; labels use the layer's fontSize/fontWeight/fontName and color. Data videos: pair with a counter text.
+    - kind flare: a lens flare. from = light position in layer px from the center (default the center),
+      scale = size px (default a quarter of the box), gain = brightness, detail = number of ghost discs (default 5),
+      colors = [core, ghosts]. Animate x/y (or from) to sweep it across; use blendMode add over footage.
     - seed (all kinds) gives another random pattern.
 
     3D MODELS / RENDERS
@@ -397,7 +467,7 @@ enum Docs {
           "type": "object",
           "properties": {
             "id": { "type": "string" },
-            "property": { "type": "string", "enum": ["x", "y", "scale", "scaleX", "scaleY", "rotation", "skewX", "skewY", "anchorX", "anchorY", "opacity", "width", "height", "cornerRadius", "strokeWidth", "trim", "trimStart", "trimOffset", "reveal", "letterSpacing", "blur", "shadowX", "shadowY", "shadowBlur", "shadowOpacity", "glow", "glowRadius", "pathProgress", "volume", "emission", "particleSpeed", "particleSize", "brightness", "contrast", "saturation", "hue", "tint", "wipe", "keyTolerance", "keySoftness", "waveWarp", "ripple", "waveLength", "waveSpeed", "twirl", "bulge", "distortRadius", "turbulence", "posterize", "pixelate", "rgbSplit", "glitch", "grain", "scanlines", "vignette", "directionalBlur", "blurAngle", "zoomBlur", "fill", "stroke", "color", "d"] },
+            "property": { "type": "string", "enum": ["counter", "scramble", "textOffset", "timeRemap", "x", "y", "scale", "scaleX", "scaleY", "rotation", "skewX", "skewY", "anchorX", "anchorY", "opacity", "width", "height", "cornerRadius", "strokeWidth", "trim", "trimStart", "trimOffset", "reveal", "letterSpacing", "blur", "shadowX", "shadowY", "shadowBlur", "shadowOpacity", "glow", "glowRadius", "pathProgress", "volume", "emission", "particleSpeed", "particleSize", "brightness", "contrast", "saturation", "hue", "tint", "wipe", "keyTolerance", "keySoftness", "waveWarp", "ripple", "waveLength", "waveSpeed", "twirl", "bulge", "distortRadius", "turbulence", "posterize", "pixelate", "rgbSplit", "glitch", "grain", "scanlines", "vignette", "directionalBlur", "blurAngle", "zoomBlur", "fill", "stroke", "color", "d"] },
             "keyframes": {
               "type": "array",
               "items": {
@@ -418,7 +488,7 @@ enum Docs {
           "properties": {
             "id": { "type": "string" },
             "ids": { "type": "array", "items": { "type": "string" }, "description": "Several layers, in cascade order." },
-            "preset": { "type": "string", "enum": ["fadeIn", "slideUp", "slideDown", "slideInLeft", "slideInRight", "popIn", "zoomIn", "blurIn", "bounceIn", "dropIn", "flipIn", "rotateIn", "wipeIn", "fadeOut", "slideOutUp", "slideOutDown", "slideOutLeft", "slideOutRight", "popOut", "zoomOut", "blurOut", "flipOut", "wipeOut", "spin", "pulse", "heartbeat", "shake", "wobble", "jello", "glitchBurst", "drawOn", "typewriter", "textRise", "textPop", "textDrop", "textLines", "textOut"] },
+            "preset": { "type": "string", "enum": ["fadeIn", "slideUp", "slideDown", "slideInLeft", "slideInRight", "popIn", "zoomIn", "blurIn", "bounceIn", "dropIn", "flipIn", "rotateIn", "wipeIn", "fadeOut", "slideOutUp", "slideOutDown", "slideOutLeft", "slideOutRight", "popOut", "zoomOut", "blurOut", "flipOut", "wipeOut", "spin", "pulse", "heartbeat", "shake", "wobble", "jello", "glitchBurst", "drawOn", "typewriter", "textRise", "textPop", "textDrop", "textLines", "textOut", "decode", "textBlurIn", "textFocus"] },
             "start": { "type": "number" },
             "duration": { "type": "number", "default": 0.6 },
             "stagger": { "type": "number", "description": "Seconds between layers when several ids are given." }
@@ -448,6 +518,83 @@ enum Docs {
             "seed": { "type": "integer", "description": "Random seed; same seed + pieces always shatters the same way." },
             "id": { "type": "string", "description": "Prefix for the shard layer ids (e.g. \"dog\" → dog-1, dog-2, …). Default: the source layer's id, or \"shatter\"." }
           }
+        }
+      },
+      {
+        "name": "track_motion",
+        "description": "Follows an object through a video layer (Vision object tracking) and keyframes another layer to move with it (a label, sticker, arrow, blur box or highlight pinned to a face, product or car). Give the object's center and size at `from` in scene pixels. Without `target`, returns the tracked positions.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "layer": { "type": "string", "description": "The video layer id." },
+            "x": { "type": "number", "description": "Object center at `from`, scene px." },
+            "y": { "type": "number" },
+            "width": { "type": "number", "default": 120, "description": "Object size at `from`, scene px." },
+            "height": { "type": "number", "default": 120 },
+            "from": { "type": "number", "description": "Scene time tracking starts (default: the layer's start)." },
+            "to": { "type": "number", "description": "Scene time tracking ends (default: the layer's end)." },
+            "step": { "type": "number", "description": "Seconds between samples (default every frame)." },
+            "target": { "type": "string", "description": "Layer to attach: its x/y get a keyframe per sample." },
+            "keepOffset": { "type": "boolean", "default": true, "description": "Keep the target's current offset from the object (false: center it on the object)." },
+            "scale": { "type": "boolean", "default": false, "description": "Also scale the target as the object grows or shrinks." },
+            "smoothing": { "type": "integer", "default": 3, "description": "Moving-average window in samples (1 = raw)." }
+          },
+          "required": ["layer", "x", "y"]
+        }
+      },
+      {
+        "name": "auto_reframe",
+        "description": "Keeps the subject of a video layer in frame for another aspect ratio (16:9 → 9:16 for TikTok/Reels/Shorts): finds where attention goes in each sampled frame (Vision saliency) and keyframes the layer's position so that point stays in the center crop, never showing the video's edges. Then export_video with that width/height and fit \"crop\".",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "layer": { "type": "string", "description": "The video layer id." },
+            "width": { "type": "number", "description": "Target format width, e.g. 1080." },
+            "height": { "type": "number", "description": "Target format height, e.g. 1920." },
+            "from": { "type": "number" },
+            "to": { "type": "number" },
+            "step": { "type": "number", "default": 0.5, "description": "Seconds between samples." },
+            "smoothing": { "type": "integer", "default": 3 }
+          },
+          "required": ["layer", "width", "height"]
+        }
+      },
+      {
+        "name": "transition",
+        "description": "Animates a transition between two layers (or groups): the outgoing one leaves and the incoming one arrives over [at, at+duration]. Sets the outgoing layer's end and the incoming layer's start. Types: fade, dissolve (block dissolve), push (both move), slide (new one slides over), zoom (through the old one), whip (fast pan with motion blur), wipe, iris, blinds, blocks, clock, glitch, flash (white flash, adds a 'flash' layer), blur.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "type": { "type": "string", "enum": ["fade", "dissolve", "push", "slide", "zoom", "whip", "wipe", "iris", "blinds", "blocks", "clock", "glitch", "flash", "blur"] },
+            "out": { "type": "string", "description": "Layer leaving (optional)." },
+            "in": { "type": "string", "description": "Layer arriving (optional)." },
+            "at": { "type": "number", "description": "Scene time the transition starts." },
+            "duration": { "type": "number", "default": 0.6 },
+            "direction": { "type": "string", "enum": ["left", "right", "up", "down"], "description": "Where the motion goes (push, slide, whip, wipe, blinds). Default left." }
+          },
+          "required": ["type", "at"]
+        }
+      },
+      {
+        "name": "group_layers",
+        "description": "Moves top-level layers into a new group layer (a precomp): move, scale, fade, blur, wipe or effect them all at once. The group is centered on the scene, so the children keep their coordinates. Returns the group id.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "ids": { "type": "array", "items": { "type": "string" }, "description": "Layer ids to group (draw order is kept)." },
+            "id": { "type": "string", "description": "Id for the group (default \"group\")." },
+            "name": { "type": "string" }
+          },
+          "required": ["ids"]
+        }
+      },
+      {
+        "name": "ungroup",
+        "description": "Puts a group's children back as top-level layers at the group's place (the group's own transform and effects are dropped).",
+        "inputSchema": {
+          "type": "object",
+          "properties": { "id": { "type": "string", "description": "The group layer id." } },
+          "required": ["id"]
         }
       },
       {

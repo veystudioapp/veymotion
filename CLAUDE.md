@@ -136,6 +136,24 @@ over the canvas (UI-only, never in the scene), and "Add to chat" renders the fra
   grid. Shapes come back as one filled `CGPath` (lines are stroked outlines) so fill/gradient apply; noise is an
   image at ~1/3 device resolution. Audio kinds get their source through `MotionScene.resolveAudioLinks` (like
   `audioReact`) and read `AudioAnalysis.spectrum` (40 log bands, each normalized on its own).
+- Camera, groups and links (`Camera.swift`): `MotionScene.camera` is applied last in `worldTransform`
+  (`sceneTransform` = without it; world-space particles live there). `parentTransform` includes the camera, so
+  repeater copies and `setParent` stay right. A `group` layer's `children` render through `drawGroup` as a sub-scene
+  (`subscene(of:)`: the group's box, no camera); ids are unique scene-wide, and `findLayer`/`withLayer`/`allLayers`
+  reach children, so keyframe/preset/update tools work on them (removing/reordering is top-level only).
+  `links` copy their source track into `PropertyLink.track` during `resolveLinks` (one hop, like `AudioReact.link`).
+- Text extras: `FrameRenderer.displayText` swaps "{n}" for `counter` and applies `scramble` before layout; text
+  outlines are stroked at twice the width *behind* the fill (stroking on top shows the inner contours of SF/variable
+  glyphs), hollow text cuts the fill out; `textPath` lays glyphs along a `MotionPath` (`drawTextOnPath`); animator
+  blur goes through a small per-glyph bitmap.
+- `PathOps.swift`: offset/zigzag/wiggle/pucker work on flattened polylines and give back a `PathShape` (trim and
+  gradients still apply); tapered strokes are filled polygons. Light effects: shine is a gradient drawn `sourceAtop` in
+  the processed bitmap; rays/outline/inner glow are `PixelBuffer` passes. Generators `chart` and `flare` draw directly
+  (`drawChart`, `drawFlare`).
+- `Tracking.swift`: Vision `VNTrackObjectRequest` (track_motion) and attention saliency (auto_reframe) read frames
+  through `VideoFrames`. Saliency needs the neural engine, which sandboxed processes cannot use ("check process
+  entitlements"): test it in the app. Object tracking works in the sandbox on image sequences. `timeRemap` overrides
+  `videoTime` (and silences the clip's sound).
 - `blendMode` applies to every visual layer (set on the context before drawing; particles skip the opacity
   transparency layer and take opacity per particle, so they keep adding up).
 - Layer ids are unique: `addLayer` / `duplicateLayer` auto-suffix them (`title-2`), and renaming to a taken id throws.

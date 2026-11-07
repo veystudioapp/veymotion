@@ -261,6 +261,7 @@ final class SceneStore: SceneHost {
             if l.role == .music { l.duckTo = 0.3; l.fadeOut = 1.5 }
         case .particles: break
         case .generator: return addGenerator(.spectrum)
+        case .group: l.name = "Group"
         }
         var id = ""
         apply("Add Layer") { id = $0.addLayer(l) }
@@ -291,6 +292,18 @@ final class SceneStore: SceneHost {
             l.width = .constant(w); l.height = .constant(h)
             l.fill = .constant(RGBA(hex: "#FF2E9A99")!)
             l.strokeWidth = .constant(2)
+        case .chart:
+            l.width = .constant((w * 0.5).rounded()); l.height = .constant((h * 0.45).rounded())
+            l.generator.values = [12, 30, 18, 42, 27]
+            l.generator.labels = ["A", "B", "C", "D", "E"]
+            l.generator.colors = [RGBA(hex: "#4FD1C5")!, RGBA(hex: "#FFD93D")!, RGBA(hex: "#FF6B6B")!, RGBA(hex: "#A78BFA")!, RGBA(hex: "#60A5FA")!]
+            l.fontSize = 28; l.fontWeight = "semibold"
+            l.cornerRadius = .constant(6)
+            l.reveal = .keyframes([MotionKeyframe(t: time, v: 0, easing: .linear), MotionKeyframe(t: time + 1.2, v: 1, easing: .easeOut)])
+        case .flare:
+            l.width = .constant(w); l.height = .constant(h)
+            l.generator.from = PathPoint(x: -w * 0.25, y: -h * 0.2)
+            l.blendMode = .add
         }
         l.start = time
         var id = ""
@@ -572,6 +585,25 @@ final class SceneStore: SceneHost {
     func deleteSelected() {
         guard let id = selection else { return }
         try? apply("Delete Layer") { try $0.removeLayer(id) }
+    }
+
+    /// Wraps the selected layer in a group (add more layers to it with Claude, or ungroup).
+    func groupSelected() {
+        guard let id = selection else { return }
+        var gid = ""
+        try? apply("Group Layer") { gid = try $0.groupLayers([id]) }
+        if !gid.isEmpty { selection = gid }
+    }
+
+    func ungroupSelected() {
+        guard let id = selection, scene.layers.first(where: { $0.id == id })?.type == .group else { return }
+        try? apply("Ungroup") { try $0.ungroup(id) }
+        selection = nil
+    }
+
+    /// Scene-level edit (camera, format) through the undo stack.
+    func editScene(_ label: String, _ body: @escaping (inout MotionScene) -> Void) {
+        apply(label) { body(&$0) }
     }
 
     func duplicateSelected() {

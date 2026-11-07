@@ -37,6 +37,13 @@ public struct RGBA: Codable, Equatable, Hashable, Sendable {
 
     public var cgColor: CGColor { CGColor(srgbRed: r, green: g, blue: b, alpha: a) }
 
+    /// From any RGB CGColor (converted to sRGB); nil for other color spaces.
+    public init?(cgColor: CGColor) {
+        guard let c = cgColor.converted(to: CGColorSpace(name: CGColorSpace.sRGB)!, intent: .defaultIntent, options: nil),
+              let comps = c.components, comps.count >= 3 else { return nil }
+        r = Double(comps[0]); g = Double(comps[1]); b = Double(comps[2]); a = comps.count > 3 ? Double(comps[3]) : 1
+    }
+
     public static let white = RGBA(r: 1, g: 1, b: 1)
     public static let black = RGBA(r: 0, g: 0, b: 0)
     public static let clear = RGBA(r: 0, g: 0, b: 0, a: 0)

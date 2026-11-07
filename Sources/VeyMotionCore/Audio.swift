@@ -86,15 +86,15 @@ public enum AudioFileInfo {
 }
 
 extension MotionScene {
-    public var audioLayers: [MotionLayer] { layers.filter { $0.type == .audio && $0.path != nil } }
+    public var audioLayers: [MotionLayer] { allLayers.filter { $0.type == .audio && $0.path != nil } }
 
     /// Everything the mixer plays: audio layers, plus video layers whose movie has sound (at normal speed).
     public var soundLayers: [MotionLayer] {
-        layers.filter { l in
+        allLayers.filter { l in
             guard let p = l.path else { return false }
             switch l.type {
             case .audio: return true
-            case .video: return l.speed == 1 && MediaAudio.hasAudioTrack(p)
+            case .video: return l.speed == 1 && l.timeRemap == nil && MediaAudio.hasAudioTrack(p)
             default: return false
             }
         }

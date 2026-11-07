@@ -42,6 +42,7 @@ struct SceneInspector: View {
             }
             ColorField("Background", s.background) { c in edit { $0.background = c } }
         }
+        CameraSection()
         Text("Select a layer to edit it. Claude and other agents edit the same scene; their changes show up live and can be undone with ⌘Z.")
             .font(.caption).foregroundStyle(.secondary)
             .padding(12)
@@ -136,6 +137,15 @@ struct LayerInspector: View {
                 AnimSlider(layer: layer, property: .opacity, label: "Opacity")
                 if layer.type == .text { AnimSlider(layer: layer, property: .reveal, label: "Reveal") }
                 ParentRow(layer: layer)
+                if store.scene.camera != nil {
+                    HStack(spacing: 8) {
+                        NumberField("Depth", layer.depth) { v in store.updateLayer(layer.id, "Depth") { $0.depth = max(-0.9, v) } }
+                            .help("Parallax: 0 moves with the camera, 1 half as much (far), -0.5 twice as much (close)")
+                        Toggle("Fixed", isOn: Binding(get: { layer.fixed }, set: { v in store.updateLayer(layer.id, "Fixed") { $0.fixed = v } }))
+                            .toggleStyle(.checkbox).controlSize(.small)
+                            .help("Ignore the camera (captions, logos)")
+                    }
+                }
             }
             InspectorSection(appearanceTitle) { appearance }
             if layer.type == .video, layer.path.map(MediaAudio.hasAudioTrack) ?? false { SpeechSection(layer: layer) }
@@ -159,6 +169,7 @@ struct LayerInspector: View {
         case .video: return "Video"
         case .particles: return "Particles"
         case .generator: return "Generator"
+        case .group: return "Group"
         default: return "Shape"
         }
     }
@@ -241,11 +252,50 @@ struct LayerInspector: View {
                 }
                 GridRow {
                     AnimField(layer: layer, property: .letterSpacing, label: "Spacing")
-                    Color.clear.frame(height: 1)
+                    AnimField(layer: layer, property: .strokeWidth, label: "Outline")
+                }
+                if layer.text.contains("{n}") {
+                    GridRow {
+                        AnimField(layer: layer, property: .counter, label: "Count")
+                        HStack(spacing: 4) {
+                            NumberField("Dec.", Double(layer.counterDecimals), digits: 0) { v in
+                                store.updateLayer(id, "Counter Format") { $0.counterDecimals = min(max(Int(v), 0), 6) }
+                            }
+                            Toggle("1,000", isOn: Binding(get: { layer.counterGrouping }, set: { v in
+                                store.updateLayer(id, "Counter Format") { $0.counterGrouping = v }
+                            }))
+                            .toggleStyle(.checkbox).controlSize(.small)
+                        }
+                    }
                 }
             }
+            if !layer.text.contains("{n}") {
+                Text("Tip: write {n} in the text to show an animated number (Count).").font(.caption2).foregroundStyle(.tertiary)
+            }
+            AnimSlider(layer: layer, property: .scramble, label: "Scramble")
+                .help("Share of the letters shown as random characters; keyframe 100% → 0 for a decode effect")
             AnimColorField(layer: layer, property: .color, label: "Color")
+            AnimColorField(layer: layer, property: .stroke, label: "Outline")
             GradientRows(layer: layer)
+            if let mp = layer.textPath {
+                HStack {
+                    Image(systemName: "point.topleft.down.to.point.bottomright.curvepath").foregroundStyle(.secondary)
+                    Text("On a path · \(mp.points.count) points").font(.callout)
+                    Spacer()
+                    Button("Remove") { store.updateLayer(id, "Remove Text Path") { $0.textPath = nil } }.controlSize(.small)
+                }
+                AnimField(layer: layer, property: .textOffset, label: "Offset")
+            } else {
+                Button("Put on an Arc") {
+                    store.updateLayer(id, "Text on Path") { l in
+                        let w = max(l.fontSize * Double(max(l.text.count, 4)) * 0.3, 200)
+                        l.textPath = MotionPath(points: [PathPoint(x: -w, y: w * 0.3), PathPoint(x: 0, y: -w * 0.2),
+                                                         PathPoint(x: w, y: w * 0.3)], smooth: true)
+                    }
+                }
+                .controlSize(.small)
+                .help("Lay the text along a curve (edit the points in JSON or with Claude)")
+            }
         case .image:
             FileRow(path: layer.path, kind: .image) { p in store.updateLayer(id, "Change Image") { $0.path = p } }
             sizeFields
@@ -294,6 +344,22 @@ struct LayerInspector: View {
                 .controlSize(.small)
             }
             .help("Stop: the layer ends with the clip. Hold: the last frame stays. Loop: the clip starts over.")
+            if layer.timeRemap != nil {
+                HStack {
+                    AnimField(layer: layer, property: .timeRemap, label: "Source", unit: "s")
+                    Button("Off") { store.updateLayer(id, "Remove Time Remap") { $0.timeRemap = nil } }.controlSize(.small)
+                }
+                .help("Time remap: the source second shown at the playhead; keyframe it for speed ramps, freezes and reverse")
+            } else {
+                Button("Time remap") {
+                    store.updateLayer(id, "Time Remap") { l in
+                        let now = l.videoTime(at: store.time) ?? 0
+                        l.timeRemap = .keyframes([MotionKeyframe(t: store.time, v: now, easing: .linear)])
+                    }
+                }
+                .controlSize(.small)
+                .help("Keyframe the source time: speed ramps, freeze frames, reverse (replaces speed and trim)")
+            }
             if layer.path.map(MediaAudio.hasAudioTrack) ?? false {
                 AnimSlider(layer: layer, property: .volume, label: "Volume", range: 0...2)
                     .help(layer.speed == 1 ? "Level of the clip's own sound (0 = mute)" : "The clip's sound only plays at speed 1×")
@@ -302,6 +368,19 @@ struct LayerInspector: View {
             ParticlesEditor(layer: layer)
         case .generator:
             GeneratorEditor(layer: layer)
+        case .group:
+            Text("\(layer.children.count) layers inside · \(layer.children.map(\.name).joined(separator: ", "))")
+                .font(.caption).foregroundStyle(.secondary).lineLimit(3)
+            Grid(horizontalSpacing: 8, verticalSpacing: 6) {
+                GridRow {
+                    let w = layer.width?.value(at: store.panelTime) ?? Double(store.scene.width)
+                    let h = layer.height?.value(at: store.panelTime) ?? Double(store.scene.height)
+                    NumberField("W", w, unit: layer.width == nil ? "scene" : nil, digits: 0) { v in store.setValue(id, .width, max(0, v)) }
+                    NumberField("H", h, unit: layer.height == nil ? "scene" : nil, digits: 0) { v in store.setValue(id, .height, max(0, v)) }
+                }
+            }
+            Button("Ungroup") { store.ungroupSelected() }.controlSize(.small)
+            Text("Edit the layers inside with Claude (they keep their ids) or ungroup.").font(.caption).foregroundStyle(.secondary)
         case .audio:
             EmptyView()
         }
@@ -412,6 +491,7 @@ struct EffectsSection: View {
                     ColorField("Glow", tint) { c in store.updateLayer(layer.id, "Glow Color") { $0.glowColor = c } }
                 }
             }
+            LightRows(layer: layer)
             Grid(horizontalSpacing: 8, verticalSpacing: 6) {
                 GridRow {
                     NumberField("Motion blur", layer.motionBlur, unit: "°", digits: 0) { v in
@@ -534,6 +614,68 @@ struct WipeSection: View {
     }
 }
 
+/// The scene camera: pan, zoom and rotation (values at the playhead; keyframes are upserted when animated).
+struct CameraSection: View {
+    @Environment(SceneStore.self) private var store
+
+    var body: some View {
+        let s = store.scene
+        let t = store.panelTime
+        InspectorSection("Camera") {
+            Toggle("Camera on", isOn: Binding(get: { s.camera != nil }, set: { on in
+                store.editScene(on ? "Add Camera" : "Remove Camera") { sc in
+                    sc.camera = on ? Camera(x: Double(sc.width) / 2, y: Double(sc.height) / 2) : nil
+                }
+            }))
+            .toggleStyle(.checkbox).controlSize(.small)
+            .help("Pan, zoom and turn the whole scene; layers with depth move less or more (parallax)")
+            if let cam = s.camera {
+                Grid(horizontalSpacing: 8, verticalSpacing: 6) {
+                    GridRow {
+                        NumberField("X", cam.x.value(at: t), digits: 0) { v in edit("Camera X") { $0.x = $0.x.setting(v, at: store.time) } }
+                        NumberField("Y", cam.y.value(at: t), digits: 0) { v in edit("Camera Y") { $0.y = $0.y.setting(v, at: store.time) } }
+                    }
+                    GridRow {
+                        NumberField("Zoom", cam.zoom.value(at: t), unit: "×") { v in edit("Camera Zoom") { $0.zoom = $0.zoom.setting(max(0.05, v), at: store.time) } }
+                        NumberField("Rotate", cam.rotation.value(at: t), unit: "°", digits: 1) { v in edit("Camera Rotation") { $0.rotation = $0.rotation.setting(v, at: store.time) } }
+                    }
+                }
+                let animated = [cam.x, cam.y, cam.zoom, cam.rotation].filter(\.isAnimated).count
+                HStack {
+                    Text(animated > 0 ? "\(animated) animated track\(animated == 1 ? "" : "s")" : "Not animated")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button(animated > 0 ? "Clear keys" : "Animate from here") {
+                        edit(animated > 0 ? "Clear Camera Keys" : "Animate Camera") { c in
+                            if animated > 0 {
+                                c.x = .constant(c.x.value(at: t)); c.y = .constant(c.y.value(at: t))
+                                c.zoom = .constant(c.zoom.value(at: t)); c.rotation = .constant(c.rotation.value(at: t))
+                            } else {
+                                c.x = .keyframes([MotionKeyframe(t: store.time, v: c.x.value(at: t))])
+                                c.y = .keyframes([MotionKeyframe(t: store.time, v: c.y.value(at: t))])
+                                c.zoom = .keyframes([MotionKeyframe(t: store.time, v: c.zoom.value(at: t))])
+                            }
+                        }
+                    }
+                    .controlSize(.small)
+                }
+                .help("With keys, each change adds a keyframe at the playhead (move the playhead, change a value)")
+                Toggle("Handheld shake", isOn: Binding(get: { !cam.wiggle.isEmpty }, set: { on in
+                    edit(on ? "Camera Shake" : "Remove Camera Shake") { c in
+                        c.wiggle = on ? ["x": Wiggle(amount: 8, frequency: 1.2), "y": Wiggle(amount: 6, frequency: 1.5, seed: 1),
+                                         "rotation": Wiggle(amount: 0.6, frequency: 0.8, seed: 2)] : [:]
+                    }
+                }))
+                .toggleStyle(.checkbox).controlSize(.small)
+            }
+        }
+    }
+
+    private func edit(_ label: String, _ body: @escaping (inout Camera) -> Void) {
+        store.editScene(label) { s in if s.camera != nil { body(&s.camera!) } }
+    }
+}
+
 /// Settings of a generator layer (spectrum, waveform, noise, lightning, grid).
 struct GeneratorEditor: View {
     @Environment(SceneStore.self) private var store
@@ -606,6 +748,53 @@ struct GeneratorEditor: View {
                     AnimField(layer: layer, property: .strokeWidth, label: "Line")
                     Color.clear.frame(height: 1)
                 }
+            case .chart:
+                GridRow {
+                    Picker("", selection: Binding(get: { g.chartValue }, set: { v in edit(id, "Chart Type") { $0.chart = v } })) {
+                        ForEach(ChartType.allCases, id: \.self) { Text($0.title).tag($0) }
+                    }
+                    .labelsHidden().controlSize(.small)
+                    AnimField(layer: layer, property: .reveal, label: "Grow")
+                }
+                GridRow {
+                    AnimField(layer: layer, property: .cornerRadius, label: "Radius")
+                    AnimField(layer: layer, property: .strokeWidth, label: "Line")
+                }
+                GridRow {
+                    NumberField("Font", layer.fontSize, digits: 0) { v in store.updateLayer(id) { $0.fontSize = max(1, v) } }
+                    Color.clear.frame(height: 1)
+                }
+            case .flare:
+                GridRow {
+                    NumberField("Size", g.scale ?? 0, unit: g.scale == nil ? "auto" : "px", digits: 0) { v in
+                        edit(id, "Generator") { $0.scale = v > 0 ? v : nil }
+                    }
+                    NumberField("Bright", g.gainValue, unit: "×") { v in edit(id, "Generator") { $0.gain = max(0, v) } }
+                }
+                GridRow {
+                    NumberField("Light X", g.from?.x ?? 0, digits: 0) { v in edit(id, "Generator") { $0.from = PathPoint(x: v, y: $0.from?.y ?? 0) } }
+                    NumberField("Light Y", g.from?.y ?? 0, digits: 0) { v in edit(id, "Generator") { $0.from = PathPoint(x: $0.from?.x ?? 0, y: v) } }
+                }
+                GridRow {
+                    NumberField("Ghosts", Double(g.detail ?? 5), digits: 0) { v in edit(id, "Generator") { $0.detail = min(max(Int(v), 0), 12) } }
+                    NumberField("Seed", Double(g.seedValue), digits: 0) { v in edit(id, "Generator") { $0.seed = Int(v) } }
+                }
+            }
+            if g.kind == .chart {
+                CommitTextField(placeholder: "12, 30, 18, 42", value: g.valuesValue.map { $0 == $0.rounded() ? String(Int($0)) : String($0) }.joined(separator: ", "),
+                                font: .system(.caption, design: .monospaced)) { v in
+                    let nums = v.split(whereSeparator: { $0 == "," || $0 == " " }).compactMap { Double($0) }
+                    edit(id, "Chart Values") { $0.values = nums.isEmpty ? nil : nums }
+                }
+                .padding(7).background(RoundedRectangle(cornerRadius: 5).fill(Color.primary.opacity(0.06)))
+                .help("Values, comma separated")
+                CommitTextField(placeholder: "Labels: Q1, Q2, Q3", value: (g.labels ?? []).joined(separator: ", "),
+                                font: .system(.caption, design: .monospaced)) { v in
+                    let items = v.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+                    edit(id, "Chart Labels") { $0.labels = items.isEmpty ? nil : items }
+                }
+                .padding(7).background(RoundedRectangle(cornerRadius: 5).fill(Color.primary.opacity(0.06)))
+                AnimColorField(layer: layer, property: .color, label: "Labels")
             }
         }
         if g.usesAudio {
@@ -641,16 +830,25 @@ struct GeneratorEditor: View {
                 Text("Add an audio layer: the visualizer follows it.").font(.caption).foregroundStyle(.secondary)
             }
         }
-        if g.kind == .noise {
-            let colors = g.colorsValue
+        if g.kind == .noise || g.kind == .flare || g.kind == .chart {
+            let colors = g.kind == .flare ? (g.colors ?? [.white, RGBA(r: 0.6, g: 0.8, b: 1)]) : g.colorsValue
             ForEach(Array(colors.enumerated()), id: \.offset) { i, c in
-                ColorField(i == 0 ? "Low" : i == colors.count - 1 ? "High" : "Mid", c) { nc in
-                    edit(id, "Noise Color") { gen in
-                        var list = gen.colorsValue
+                let label = g.kind == .chart ? "Series \(i + 1)" : g.kind == .flare ? (i == 0 ? "Core" : "Ghosts")
+                    : (i == 0 ? "Low" : i == colors.count - 1 ? "High" : "Mid")
+                ColorField(label, c) { nc in
+                    edit(id, "Generator Color") { gen in
+                        var list = colors
                         list[i] = nc
                         gen.colors = list
                     }
                 }
+            }
+            if g.kind == .chart {
+                HStack {
+                    Button("Add color") { edit(id, "Generator Color") { $0.colors = colors + [RGBA(hex: "#60A5FA")!] } }
+                    if colors.count > 1 { Button("Remove last") { edit(id, "Generator Color") { $0.colors = Array(colors.dropLast()) } } }
+                }
+                .controlSize(.small)
             }
         } else {
             AnimColorField(layer: layer, property: .fill, label: "Color")
@@ -871,14 +1069,91 @@ struct MatteRow: View {
 
 /// Trim paths: the drawn part of the stroke.
 struct StrokeTrimRows: View {
+    @Environment(SceneStore.self) private var store
     let layer: MotionLayer
 
     var body: some View {
+        let id = layer.id
         AnimSlider(layer: layer, property: .trimStart, label: "Trim start")
         AnimSlider(layer: layer, property: .trim, label: "Trim end")
             .help("Part of the stroke that is drawn (animate end 0 → 100% to draw the outline)")
         AnimSlider(layer: layer, property: .trimOffset, label: "Offset")
             .help("Slides the drawn part along the outline (100% = one lap)")
+        Grid(horizontalSpacing: 8, verticalSpacing: 6) {
+            GridRow {
+                CommitTextField(placeholder: "Dash: 24, 12", value: layer.dash.map { String(Int($0)) }.joined(separator: ", "),
+                                font: .system(.caption, design: .monospaced)) { v in
+                    let nums = v.split(whereSeparator: { $0 == "," || $0 == " " }).compactMap { Double($0) }
+                    store.updateLayer(id, "Dash") { $0.dash = nums }
+                }
+                .padding(.horizontal, 7).frame(height: 24)
+                .background(RoundedRectangle(cornerRadius: 5).fill(Color.primary.opacity(0.06)))
+                .help("Dash pattern in px (on, off, …); empty = solid")
+                if layer.dash.isEmpty { Color.clear.frame(height: 1) } else { AnimField(layer: layer, property: .dashOffset, label: "Phase") }
+            }
+            GridRow {
+                AnimField(layer: layer, property: .taperStart, label: "Taper in")
+                AnimField(layer: layer, property: .taperEnd, label: "Taper out")
+            }
+            GridRow {
+                AnimField(layer: layer, property: .offsetPath, label: "Offset")
+                AnimField(layer: layer, property: .zigzag, label: "Zigzag")
+            }
+            GridRow {
+                AnimField(layer: layer, property: .wigglePath, label: "Wiggle")
+                AnimField(layer: layer, property: .pucker, label: "Pucker")
+            }
+            if layer.value(.zigzag, at: store.panelTime) != 0 || layer.value(.wigglePath, at: store.panelTime) != 0 {
+                GridRow {
+                    AnimField(layer: layer, property: .waveLength, label: "Spacing")
+                    AnimField(layer: layer, property: .waveSpeed, label: "Speed")
+                }
+            }
+        }
+    }
+}
+
+/// Shine sweep, light rays, outline and inner glow.
+struct LightRows: View {
+    @Environment(SceneStore.self) private var store
+    let layer: MotionLayer
+
+    var body: some View {
+        let id = layer.id
+        let t = store.panelTime
+        AnimSlider(layer: layer, property: .shine, label: "Shine", range: 0...2)
+            .help("A soft bright band across the layer; animate Position 0 → 1 to sweep it")
+        if layer.value(.shine, at: t) > 0 || layer[.shine].isAnimated {
+            Grid(horizontalSpacing: 8, verticalSpacing: 6) {
+                GridRow {
+                    AnimField(layer: layer, property: .shinePosition, label: "Position")
+                    AnimField(layer: layer, property: .shineAngle, label: "Angle", unit: "°")
+                }
+                GridRow {
+                    AnimField(layer: layer, property: .shineWidth, label: "Width")
+                    Color.clear.frame(height: 1)
+                }
+            }
+            ColorField("Shine", layer.shineColor ?? RGBA(r: 1, g: 1, b: 1, a: 0.8)) { c in store.updateLayer(id, "Shine Color") { $0.shineColor = c } }
+        }
+        AnimSlider(layer: layer, property: .rays, label: "Light rays", range: 0...3)
+            .help("Rays streaking out of the layer's bright parts")
+        if layer.value(.rays, at: t) > 0 || layer[.rays].isAnimated {
+            AnimSlider(layer: layer, property: .raysLength, label: "Length", range: 0...0.95)
+        }
+        Grid(horizontalSpacing: 8, verticalSpacing: 6) {
+            GridRow {
+                AnimField(layer: layer, property: .outline, label: "Outline")
+                AnimField(layer: layer, property: .innerGlowRadius, label: "Inner r.")
+            }
+        }
+        if layer.value(.outline, at: t) > 0 || layer[.outline].isAnimated {
+            ColorField("Outline", layer.outlineColor ?? .white) { c in store.updateLayer(id, "Outline Color") { $0.outlineColor = c } }
+        }
+        AnimSlider(layer: layer, property: .innerGlow, label: "Inner glow", range: 0...2)
+        if layer.value(.innerGlow, at: t) > 0 || layer[.innerGlow].isAnimated {
+            ColorField("Inner", layer.innerGlowColor ?? .white) { c in store.updateLayer(id, "Inner Glow Color") { $0.innerGlowColor = c } }
+        }
     }
 }
 
@@ -1245,6 +1520,16 @@ struct TextAnimatorSection: View {
                             }
                             .controlSize(.small)
                         }
+                        GridRow {
+                            NumberField("Blur", a.blur, digits: 0) { v in edit(i) { $0.blur = max(0, v) } }
+                            Toggle("Color", isOn: Binding(get: { a.color != nil }, set: { on in
+                                edit(i) { $0.color = on ? RGBA(hex: "#FF3B6B") : nil }
+                            }))
+                            .toggleStyle(.checkbox).controlSize(.small)
+                        }
+                    }
+                    if let c = a.color {
+                        ColorField("Away color", c) { nc in edit(i) { $0.color = nc } }
                     }
                     Text("Values are the \(a.mode == .in ? "starting" : "ending") state of each \(a.unit.rawValue).")
                         .font(.caption2).foregroundStyle(.tertiary)

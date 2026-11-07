@@ -238,12 +238,13 @@ public final class FrameRenderer {
                                          d: -Double(h) / Double(scene.height), tx: 0, ty: Double(h))
         var union = CGRect.null
         for tk in times {
-            guard let local = contentBounds(layer, at: tk) else { return nil }
+            guard let local = contentBounds(layer, scene: scene, at: tk) else { return nil }
             var pad = 3 * max(0, layer.value(.blur, at: tk)) + 4
             if layer.value(.shadowOpacity, at: tk) > 0.001 {
                 pad += abs(layer.value(.shadowX, at: tk)) + abs(layer.value(.shadowY, at: tk)) + 2 * layer.value(.shadowBlur, at: tk)
             }
             if layer.value(.glow, at: tk) > 0.001 { pad += 3 * layer.value(.glowRadius, at: tk) }
+            pad += max(0, layer.value(.outline, at: tk)) + PathOps(layer, at: tk).reach
             let m = transform(of: layer, scene: scene, at: tk, copy: copy)
             let r = local.applying(m).insetBy(dx: -pad, dy: -pad).applying(toDevice)
             union = union.union(r)
@@ -266,7 +267,7 @@ public final class FrameRenderer {
             }
             guard !currentParticles.isEmpty else { return }
             // World-space particles are already in scene pixels.
-            if layer.particles.usesWorldSpace { m = copy ?? .identity }
+            if layer.particles.usesWorldSpace { m = (copy ?? .identity).concatenating(scene.cameraTransform(for: layer, at: t)) }
         }
         guard abs(m.a * m.d - m.b * m.c) > 1e-8 else { return } // scaled to nothing
         let blur = max(0, layer.value(.blur, at: t))
@@ -295,7 +296,7 @@ public final class FrameRenderer {
             // Particles take the opacity one by one instead, so they keep blending with each other and the background.
             let grouped = shadowReach != nil || (opacity < 1 && layer.type != .particles)
             if grouped {
-                if let local = contentBounds(layer, at: t) {
+                if let local = contentBounds(layer, scene: scene, at: t) {
                     let pad = (shadowReach ?? 0) + 2
                     ctx.beginTransparencyLayer(in: local.applying(m).insetBy(dx: -pad, dy: -pad), auxiliaryInfo: nil)
                 } else {
@@ -303,7 +304,7 @@ public final class FrameRenderer {
                 }
             }
             ctx.concatenate(m)
-            drawContent(layer, at: t, in: ctx, alpha: grouped ? 1 : opacity)
+            drawContent(layer, scene: scene, at: t, in: ctx, alpha: grouped ? 1 : opacity)
             if grouped { ctx.endTransparencyLayer() }
         }
         ctx.restoreGState()
@@ -349,6 +350,8 @@ public final class FrameRenderer {
     /// Layer-local box a wipe sweeps across: what the layer shows, without the padding `contentBounds` adds.
     private func wipeBox(_ layer: MotionLayer, scene: MotionScene, at t: Double) -> CGRect {
         switch layer.type {
+        case .group:
+            return contentBounds(layer, scene: scene, at: t) ?? .zero
         case .rect, .ellipse, .particles, .generator:
             let w = max(layer.shapeWidth(at: t), 0), h = max(layer.shapeHeight(at: t), 0)
             if layer.type == .particles, w < 1 || h < 1 { return particleBounds(layer) }
@@ -396,16 +399,212 @@ public final class FrameRenderer {
         ctx.restoreGState()
     }
 
+    /// Bar, line, area, pie or donut chart in the box; `reveal` grows it in (bars one after another, lines drawn on,
+    /// pies swept). Series colors come from `generator.colors` (else the fill), labels use the layer's font and
+    /// text color.
+    private func drawChart(_ layer: MotionLayer, in box: CGRect, at t: Double, in ctx: CGContext) {
+        let g = layer.generator
+        let values = g.valuesValue
+        let n = values.count
+        guard n > 0 else { return }
+        let reveal = min(max(layer.value(.reveal, at: t), 0), 1)
+        let colors = g.colors ?? [layer.color(.fill, at: t) ?? .white]
+        func color(_ i: Int) -> CGColor {
+            if let grad = layer.gradient { return grad.stops[min(i, grad.stops.count - 1)].color.cgColor }
+            return colors[i % colors.count].cgColor
+        }
+        let labels = g.labels ?? []
+        let font = Self.font(for: layer)
+        let labelColor = (layer.color(.color, at: t) ?? .white).cgColor
+        let labelH = labels.isEmpty ? 0.0 : layer.fontSize * 1.4
+        let maxV = max(values.max() ?? 1, 1e-9)
+        func drawLabel(_ s: String, at p: CGPoint, align: TextAlign = .center) {
+            let attrs: [NSAttributedString.Key: Any] = [
+                NSAttributedString.Key(kCTFontAttributeName as String): font,
+                NSAttributedString.Key(kCTForegroundColorAttributeName as String): labelColor,
+            ]
+            let line = CTLineCreateWithAttributedString(NSAttributedString(string: s, attributes: attrs))
+            let w = CTLineGetTypographicBounds(line, nil, nil, nil)
+            ctx.saveGState()
+            ctx.translateBy(x: p.x, y: p.y)
+            ctx.scaleBy(x: 1, y: -1)
+            ctx.textMatrix = .identity
+            let x: Double
+            switch align {
+            case .left: x = 0
+            case .center: x = -w / 2
+            case .right: x = -w
+            }
+            ctx.textPosition = CGPoint(x: x, y: 0)
+            CTLineDraw(line, ctx)
+            ctx.restoreGState()
+        }
+        switch g.chartValue {
+        case .bar:
+            let plot = CGRect(x: box.minX, y: box.minY, width: box.width, height: box.height - labelH)
+            let slot = plot.width / Double(n), bw = slot * 0.64
+            let r = max(0, layer.value(.cornerRadius, at: t))
+            for (i, v) in values.enumerated() {
+                // Bars grow one after another, overlapping a little.
+                let k = min(max(reveal * Double(n) * 0.7 - Double(i) * 0.7 + 0.3, 0), 1)
+                let ease = 1 - pow(1 - k, 3)
+                let hgt = max(0, v / maxV) * plot.height * ease
+                let x = plot.minX + slot * (Double(i) + 0.5)
+                let rect = CGRect(x: x - bw / 2, y: plot.maxY - hgt, width: bw, height: hgt)
+                ctx.setFillColor(color(i))
+                if hgt > 0 { ctx.addPath(CGPath(roundedRect: rect, cornerWidth: min(r, bw / 2, hgt / 2), cornerHeight: min(r, bw / 2, hgt / 2), transform: nil)); ctx.fillPath() }
+                if i < labels.count { drawLabel(labels[i], at: CGPoint(x: x, y: box.maxY - layer.fontSize * 0.25)) }
+            }
+        case .line, .area:
+            let plot = CGRect(x: box.minX, y: box.minY, width: box.width, height: box.height - labelH).insetBy(dx: 0, dy: 4)
+            let pts = values.enumerated().map { i, v in
+                CGPoint(x: plot.minX + plot.width * (n == 1 ? 0.5 : Double(i) / Double(n - 1)),
+                        y: plot.maxY - max(0, v / maxV) * plot.height)
+            }
+            let curve = Generator.smooth(pts, closed: false)
+            ctx.saveGState()
+            // Drawn on from the left.
+            ctx.clip(to: CGRect(x: plot.minX - 10, y: box.minY - 10, width: (plot.width + 20) * reveal, height: box.height + 20))
+            if g.chartValue == .area {
+                let area = CGMutablePath()
+                area.addPath(curve)
+                area.addLine(to: CGPoint(x: pts.last!.x, y: plot.maxY))
+                area.addLine(to: CGPoint(x: pts[0].x, y: plot.maxY))
+                area.closeSubpath()
+                if let c = RGBA(cgColor: color(0)) {
+                    var faint = c
+                    faint.a = c.a * 0.3
+                    ctx.setFillColor(faint.cgColor)
+                    ctx.addPath(area)
+                    ctx.fillPath()
+                }
+            }
+            ctx.setStrokeColor(color(0))
+            let lw = layer.value(.strokeWidth, at: t)
+            ctx.setLineWidth(lw > 0 ? lw : 6)
+            ctx.setLineCap(.round)
+            ctx.setLineJoin(.round)
+            ctx.addPath(curve)
+            ctx.strokePath()
+            for p in pts {
+                let dot = max(3, (lw > 0 ? lw : 6) * 0.9)
+                ctx.setFillColor(color(0))
+                ctx.fillEllipse(in: CGRect(x: p.x - dot, y: p.y - dot, width: 2 * dot, height: 2 * dot))
+            }
+            ctx.restoreGState()
+            for (i, p) in pts.enumerated() where i < labels.count {
+                drawLabel(labels[i], at: CGPoint(x: p.x, y: box.maxY - layer.fontSize * 0.25))
+            }
+        case .pie, .donut:
+            let total = max(values.reduce(0, +), 1e-9)
+            let c = CGPoint(x: box.midX, y: box.midY)
+            let radius = min(box.width, box.height) / 2 - (labels.isEmpty ? 0 : layer.fontSize * 1.2)
+            let inner = g.chartValue == .donut ? radius * 0.55 : 0
+            var a0 = -Double.pi / 2
+            let sweepAll = 2 * Double.pi * reveal
+            var used = 0.0
+            for (i, v) in values.enumerated() {
+                let sweep = v / total * 2 * .pi
+                let shown = min(sweep, max(0, sweepAll - used))
+                used += sweep
+                if shown > 0 {
+                    let path = CGMutablePath()
+                    path.addArc(center: c, radius: radius, startAngle: a0, endAngle: a0 + shown, clockwise: false)
+                    if inner > 0 {
+                        path.addArc(center: c, radius: inner, startAngle: a0 + shown, endAngle: a0, clockwise: true)
+                    } else {
+                        path.addLine(to: c)
+                    }
+                    path.closeSubpath()
+                    ctx.setFillColor(color(i))
+                    ctx.addPath(path)
+                    ctx.fillPath()
+                }
+                if i < labels.count, reveal > 0.999 || used <= sweepAll {
+                    let mid = a0 + sweep / 2, lr = radius + layer.fontSize * 0.7
+                    drawLabel(labels[i], at: CGPoint(x: c.x + cos(mid) * lr, y: c.y + sin(mid) * lr + layer.fontSize * 0.35))
+                }
+                a0 += sweep
+            }
+        }
+    }
+
+    /// Lens flare: a bright source at `from` (default the box center) with a halo and ghost discs mirrored across
+    /// the center of the box, all adding light.
+    private func drawFlare(_ layer: MotionLayer, in box: CGRect, at t: Double, in ctx: CGContext) {
+        let g = layer.generator
+        let src = g.from.map { CGPoint(x: $0.x, y: $0.y) } ?? CGPoint(x: box.midX, y: box.midY)
+        let c = CGPoint(x: box.midX, y: box.midY)
+        let colors = g.colorsValue
+        let core = colors.first ?? .white
+        let ghost = colors.count > 1 ? colors[1] : RGBA(r: 0.6, g: 0.8, b: 1, a: 1)
+        let size: Double = g.scale ?? Double(min(box.width, box.height)) * 0.25
+        let strength = g.gainValue
+        func radial(_ color: RGBA, at p: CGPoint, radius: Double, alpha: Double, hollow: Double = 0) {
+            var a = color, b = color
+            a.a = color.a * alpha; b.a = 0
+            var cols: [CGColor] = [a.cgColor, b.cgColor], locs: [CGFloat] = [0, 1]
+            if hollow > 0 {
+                // A ring: clear inside, peaking at `hollow` of the radius, clear at the edge.
+                var mid = color
+                mid.a = color.a * alpha
+                cols = [b.cgColor, b.cgColor, mid.cgColor, b.cgColor]
+                locs = [0, CGFloat(max(0, hollow - 0.12)), CGFloat(hollow), 1]
+            }
+            guard let grad = CGGradient(colorsSpace: Self.colorSpace, colors: cols as CFArray, locations: locs) else { return }
+            ctx.drawRadialGradient(grad, startCenter: p, startRadius: 0, endCenter: p, endRadius: radius, options: [])
+        }
+        ctx.saveGState()
+        ctx.setBlendMode(.plusLighter)
+        // Core and glow.
+        radial(core, at: src, radius: size * 0.35, alpha: min(1, strength))
+        radial(core, at: src, radius: size * 1.6, alpha: 0.35 * strength)
+        // Streak across the source.
+        ctx.saveGState()
+        ctx.translateBy(x: src.x, y: src.y)
+        ctx.scaleBy(x: 1, y: 0.06)
+        radial(core, at: .zero, radius: size * 4, alpha: 0.6 * strength)
+        ctx.restoreGState()
+        // Ghosts along the line through the center, on the far side.
+        let salt = Noise.mix(Noise.hash("flare.\(layer.id)") ^ UInt64(bitPattern: Int64(g.seedValue)))
+        let count = g.detail ?? 5
+        for i in 0..<count {
+            let f = -0.3 - Double(i) * (1.3 / Double(max(count, 1))) - Noise.unit(i, salt) * 0.15
+            let p = CGPoint(x: c.x + (src.x - c.x) * f, y: c.y + (src.y - c.y) * f)
+            let r = size * (0.15 + Noise.unit(i + 50, salt) * 0.5)
+            let hollow = i % 2 == 0 ? 0.0 : 0.75
+            radial(ghost, at: p, radius: r, alpha: 0.25 * strength, hollow: hollow)
+        }
+        // Big faint ring around the center (an anamorphic halo).
+        radial(ghost, at: c, radius: hypot(src.x - c.x, src.y - c.y) + size, alpha: 0.18 * strength, hollow: 0.92)
+        ctx.restoreGState()
+    }
+
     /// `alpha`: opacity particles apply themselves (the context's alpha is replaced per particle).
-    private func drawContent(_ layer: MotionLayer, at t: Double, in ctx: CGContext, alpha: Double = 1) {
+    private func drawContent(_ layer: MotionLayer, scene: MotionScene, at t: Double, in ctx: CGContext, alpha: Double = 1) {
         switch layer.type {
         case .rect, .ellipse, .path: drawShape(layer, at: t, in: ctx)
         case .text: drawText(layer, at: t, in: ctx)
         case .image, .video: drawImage(layer, at: t, in: ctx)
         case .particles: drawParticles(layer, alpha: alpha, in: ctx)
         case .generator: drawGenerator(layer, at: t, in: ctx)
+        case .group: drawGroup(layer, scene: scene, at: t, in: ctx)
         case .audio: break
         }
+    }
+
+    /// A group's children, drawn in its box (a scene of its own: origin at the box's top-left, no camera).
+    private func drawGroup(_ layer: MotionLayer, scene: MotionScene, at t: Double, in ctx: CGContext) {
+        let sub = scene.subscene(of: layer, at: t)
+        let w = Double(sub.width), h = Double(sub.height)
+        ctx.saveGState()
+        ctx.translateBy(x: -w / 2, y: -h / 2)
+        ctx.clip(to: CGRect(x: 0, y: 0, width: w, height: h))
+        let matteSources = Set(sub.layers.compactMap { l in l.matte.flatMap { $0.source == l.id ? nil : $0.source } })
+        for child in sub.layers where child.type.isVisual && !matteSources.contains(child.id) {
+            renderLayer(child, scene: sub, at: t, in: ctx)
+        }
+        ctx.restoreGState()
     }
 
     /// Generator layers: a filled outline (spectrum, waveform, lightning, grid) or a noise image, in the layer's box.
@@ -414,6 +613,14 @@ public final class FrameRenderer {
         let w = max(layer.shapeWidth(at: t), 0), h = max(layer.shapeHeight(at: t), 0)
         guard w > 0, h > 0 else { return }
         let box = CGRect(x: -w / 2, y: -h / 2, width: w, height: h)
+        if g.kind == .chart {
+            drawChart(layer, in: box, at: t, in: ctx)
+            return
+        }
+        if g.kind == .flare {
+            drawFlare(layer, in: box, at: t, in: ctx)
+            return
+        }
         if g.kind == .noise {
             // About one sample per 3 device pixels: noise is smooth, so it is drawn scaled up with interpolation.
             let scale = abs(ctx.ctm.a * ctx.ctm.d - ctx.ctm.b * ctx.ctm.c).squareRoot()
@@ -474,7 +681,7 @@ public final class FrameRenderer {
         let scale = abs(m.a * m.d - m.b * m.c).squareRoot() * pixelScale
         // Only the area the layer can reach once blurred and processed, rather than the whole frame.
         var area = frame
-        if let local = contentBounds(layer, at: t) {
+        if let local = contentBounds(layer, scene: scene, at: t) {
             var box = local
             if let fx {
                 let r = fx.reach(width: local.width)
@@ -497,7 +704,7 @@ public final class FrameRenderer {
         off.concatenate(m)
         // Particles add up among themselves before the blurred result is blended with the frame.
         if layer.type == .particles { off.setBlendMode(layer.blendMode.cgBlendMode) }
-        drawContent(layer, at: t, in: off)
+        drawContent(layer, scene: scene, at: t, in: off)
         off.restoreGState()
         // The layer's origin in bitmap pixels (y down).
         let o = CGPoint.zero.applying(toDevice)
@@ -505,12 +712,46 @@ public final class FrameRenderer {
         fx?.applyBeforeBlur(off, center: center, scale: scale)
         Self.boxBlur(off, sigma: sigma)
         fx?.applyAfterBlur(off, center: center, scale: scale, pixelScale: pixelScale)
+        if let fx, fx.shine > 0.001 { drawShine(layer, scene: scene, transform: m, strength: fx.shine, at: t, in: off) }
         guard let image = off.makeImage() else { return nil }
         return (image, area)
     }
 
+    /// A soft bright band across the layer's box, only where the layer has pixels (light sweep / shine).
+    private func drawShine(_ layer: MotionLayer, scene: MotionScene, transform m: CGAffineTransform, strength: Double,
+                           at t: Double, in ctx: CGContext) {
+        let box = wipeBox(layer, scene: scene, at: t)
+        guard box.width > 0, box.height > 0 else { return }
+        let pos = layer.value(.shinePosition, at: t)
+        let angle = layer.value(.shineAngle, at: t) * .pi / 180
+        let width = max(1, layer.value(.shineWidth, at: t))
+        let color = layer.shineColor ?? RGBA(r: 1, g: 1, b: 1, a: 0.8)
+        var mid = color
+        mid.a = min(1, color.a * min(strength, 1))
+        var clear = color
+        clear.a = 0
+        guard let gradient = CGGradient(colorsSpace: Self.colorSpace, colors: [clear.cgColor, mid.cgColor, clear.cgColor] as CFArray,
+                                        locations: [0, 0.5, 1]) else { return }
+        ctx.saveGState()
+        ctx.concatenate(m)
+        ctx.setBlendMode(.sourceAtop)
+        // The band's center travels along the box's width (turned by the angle), from before its left edge to past
+        // its right one.
+        let dx = cos(angle), dy = sin(angle)
+        let span = abs(dx) * box.width + abs(dy) * box.height
+        let c = CGPoint(x: box.midX + dx * (pos - 0.5) * (span + width), y: box.midY + dy * (pos - 0.5) * (span + width))
+        var left = strength
+        while left > 0.001 {
+            ctx.setAlpha(min(left, 1))
+            ctx.drawLinearGradient(gradient, start: CGPoint(x: c.x - dx * width / 2, y: c.y - dy * width / 2),
+                                   end: CGPoint(x: c.x + dx * width / 2, y: c.y + dy * width / 2), options: [])
+            left -= 1
+        }
+        ctx.restoreGState()
+    }
+
     /// Layer-local bounds of what `drawContent` paints, or nil when unknown (text animators move glyphs anywhere).
-    private func contentBounds(_ layer: MotionLayer, at t: Double) -> CGRect? {
+    private func contentBounds(_ layer: MotionLayer, scene: MotionScene, at t: Double) -> CGRect? {
         switch layer.type {
         case .rect, .ellipse:
             let w = max(layer.shapeWidth(at: t), 0), h = max(layer.shapeHeight(at: t), 0)
@@ -525,6 +766,15 @@ public final class FrameRenderer {
         case .image, .video:
             return imageFrame(layer, at: t).rect.insetBy(dx: -4, dy: -4) // placeholder outline
         case .text:
+            if let mp = layer.textPath {
+                guard layer.textAnimators.isEmpty else { return nil }
+                let pts = mp.polyline()
+                guard let first = pts.first else { return nil }
+                var box = CGRect(origin: first, size: .zero)
+                for p in pts { box = box.union(CGRect(origin: p, size: .zero)) }
+                let pad = max(layer.fontSize, 1) * 1.5 + layer.value(.strokeWidth, at: t)
+                return box.insetBy(dx: -pad, dy: -pad)
+            }
             guard layer.textAnimators.isEmpty, let box = textLayout(layer, at: t)?.box else { return nil }
             let pad = max(layer.fontSize, 1) // glyph overhang outside the line box (italics, accents)
             return CGRect(x: -box.width / 2, y: -box.height / 2, width: box.width, height: box.height)
@@ -542,6 +792,10 @@ public final class FrameRenderer {
                 box = box.insetBy(dx: -pad, dy: -pad)
             }
             return box.insetBy(dx: -max(layer.value(.strokeWidth, at: t), 4), dy: -max(layer.value(.strokeWidth, at: t), 4))
+        case .group:
+            let w = layer.width.map { $0.value(at: t) } ?? Double(scene.width)
+            let h = layer.height.map { $0.value(at: t) } ?? Double(scene.height)
+            return CGRect(x: -w / 2, y: -h / 2, width: w, height: h)
         case .audio:
             return nil
         }
@@ -582,14 +836,19 @@ public final class FrameRenderer {
     }
 
     private func drawShape(_ layer: MotionLayer, at t: Double, in ctx: CGContext) {
-        let fillPath: CGPath
-        let pieces: [(path: CGPath, length: Double)]
-        let box: CGRect
+        var fillPath: CGPath
+        var pieces: [(path: CGPath, length: Double)]
+        var box: CGRect
+        var subpaths: [Subpath] = []
+        let ops = PathOps(layer, at: t)
+        let taper = max(0, layer.value(.taperStart, at: t)) + max(0, layer.value(.taperEnd, at: t)) > 0.001
         if layer.type == .path {
-            let shape = layer.pathShape(at: t)
+            var shape = layer.pathShape(at: t)
             guard !shape.isEmpty else { return }
+            if ops.isActive { shape = ops.apply(to: shape) }
             fillPath = shape.cgPath
             pieces = shape.strokePieces
+            subpaths = shape.subpaths
             box = fillPath.boundingBoxOfPath
         } else {
             let w = max(layer.shapeWidth(at: t), 0), h = max(layer.shapeHeight(at: t), 0)
@@ -606,6 +865,13 @@ public final class FrameRenderer {
                 length = 2 * (w + h) - (8 - 2 * .pi) * r
             }
             pieces = [(fillPath, length)]
+            if ops.isActive || taper {
+                let shape = ops.apply(to: PathShape(subpaths: PathParser.subpaths(of: fillPath)))
+                fillPath = shape.cgPath
+                pieces = shape.strokePieces
+                subpaths = shape.subpaths
+                box = fillPath.boundingBoxOfPath
+            }
         }
         let rule: CGPathFillRule = layer.fillRule == .evenodd ? .evenOdd : .winding
         if let g = layer.gradient {
@@ -619,7 +885,31 @@ public final class FrameRenderer {
             ctx.setFillColor(fill.cgColor)
             ctx.fillPath(using: rule)
         }
-        strokeTrimmed(layer, pieces, at: t, in: ctx)
+        if taper {
+            strokeTapered(layer, subpaths, at: t, in: ctx)
+        } else {
+            strokeTrimmed(layer, pieces, at: t, in: ctx)
+        }
+    }
+
+    /// Stroke thinning to a point at its ends (taperStart/taperEnd), honoring trim like `strokeTrimmed`.
+    private func strokeTapered(_ layer: MotionLayer, _ subpaths: [Subpath], at t: Double, in ctx: CGContext) {
+        let lineWidth = layer.value(.strokeWidth, at: t)
+        guard let stroke = layer.color(.stroke, at: t), lineWidth > 0 else { return }
+        var s = min(max(layer.value(.trimStart, at: t), 0), 1), e = min(max(layer.value(.trim, at: t), 0), 1)
+        if s > e { swap(&s, &e) }
+        guard e - s > 0.0005 else { return }
+        let offset = layer.value(.trimOffset, at: t)
+        let ts = min(max(layer.value(.taperStart, at: t), 0), 1), te = min(max(layer.value(.taperEnd, at: t), 0), 1)
+        ctx.saveGState()
+        ctx.setFillColor(stroke.cgColor)
+        for sp in subpaths where !sp.segments.isEmpty {
+            var from = s + offset, to = e + offset
+            if !sp.closed { from = min(max(from, 0), 1); to = min(max(to, 0), 1) }
+            ctx.addPath(PathOps.taperedStroke(sp, width: lineWidth, from: from, to: to, taperStart: ts, taperEnd: te))
+            ctx.fillPath()
+        }
+        ctx.restoreGState()
     }
 
     /// Strokes each piece between trimStart and trim (end), moved along by trimOffset; trims wrap around.
@@ -639,6 +929,9 @@ public final class FrameRenderer {
         let isPath = layer.type == .path
         ctx.setLineCap((layer.lineCap ?? (isPath || trimmed ? .round : .butt)).cgLineCap)
         ctx.setLineJoin((layer.lineJoin ?? (isPath ? .round : .miter)).cgLineJoin)
+        if !trimmed, !layer.dash.isEmpty, layer.dash.contains(where: { $0 > 0 }) {
+            ctx.setLineDash(phase: layer.value(.dashOffset, at: t), lengths: layer.dash.map { max($0, 0.01) })
+        }
         for piece in pieces where piece.length > 0 {
             ctx.addPath(piece.path)
             if trimmed {
@@ -678,6 +971,10 @@ public final class FrameRenderer {
     }
 
     private func drawText(_ layer: MotionLayer, at t: Double, in ctx: CGContext) {
+        if layer.textPath != nil {
+            drawTextOnPath(layer, at: t, in: ctx)
+            return
+        }
         guard let layout = textLayout(layer, at: t) else { return }
         let (bw, bh) = (layout.box.width, layout.box.height)
         if let g = layer.gradient {
@@ -712,14 +1009,74 @@ public final class FrameRenderer {
         if !layer.textAnimators.isEmpty {
             drawAnimatedGlyphs(frame, layer: layer, shownUTF16: layout.shownUTF16, at: t, in: ctx)
         } else {
+            // Outline behind the letters (twice as wide, half shows): stroking on top would show the inner edges
+            // of glyphs built from overlapping contours (SF, variable fonts). Outline-only text (clear fill)
+            // instead cuts the letters out of the stroke.
+            let strokeW = layer.value(.strokeWidth, at: t)
+            let hollow = (layer.color(.color, at: t)?.a ?? 1) <= 0.001
+            if let sc = layer.color(.stroke, at: t), strokeW > 0, sc.a > 0 {
+                if hollow { ctx.beginTransparencyLayer(auxiliaryInfo: nil) }
+                ctx.saveGState()
+                ctx.setTextDrawingMode(.stroke)
+                ctx.setStrokeColor(sc.cgColor)
+                ctx.setLineWidth(strokeW * 2)
+                ctx.setLineJoin(.round)
+                CTFrameDraw(frame, ctx)
+                ctx.restoreGState()
+                if hollow {
+                    ctx.saveGState()
+                    ctx.setBlendMode(.destinationOut)
+                    ctx.setTextDrawingMode(.fill)
+                    ctx.setFillColor(CGColor(gray: 0, alpha: 1))
+                    CTFrameDraw(frame, ctx)
+                    ctx.restoreGState()
+                    ctx.endTransparencyLayer()
+                    ctx.restoreGState()
+                    return
+                }
+            }
             CTFrameDraw(frame, ctx)
         }
         ctx.restoreGState()
     }
 
+    /// The text as shown at time t: "{n}" replaced by the counter's number, and scrambled letters.
+    static func displayText(_ layer: MotionLayer, at t: Double) -> String {
+        var s = layer.text
+        if s.contains("{n}") {
+            let f = NumberFormatter()
+            f.numberStyle = .decimal
+            f.minimumFractionDigits = layer.counterDecimals
+            f.maximumFractionDigits = layer.counterDecimals
+            f.usesGroupingSeparator = layer.counterGrouping
+            f.groupingSeparator = ","
+            f.decimalSeparator = "."
+            let n = f.string(from: NSNumber(value: layer.value(.counter, at: t))) ?? "0"
+            s = s.replacingOccurrences(of: "{n}", with: n)
+        }
+        let scramble = min(max(layer.value(.scramble, at: t), 0), 1)
+        if scramble > 0.001 {
+            // The letters resolve from the start; the rest flicker through random characters ~15 times a second.
+            let chars = Array(s)
+            let letters = chars.indices.filter { !chars[$0].isWhitespace }
+            let keep = Int((Double(letters.count) * (1 - scramble)).rounded(.down))
+            let pool = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789#$%&@*+=<>?")
+            let tick = UInt64(max(0, Int(t * 15)))
+            let salt = Noise.mix(Noise.hash("scramble.\(layer.id)") ^ (tick &* 0x9E3779B97F4A7C15))
+            var out = chars
+            for (rank, i) in letters.enumerated() where rank >= keep {
+                let c = chars[i]
+                let r = pool[Int(Noise.unit(i, salt) * Double(pool.count)) % pool.count]
+                out[i] = c.isLowercase ? Character(r.lowercased()) : r
+            }
+            s = String(out)
+        }
+        return s
+    }
+
     /// Typesets the layer's text: the framesetter, the text box size, and how many UTF-16 units the reveal shows.
     private func textLayout(_ layer: MotionLayer, at t: Double) -> (setter: CTFramesetter, box: CGSize, shownUTF16: Int)? {
-        let full = layer.text
+        let full = Self.displayText(layer, at: t)
         guard !full.isEmpty else { return nil }
         let font = Self.font(for: layer)
 
@@ -772,11 +1129,14 @@ public final class FrameRenderer {
         var origins = [CGPoint](repeating: .zero, count: lines.count)
         CTFrameGetLineOrigins(frame, CFRange(location: 0, length: 0), &origins)
 
-        let charMap = TextUnits.map(layer.text, unit: .char)
-        let wordMap = TextUnits.map(layer.text, unit: .word)
+        let shownText = Self.displayText(layer, at: t)
+        let charMap = TextUnits.map(shownText, unit: .char)
+        let wordMap = TextUnits.map(shownText, unit: .word)
         let charStates = layer.glyphStates(unit: .char, count: charMap.count, at: t)
         let wordStates = layer.glyphStates(unit: .word, count: wordMap.count, at: t)
         let lineStates = layer.glyphStates(unit: .line, count: lines.count, at: t)
+        let strokeW = layer.value(.strokeWidth, at: t)
+        let strokeColor = strokeW > 0 ? layer.color(.stroke, at: t).flatMap { $0.a > 0 ? $0 : nil } : nil
 
         for (li, line) in lines.enumerated() {
             let origin = origins[li]
@@ -816,15 +1176,20 @@ public final class FrameRenderer {
                     guard st.opacity > 0.001, abs(st.scale) > 0.0001 else { continue }
                     ctx.saveGState()
                     ctx.setAlpha(st.opacity)
-                    ctx.setFillColor(color)
+                    var fill = color
+                    if let tint = st.tint, let base = RGBA(cgColor: color) {
+                        var mixed = RGBA.lerp(base, RGBA(r: tint.r, g: tint.g, b: tint.b, a: base.a), tint.a)
+                        mixed.a = base.a
+                        fill = mixed.cgColor
+                    }
                     // Local space is y-up here, so a positive (downward) dy moves the glyph down.
                     ctx.translateBy(x: pivotX + st.dx, y: midY - st.dy)
                     ctx.rotate(by: -st.rotation * .pi / 180)
                     ctx.scaleBy(x: st.scale, y: st.scale)
                     ctx.translateBy(x: -pivotX, y: -midY)
-                    var glyph = glyphs[g]
-                    var pos = CGPoint(x: origin.x + positions[g].x, y: origin.y + positions[g].y)
-                    CTFontDrawGlyphs(runFont, &glyph, &pos, 1, ctx)
+                    let pos = CGPoint(x: origin.x + positions[g].x, y: origin.y + positions[g].y)
+                    drawGlyph(glyphs[g], font: runFont, at: pos, fill: fill, stroke: strokeColor, strokeWidth: strokeW,
+                              blur: st.blur, in: ctx)
                     ctx.restoreGState()
                 }
             }
@@ -837,6 +1202,155 @@ public final class FrameRenderer {
         a.dy += b.dy
         a.scale *= b.scale
         a.rotation += b.rotation
+        a.blur += b.blur
+        if let t = b.tint { a.tint = a.tint.map { RGBA.lerp($0, t, 0.5) } ?? t }
+    }
+
+    /// One glyph (y-up text space), filled and optionally outlined, blurred through a small bitmap when asked.
+    private func drawGlyph(_ glyph: CGGlyph, font: CTFont, at pos: CGPoint, fill: CGColor, stroke: RGBA?,
+                           strokeWidth: Double, blur: Double, in ctx: CGContext) {
+        var g = glyph
+        func paint(_ c: CGContext, at p: CGPoint) {
+            var p = p
+            // Outline behind the glyph (twice as wide, half shows), then the fill: see drawTextBody.
+            let hollow = fill.alpha <= 0.001
+            if let stroke {
+                c.setStrokeColor(stroke.cgColor)
+                c.setLineWidth(strokeWidth * 2)
+                c.setLineJoin(.round)
+                c.setTextDrawingMode(.stroke)
+                CTFontDrawGlyphs(font, &g, &p, 1, c)
+                if hollow {
+                    // Cut the letter out of its own outline (within this glyph's transparency layer).
+                    c.setBlendMode(.destinationOut)
+                    c.setFillColor(CGColor(gray: 0, alpha: 1))
+                    c.setTextDrawingMode(.fill)
+                    CTFontDrawGlyphs(font, &g, &p, 1, c)
+                    c.setBlendMode(.normal)
+                    return
+                }
+            }
+            c.setFillColor(fill)
+            c.setTextDrawingMode(.fill)
+            CTFontDrawGlyphs(font, &g, &p, 1, c)
+        }
+        let m = ctx.ctm
+        let scale = abs(m.a * m.d - m.b * m.c).squareRoot()
+        let sigma = blur * scale / 2
+        let hollow = stroke != nil && fill.alpha <= 0.001
+        guard let size = Self.boxSize(sigma) else {
+            if hollow { ctx.beginTransparencyLayer(auxiliaryInfo: nil) }
+            paint(ctx, at: pos)
+            if hollow { ctx.endTransparencyLayer() }
+            return
+        }
+        // The glyph alone in a bitmap at device resolution, blurred, then drawn back at its place.
+        var box = CTFontGetBoundingRectsForGlyphs(font, .horizontal, &g, nil, 1).insetBy(dx: -strokeWidth, dy: -strokeWidth)
+        let reach = Double(3 * (size / 2) + 1) / scale
+        box = box.insetBy(dx: -reach, dy: -reach).offsetBy(dx: pos.x, dy: pos.y)
+        let pw = max(1, Int((box.width * scale).rounded(.up))), ph = max(1, Int((box.height * scale).rounded(.up)))
+        guard pw * ph < 4_000_000, let off = Self.bitmap(pw, ph) else {
+            paint(ctx, at: pos)
+            return
+        }
+        off.scaleBy(x: Double(pw) / box.width, y: Double(ph) / box.height)
+        off.translateBy(x: -box.minX, y: -box.minY)
+        off.setShouldAntialias(true)
+        paint(off, at: pos)
+        Self.boxBlur(off, sigma: sigma)
+        guard let image = off.makeImage() else { return }
+        ctx.draw(image, in: box)
+    }
+
+    /// Text laid along `textPath`: each glyph sits on the curve, turned to its direction, from the path's start
+    /// (plus `textOffset`; centered/right-aligned texts start later). Text animators still apply per character.
+    private func drawTextOnPath(_ layer: MotionLayer, at t: Double, in ctx: CGContext) {
+        guard let mp = layer.textPath, let layout = textLayout(layer, at: t) else { return }
+        let poly = mp.polyline()
+        guard poly.count >= 2 else { return }
+        var lengths: [Double] = [0]
+        for i in 1..<poly.count { lengths.append(lengths[i - 1] + hypot(poly[i].x - poly[i - 1].x, poly[i].y - poly[i - 1].y)) }
+        let total = lengths.last ?? 0
+        guard total > 1 else { return }
+        func at(_ d: Double) -> (CGPoint, Double) {
+            var dist = d
+            if mp.closed { dist = dist - floor(dist / total) * total } else { dist = min(max(dist, 0), total) }
+            var lo = 0, hi = lengths.count - 1
+            while hi - lo > 1 { let mid = (lo + hi) / 2; if lengths[mid] <= dist { lo = mid } else { hi = mid } }
+            let a = poly[lo], b = poly[hi], seg = lengths[hi] - lengths[lo]
+            let f = seg > 0 ? (dist - lengths[lo]) / seg : 0
+            return (CGPoint(x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f), atan2(b.y - a.y, b.x - a.x))
+        }
+        // One line of the attributed text (line breaks are ignored on a path).
+        let path = CGPath(rect: CGRect(x: 0, y: 0, width: 100_000, height: layout.box.height), transform: nil)
+        let frame = CTFramesetterCreateFrame(layout.setter, CFRange(location: 0, length: 0), path, nil)
+        guard let line = (CTFrameGetLines(frame) as? [CTLine])?.first else { return }
+        let lineWidth = CTLineGetTypographicBounds(line, nil, nil, nil)
+        var startD = layer.value(.textOffset, at: t)
+        switch layer.align {
+        case .left: break
+        case .center: startD += (total - lineWidth) / 2
+        case .right: startD += total - lineWidth
+        }
+        let shownText = Self.displayText(layer, at: t)
+        let charMap = TextUnits.map(shownText, unit: .char)
+        let wordMap = TextUnits.map(shownText, unit: .word)
+        let charStates = layer.glyphStates(unit: .char, count: charMap.count, at: t)
+        let wordStates = layer.glyphStates(unit: .word, count: wordMap.count, at: t)
+        let strokeW = layer.value(.strokeWidth, at: t)
+        let strokeColor = strokeW > 0 ? layer.color(.stroke, at: t).flatMap { $0.a > 0 ? $0 : nil } : nil
+        let runs = CTLineGetGlyphRuns(line) as? [CTRun] ?? []
+        // The line's first glyph starts at x = 0 of the line (alignment was applied through startD).
+        var lineOrigin = 0.0
+        if let first = runs.first, CTRunGetGlyphCount(first) > 0 {
+            var p = CGPoint.zero
+            CTRunGetPositions(first, CFRange(location: 0, length: 1), &p)
+            lineOrigin = p.x
+        }
+        for run in runs {
+            let n = CTRunGetGlyphCount(run)
+            guard n > 0 else { continue }
+            var glyphs = [CGGlyph](repeating: 0, count: n)
+            var positions = [CGPoint](repeating: .zero, count: n)
+            var advances = [CGSize](repeating: .zero, count: n)
+            var indices = [CFIndex](repeating: 0, count: n)
+            CTRunGetGlyphs(run, CFRange(location: 0, length: 0), &glyphs)
+            CTRunGetPositions(run, CFRange(location: 0, length: 0), &positions)
+            CTRunGetAdvances(run, CFRange(location: 0, length: 0), &advances)
+            CTRunGetStringIndices(run, CFRange(location: 0, length: 0), &indices)
+            let runAttrs = CTRunGetAttributes(run) as NSDictionary
+            let runFont = runAttrs[kCTFontAttributeName as String].map { $0 as! CTFont } ?? Self.font(for: layer)
+            let color = runAttrs[kCTForegroundColorAttributeName as String].map { $0 as! CGColor }
+                ?? (layer.color(.color, at: t) ?? .white).cgColor
+            for g in 0..<n {
+                let si = indices[g]
+                guard si < layout.shownUTF16 else { continue }
+                var st = GlyphState.rest
+                if si < charMap.indices.count, charMap.indices[si] >= 0 { combine(&st, charStates[charMap.indices[si]]) }
+                if si < wordMap.indices.count, wordMap.indices[si] >= 0 { combine(&st, wordStates[wordMap.indices[si]]) }
+                guard st.opacity > 0.001, abs(st.scale) > 0.0001 else { continue }
+                let half = advances[g].width / 2
+                let d = startD + positions[g].x - lineOrigin + half
+                if !mp.closed, d < -half || d > total + half { continue }
+                let (p, angle) = at(d)
+                var fill = color
+                if let tint = st.tint, let base = RGBA(cgColor: color) {
+                    var mixed = RGBA.lerp(base, RGBA(r: tint.r, g: tint.g, b: tint.b, a: base.a), tint.a)
+                    mixed.a = base.a
+                    fill = mixed.cgColor
+                }
+                ctx.saveGState()
+                ctx.setAlpha(st.opacity)
+                // Layer space is y-down: move to the point on the path, turn along it, then flip for CoreText.
+                ctx.translateBy(x: p.x + st.dx, y: p.y + st.dy)
+                ctx.rotate(by: angle + st.rotation * .pi / 180)
+                ctx.scaleBy(x: st.scale, y: -st.scale)
+                ctx.textMatrix = .identity
+                drawGlyph(glyphs[g], font: runFont, at: CGPoint(x: -half, y: positions[g].y), fill: fill,
+                          stroke: strokeColor, strokeWidth: strokeW, blur: st.blur, in: ctx)
+                ctx.restoreGState()
+            }
+        }
     }
 
     private func drawImage(_ layer: MotionLayer, at t: Double, in ctx: CGContext) {
@@ -1173,7 +1687,7 @@ extension FrameRenderer {
     /// Outline of a text layer's letters in layer-local px (centered, y down), as `drawText` lays them out.
     private func glyphOutline(_ layer: MotionLayer, at t: Double) -> GlyphOutline? {
         let spacing = layer.value(.letterSpacing, at: t)
-        let key = [layer.text, "\(layer.fontSize)", layer.fontWeight, layer.fontName ?? "", "\(layer.maxWidth ?? -1)",
+        let key = [Self.displayText(layer, at: t), "\(layer.fontSize)", layer.fontWeight, layer.fontName ?? "", "\(layer.maxWidth ?? -1)",
                    layer.align.rawValue, String(format: "%.2f", spacing)].joined(separator: "|")
         if let cached = glyphCache[key] { return cached }
         guard let layout = textLayout(layer, at: t) else { return nil }

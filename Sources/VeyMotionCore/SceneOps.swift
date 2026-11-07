@@ -10,7 +10,7 @@ public enum Preset: String, CaseIterable, Codable, Sendable {
     // Shapes
     case drawOn
     // Text
-    case typewriter, textRise, textPop, textDrop, textLines, textOut
+    case typewriter, textRise, textPop, textDrop, textLines, textOut, decode, textBlurIn, textFocus
 
     public var title: String {
         switch self {
@@ -51,6 +51,9 @@ public enum Preset: String, CaseIterable, Codable, Sendable {
         case .textDrop: return "Letters Drop"
         case .textLines: return "Lines Slide"
         case .textOut: return "Letters Out"
+        case .decode: return "Decode"
+        case .textBlurIn: return "Letters Blur In"
+        case .textFocus: return "Words Focus"
         }
     }
 
@@ -66,7 +69,7 @@ public enum Preset: String, CaseIterable, Codable, Sendable {
              .flipOut, .wipeOut: return .exit
         case .spin, .pulse, .heartbeat, .shake, .wobble, .jello, .glitchBurst: return .emphasis
         case .drawOn: return .shape
-        case .typewriter, .textRise, .textPop, .textDrop, .textLines, .textOut: return .text
+        case .typewriter, .textRise, .textPop, .textDrop, .textLines, .textOut, .decode, .textBlurIn, .textFocus: return .text
         }
     }
 
@@ -80,19 +83,142 @@ public enum Preset: String, CaseIterable, Codable, Sendable {
     }
 }
 
+public enum TransitionType: String, CaseIterable, Codable, Sendable {
+    case fade, dissolve, push, slide, zoom, whip, wipe, iris, blinds, blocks, clock, glitch, flash, blur
+
+    public var title: String { rawValue.capitalized }
+}
+
 /// All scene mutations live here so the UI and the MCP server share exactly the same behavior.
 extension MotionScene {
+    /// Animates `out` away and `in` in over [at, at + d]; the outgoing layer ends and the incoming one starts there.
+    /// `direction` (left|right|up|down) is where the motion goes for push/slide/whip/wipe.
+    public mutating func transition(_ type: TransitionType, out outId: String?, in inId: String?, at s: Double,
+                                    duration d: Double, direction: String?) throws {
+        guard d > 0 else { throw SceneError.invalid("duration must be > 0") }
+        guard outId != nil || inId != nil else { throw SceneError.invalid("Give `out` and/or `in` layer ids") }
+        let e = s + d, mid = s + d / 2
+        let dir = direction ?? "left"
+        let dx: Double = dir == "left" ? -1 : dir == "right" ? 1 : 0
+        let dy: Double = dir == "up" ? -1 : dir == "down" ? 1 : 0
+        let w = Double(width), h = Double(height)
+        let wipeAngle: Double = dir == "right" ? 0 : dir == "down" ? 90 : dir == "up" ? 270 : 180
+        func kf(_ t: Double, _ v: Double, _ easing: Easing = .easeInOut) -> MotionKeyframe { MotionKeyframe(t: t, v: v, easing: easing) }
+        func put(_ l: inout MotionLayer, _ p: AnimProperty, _ kfs: [MotionKeyframe]) {
+            l[p] = l[p].inserting(kfs, replacing: kfs.first!.t, kfs.last!.t)
+        }
+        func wipeStyle(_ t: WipeType) -> WipeStyle {
+            var st = WipeStyle(type: t, angle: wipeAngle, feather: t == .linear ? 60 : 20)
+            if t == .blocks { st.count = 14 }
+            if t == .blinds { st.count = 8 }
+            return st
+        }
+        if let outId {
+            try withLayer(outId) { l in
+                let x0 = l.x.value(at: s), y0 = l.y.value(at: s), sc = l.scale.value(at: s)
+                switch type {
+                case .fade, .flash:
+                    put(&l, .opacity, [kf(s, l.opacity.value(at: s), .linear), kf(type == .flash ? mid : e, 0, .easeIn)])
+                case .dissolve:
+                    l.wipeStyle = wipeStyle(.blocks); l.wipeStyle?.count = 40
+                    put(&l, .wipe, [kf(s, 0, .linear), kf(e, 1, .linear)])
+                case .push, .slide:
+                    put(&l, .x, [kf(s, x0, .linear), kf(e, x0 + dx * w, .curve(.cubic, .inOut))])
+                    put(&l, .y, [kf(s, y0, .linear), kf(e, y0 + dy * h, .curve(.cubic, .inOut))])
+                    if type == .slide { put(&l, .opacity, [kf(s + d * 0.4, l.opacity.value(at: s), .linear), kf(e, 0, .easeIn)]) }
+                case .zoom:
+                    put(&l, .scale, [kf(s, sc, .linear), kf(e, sc * 3, .curve(.expo, .in))])
+                    put(&l, .opacity, [kf(s + d * 0.3, l.opacity.value(at: s), .linear), kf(e, 0, .easeIn)])
+                    put(&l, .zoomBlur, [kf(s, 0, .linear), kf(e, 0.6, .easeIn)])
+                case .whip:
+                    put(&l, .x, [kf(s, x0, .linear), kf(mid, x0 + dx * w * 1.2, .curve(.expo, .in))])
+                    put(&l, .y, [kf(s, y0, .linear), kf(mid, y0 + dy * h * 1.2, .curve(.expo, .in))])
+                    put(&l, .directionalBlur, [kf(s, 0, .linear), kf(mid, 160, .easeIn)])
+                    l[.blurAngle] = .constant(dy != 0 ? 90 : 0)
+                case .wipe, .iris, .blinds, .blocks, .clock:
+                    let wt: WipeType = type == .wipe ? .linear : type == .iris ? .iris : type == .blinds ? .blinds : type == .blocks ? .blocks : .radial
+                    l.wipeStyle = wipeStyle(wt)
+                    put(&l, .wipe, [kf(s, 0, .linear), kf(e, 1, .curve(.cubic, .inOut))])
+                case .glitch:
+                    put(&l, .glitch, [kf(s, 0, .linear), kf(s + d * 0.1, 0.9, .hold), kf(mid, 1, .hold)])
+                    put(&l, .rgbSplit, [kf(s, 0, .linear), kf(s + d * 0.1, 10, .hold)])
+                    put(&l, .opacity, [kf(mid - 0.01, l.opacity.value(at: s), .linear), kf(mid, 0, .hold)])
+                case .blur:
+                    put(&l, .blur, [kf(s, 0, .linear), kf(e, 50, .easeIn)])
+                    put(&l, .opacity, [kf(s + d * 0.3, l.opacity.value(at: s), .linear), kf(e, 0, .easeIn)])
+                }
+                if l.end == nil || l.end! > e { l.end = type == .whip || type == .glitch || type == .flash ? mid + 0.02 : e }
+            }
+        }
+        if let inId {
+            try withLayer(inId) { l in
+                if l.start > s { l.start = s }
+                let x1 = l.x.value(at: e), y1 = l.y.value(at: e), sc = l.scale.value(at: e)
+                let op = max(l.opacity.value(at: e), 0.01)
+                switch type {
+                case .fade:
+                    put(&l, .opacity, [kf(s, 0, .linear), kf(e, op, .easeOut)])
+                case .flash:
+                    put(&l, .opacity, [kf(mid, 0, .linear), kf(e, op, .easeOut)])
+                case .dissolve:
+                    l.wipeStyle = wipeStyle(.blocks); l.wipeStyle?.count = 40
+                    put(&l, .wipe, [kf(s, 1, .linear), kf(e, 0, .linear)])
+                case .push:
+                    put(&l, .x, [kf(s, x1 - dx * w, .linear), kf(e, x1, .curve(.cubic, .inOut))])
+                    put(&l, .y, [kf(s, y1 - dy * h, .linear), kf(e, y1, .curve(.cubic, .inOut))])
+                case .slide:
+                    put(&l, .x, [kf(s, x1 - dx * w * 0.3, .linear), kf(e, x1, .curve(.expo, .out))])
+                    put(&l, .y, [kf(s, y1 - dy * h * 0.3, .linear), kf(e, y1, .curve(.expo, .out))])
+                    put(&l, .opacity, [kf(s, 0, .linear), kf(s + d * 0.6, op, .easeOut)])
+                case .zoom:
+                    put(&l, .scale, [kf(s, sc * 0.4, .linear), kf(e, sc, .curve(.expo, .out))])
+                    put(&l, .opacity, [kf(s, 0, .linear), kf(s + d * 0.5, op, .easeOut)])
+                    put(&l, .zoomBlur, [kf(s, 0.5, .linear), kf(e, 0, .easeOut)])
+                case .whip:
+                    put(&l, .x, [kf(mid, x1 - dx * w * 1.2, .linear), kf(e, x1, .curve(.expo, .out))])
+                    put(&l, .y, [kf(mid, y1 - dy * h * 1.2, .linear), kf(e, y1, .curve(.expo, .out))])
+                    put(&l, .directionalBlur, [kf(mid, 160, .linear), kf(e, 0, .easeOut)])
+                    l[.blurAngle] = .constant(dy != 0 ? 90 : 0)
+                    if l.start > mid - 0.02 || l.start == s { l.start = min(l.start, mid - 0.02) }
+                case .wipe, .iris, .blinds, .blocks, .clock:
+                    let wt: WipeType = type == .wipe ? .linear : type == .iris ? .iris : type == .blinds ? .blinds : type == .blocks ? .blocks : .radial
+                    l.wipeStyle = wipeStyle(wt)
+                    if wt == .iris { l.wipeStyle?.reverse = false }
+                    put(&l, .wipe, [kf(s, 1, .linear), kf(e, 0, .curve(.cubic, .inOut))])
+                case .glitch:
+                    put(&l, .opacity, [kf(mid - 0.01, 0, .linear), kf(mid, op, .hold)])
+                    put(&l, .glitch, [kf(mid, 1, .linear), kf(mid + d * 0.3, 0.5, .hold), kf(e, 0, .hold)])
+                    put(&l, .rgbSplit, [kf(mid, 10, .linear), kf(e, 0, .hold)])
+                case .blur:
+                    put(&l, .blur, [kf(s, 50, .linear), kf(e, 0, .easeOut)])
+                    put(&l, .opacity, [kf(s, 0, .linear), kf(s + d * 0.7, op, .easeOut)])
+                }
+            }
+        }
+        if type == .flash {
+            var f = MotionLayer(id: "flash", name: "Flash", type: .rect, x: w / 2, y: h / 2)
+            f.width = .constant(w); f.height = .constant(h)
+            f.fill = .constant(.white)
+            f.start = s; f.end = e
+            f.opacity = .keyframes([kf(s, 0, .linear), kf(mid, 1, .easeIn), kf(e, 0, .easeOut)])
+            addLayer(f)
+        }
+    }
     public func layerIndex(_ id: String) throws -> Int {
         guard let i = layers.firstIndex(where: { $0.id == id }) else { throw SceneError.layerNotFound(id) }
         return i
     }
 
-    public func layer(_ id: String) throws -> MotionLayer { layers[try layerIndex(id)] }
+    /// A layer anywhere in the tree (groups' children included).
+    public func layer(_ id: String) throws -> MotionLayer {
+        guard let l = findLayer(id) else { throw SceneError.layerNotFound(id) }
+        return l
+    }
 
     public func uniqueId(base: String) -> String {
         let cleaned = base.trimmingCharacters(in: .whitespaces)
         let b = cleaned.isEmpty ? "layer" : cleaned
-        let ids = Set(layers.map(\.id))
+        let ids = Set(allLayers.map(\.id))
         if !ids.contains(b) { return b }
         var n = 2
         while ids.contains("\(b)-\(n)") { n += 1 }
@@ -105,6 +231,12 @@ extension MotionScene {
         var l = layer
         l.id = uniqueId(base: l.id.isEmpty ? l.type.rawValue : l.id)
         if l.name.isEmpty { l.name = l.id }
+        if l.type == .group {
+            // Children's ids must be unique scene-wide too.
+            var seen = Set(allLayers.map(\.id))
+            seen.insert(l.id)
+            Self.normalizeIds(&l.children, seen: &seen)
+        }
         let i = min(max(index ?? layers.count, 0), layers.count)
         layers.insert(l, at: i)
         return l.id
@@ -123,6 +255,11 @@ extension MotionScene {
         var copy = layers[i]
         copy.id = uniqueId(base: copy.id)
         copy.name += " copy"
+        if copy.type == .group {
+            var seen = Set(allLayers.map(\.id))
+            seen.insert(copy.id)
+            Self.normalizeIds(&copy.children, seen: &seen)
+        }
         layers.insert(copy, at: i + 1)
         return copy.id
     }
@@ -135,44 +272,53 @@ extension MotionScene {
     }
 
     public mutating func setKeyframes(_ id: String, property: AnimProperty, keyframes: [MotionKeyframe]) throws {
-        let i = try layerIndex(id)
-        let fallback = layers[i][property].value(at: 0)
-        layers[i][property] = AnimValue.make(keyframes, fallback: fallback)
+        try withLayer(id) { l in
+            let fallback = l[property].value(at: 0)
+            l[property] = AnimValue.make(keyframes, fallback: fallback)
+        }
     }
 
     /// Path layers: replaces the shape keyframes (a morph between them); an empty list keeps the shape at 0 s.
     public mutating func setPathKeyframes(_ id: String, keyframes: [Keyframe<PathShape>]) throws {
-        let i = try layerIndex(id)
-        guard layers[i].type == .path else { throw SceneError.invalid("'\(id)' is not a path layer") }
-        layers[i].d = PathValue.make(keyframes, fallback: layers[i].d.value(at: 0))
+        try withLayer(id) { l in
+            guard l.type == .path else { throw SceneError.invalid("'\(id)' is not a path layer") }
+            l.d = PathValue.make(keyframes, fallback: l.d.value(at: 0))
+        }
     }
 
     public mutating func setValue(_ id: String, property: AnimProperty, value: Double, at t: Double) throws {
-        let i = try layerIndex(id)
-        layers[i][property] = layers[i][property].setting(value, at: t)
+        try withLayer(id) { l in l[property] = l[property].setting(value, at: t) }
     }
 
-    /// Applies a merge patch (RFC 7386 style) to one layer.
+    /// Applies a merge patch (RFC 7386 style) to one layer (anywhere in the tree).
     public mutating func updateLayer(_ id: String, patch: [String: Any]) throws {
-        let i = try layerIndex(id)
-        var base = try SceneJSON.object(layers[i]) as? [String: Any] ?? [:]
+        let old = try layer(id)
+        var base = try SceneJSON.object(old) as? [String: Any] ?? [:]
         base = JSONMerge.merge(base, patch) as? [String: Any] ?? base
         var updated = try SceneJSON.decode(MotionLayer.self, fromObject: base)
-        if updated.id != layers[i].id {
-            let others = layers.enumerated().filter { $0.offset != i }.map(\.element.id)
+        if updated.id != old.id {
+            let others = allLayers.map(\.id).filter { $0 != old.id }
             if updated.id.isEmpty || others.contains(updated.id) {
                 throw SceneError.invalid("id '\(updated.id)' is empty or already used")
             }
         }
         if updated.name.isEmpty { updated.name = updated.id }
-        if let p = updated.parent, p == updated.id || !layers.contains(where: { $0.id == p }) || isAncestor(layers[i].id, of: p) {
+        let isTop = layers.contains { $0.id == old.id }
+        if let p = updated.parent, p == updated.id || (isTop && (!layers.contains(where: { $0.id == p }) || isAncestor(old.id, of: p))) {
             throw SceneError.invalid("parent '\(p)' must be another existing layer that is not a child of '\(updated.id)'")
         }
-        if let m = updated.matte, m.source == layers[i].id || m.source == updated.id || !layers.contains(where: { $0.id == m.source }) {
+        if let m = updated.matte, m.source == old.id || m.source == updated.id || findLayer(m.source) == nil {
             throw SceneError.invalid("matte '\(m.source)' must be another existing layer")
         }
-        let oldId = layers[i].id
-        layers[i] = updated
+        if updated.type == .group {
+            // Ids used elsewhere in the scene (the group's own subtree may keep its ids).
+            let mine = Set(MotionScene(layers: [old]).allLayers.map(\.id))
+            var seen = Set(allLayers.map(\.id).filter { !mine.contains($0) })
+            seen.insert(updated.id)
+            Self.normalizeIds(&updated.children, seen: &seen)
+        }
+        let oldId = old.id
+        try withLayer(oldId) { $0 = updated }
         if updated.id != oldId {
             for j in layers.indices where layers[j].parent == oldId { layers[j].parent = updated.id }
             for j in layers.indices where layers[j].particles.from == oldId { layers[j].particles.from = updated.id }
@@ -194,8 +340,7 @@ extension MotionScene {
 
     public mutating func applyPreset(_ preset: Preset, to id: String, start s: Double, duration d: Double) throws {
         guard d > 0 else { throw SceneError.invalid("duration must be > 0") }
-        let i = try layerIndex(id)
-        var l = layers[i]
+        var l = try layer(id)
         guard preset.applies(to: l.type) else {
             throw SceneError.invalid("\(preset.rawValue) only applies to \(preset.group == .text ? "text" : preset.group == .shape ? "rect/ellipse/path" : "visual") layers")
         }
@@ -323,9 +468,13 @@ extension MotionScene {
             put(.trim, [kf(s, 0, .linear), kf(e, 1, .curve(.cubic, .inOut))])
         case .typewriter:
             put(.reveal, [kf(s, 0, .linear), kf(e, 1, .linear)])
-        case .textRise, .textPop, .textDrop, .textLines, .textOut:
+        case .decode:
+            put(.scramble, [kf(s, 1, .linear), kf(e, 0, .linear)])
+        case .textRise, .textPop, .textDrop, .textLines, .textOut, .textBlurIn, .textFocus:
             var a: TextAnimator
             switch preset {
+            case .textBlurIn: a = TextAnimator(unit: .char, easing: .curve(.cubic, .out), blur: 24)
+            case .textFocus: a = TextAnimator(unit: .word, easing: .curve(.quad, .out), scale: 1.6, blur: 16)
             case .textPop: a = TextAnimator(unit: .word, easing: .curve(.back, .out), scale: 0)
             case .textDrop: a = TextAnimator(unit: .char, easing: .curve(.back, .out), y: -70, rotation: -25)
             case .textLines: a = TextAnimator(unit: .line, easing: .curve(.expo, .out), x: -60, y: 30)
@@ -340,7 +489,7 @@ extension MotionScene {
             l.textAnimators.removeAll { $0.mode == a.mode }
             l.textAnimators.append(a)
         }
-        layers[i] = l
+        try withLayer(id) { $0 = l }
     }
 
     /// Applies a preset to several layers, each starting `stagger` seconds after the previous one.
@@ -360,20 +509,22 @@ extension MotionScene {
     }
 
     public mutating func setColor(_ id: String, property c: ColorProperty, value: RGBA, at t: Double) throws {
-        let i = try layerIndex(id)
-        if c == .stroke && layers[i].stroke == nil {
-            layers[i].stroke = .constant(value)
-            if layers[i].strokeWidth.value(at: t) <= 0 { layers[i].strokeWidth = .constant(4) }
-            return
+        try withLayer(id) { l in
+            if c == .stroke && l.stroke == nil {
+                l.stroke = .constant(value)
+                if l.strokeWidth.value(at: t) <= 0 { l.strokeWidth = .constant(4) }
+                return
+            }
+            l[c] = l[c].setting(value, at: t)
         }
-        layers[i][c] = layers[i][c].setting(value, at: t)
     }
 
     public mutating func setColorKeyframes(_ id: String, property c: ColorProperty, keyframes: [ColorKeyframe]) throws {
-        let i = try layerIndex(id)
-        let fallback = layers[i][c].value(at: 0)
-        layers[i][c] = ColorValue.make(keyframes, fallback: fallback)
-        if c == .stroke && layers[i].strokeWidth.value(at: 0) <= 0 && !keyframes.isEmpty { layers[i].strokeWidth = .constant(4) }
+        try withLayer(id) { l in
+            let fallback = l[c].value(at: 0)
+            l[c] = ColorValue.make(keyframes, fallback: fallback)
+            if c == .stroke && l.strokeWidth.value(at: 0) <= 0 && !keyframes.isEmpty { l.strokeWidth = .constant(4) }
+        }
     }
 
     /// Links a layer to a parent (nil = unlink). With `keepPosition`, the layer's position is converted so it

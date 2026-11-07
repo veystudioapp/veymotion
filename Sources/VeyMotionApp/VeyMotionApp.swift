@@ -75,6 +75,9 @@ struct VeyMotionApp: App {
                 }
                 Divider()
                 Button("Duplicate") { store.duplicateSelected() }.keyboardShortcut("d").disabled(store.selection == nil)
+                Button("Group") { store.groupSelected() }.keyboardShortcut("g").disabled(store.selection == nil)
+                Button("Ungroup") { store.ungroupSelected() }.keyboardShortcut("g", modifiers: [.command, .shift])
+                    .disabled(store.selection.flatMap { id in store.scene.layers.first { $0.id == id } }?.type != .group)
                 if annotations.isActive {
                     Button(annotations.selection != nil ? "Delete Mark" : "Clear Marks") { annotations.delete() }
                         .keyboardShortcut(.delete).disabled(annotations.items.isEmpty)

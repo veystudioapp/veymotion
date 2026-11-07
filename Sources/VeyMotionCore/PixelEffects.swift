@@ -16,6 +16,9 @@ struct PixelEffects {
     var posterize = 0.0, pixelate = 0.0
     var directionalBlur = 0.0, blurAngle = 0.0, zoomBlur = 0.0
     var rgbSplit = 0.0, glitch = 0.0, grain = 0.0, scanlines = 0.0, vignette = 0.0
+    var rays = 0.0, raysLength = 0.6, outline = 0.0, innerGlow = 0.0, innerGlowRadius = 20.0
+    var outlineColor = RGBA.white, innerGlowColor = RGBA.white
+    var shine = 0.0
     var time = 0.0
     var frame = 0
     var seed: UInt64 = 0
@@ -35,6 +38,11 @@ struct PixelEffects {
         rgbSplit = v(.rgbSplit); glitch = min(max(v(.glitch), 0), 1)
         grain = min(max(v(.grain), 0), 1); scanlines = min(max(v(.scanlines), 0), 1)
         vignette = min(max(v(.vignette), 0), 1)
+        rays = min(max(v(.rays), 0), 4); raysLength = min(max(v(.raysLength), 0), 0.95)
+        outline = max(0, v(.outline)); outlineColor = layer.outlineColor ?? .white
+        innerGlow = min(max(v(.innerGlow), 0), 4); innerGlowRadius = max(1, v(.innerGlowRadius))
+        innerGlowColor = layer.innerGlowColor ?? .white
+        shine = min(max(v(.shine), 0), 4)
         time = t
         frame = Int(floor(t * Double(max(fps, 1)) + 1e-6))
         seed = Noise.hash(layer.id)
@@ -46,13 +54,13 @@ struct PixelEffects {
     var isActive: Bool {
         keyColor != nil || distorts || colors != nil || posterize >= 2 || pixelate >= 1 || directionalBlur >= 1
             || zoomBlur > 0.001 || rgbSplit != 0 || glitch > 0.001 || grain > 0.001 || scanlines > 0.001
-            || vignette > 0.001
+            || vignette > 0.001 || rays > 0.001 || outline >= 0.5 || innerGlow > 0.001 || shine > 0.001
     }
 
 
     /// How far, in layer px, the effects can move pixels outside the layer (`width` = the area's width in layer px).
     func reach(width: Double) -> Double {
-        var r = abs(wave) + abs(ripple) + abs(turbulence) + directionalBlur / 2 + abs(rgbSplit)
+        var r = abs(wave) + abs(ripple) + abs(turbulence) + directionalBlur / 2 + abs(rgbSplit) + outline + 2
         if glitch > 0 { r += glitch * 0.12 * width + 6 * glitch }
         return r
     }
@@ -66,6 +74,8 @@ struct PixelEffects {
         if let colors { FrameRendererPixels.applyColors(ctx, colors) }
         if posterize >= 2 { buf.posterize(levels: min(posterize, 64)) }
         if pixelate * scale >= 1.5 { buf.pixelate(size: pixelate * scale, center: center) }
+        if innerGlow > 0.001 { buf.innerGlow(innerGlow, radius: innerGlowRadius * scale, color: innerGlowColor) }
+        if outline * scale >= 0.5 { buf.outline(radius: outline * scale, color: outlineColor) }
     }
 
     /// Effects after the gaussian blur.
@@ -73,6 +83,7 @@ struct PixelEffects {
         guard var buf = PixelBuffer(ctx) else { return }
         if directionalBlur * scale >= 1 { buf.directionalBlur(length: directionalBlur * scale, degrees: blurAngle) }
         if zoomBlur > 0.001 { buf.zoomBlur(amount: zoomBlur, center: center) }
+        if rays > 0.001 { buf.lightRays(rays, length: raysLength, center: center) }
         if rgbSplit != 0 { buf.rgbSplit(Int((rgbSplit * scale).rounded())) }
         if glitch > 0.001 { buf.glitch(glitch, frame: frame, seed: seed, pixelScale: pixelScale) }
         if grain > 0.001 { buf.grain(grain, frame: frame, seed: seed) }
@@ -155,7 +166,123 @@ struct PixelBuffer {
         p = d; w = ctx.width; h = ctx.height; rb = ctx.bytesPerRow
     }
 
+    init(p: UnsafeMutablePointer<UInt8>, w: Int, h: Int, rb: Int) { self.p = p; self.w = w; self.h = h; self.rb = rb }
+
     private func copy() -> [UInt8] { Array(UnsafeBufferPointer(start: p, count: rb * h)) }
+
+    /// The alpha channel as a plane.
+    private func alphaPlane() -> [UInt8] {
+        var out = [UInt8](repeating: 0, count: w * h)
+        for y in 0..<h {
+            let row = p + y * rb
+            for x in 0..<w { out[y * w + x] = row[4 * x + 3] }
+        }
+        return out
+    }
+
+    /// Box-blurs a plane in place (three passes ≈ gaussian).
+    private static func blurPlane(_ plane: inout [UInt8], w: Int, h: Int, sigma: Double) {
+        var size = Int((12 * sigma * sigma / 3 + 1).squareRoot().rounded())
+        if size % 2 == 0 { size += 1 }
+        guard size >= 3 else { return }
+        var tmp = [UInt8](repeating: 0, count: w * h)
+        plane.withUnsafeMutableBufferPointer { a in
+            tmp.withUnsafeMutableBufferPointer { b in
+                var src = vImage_Buffer(data: a.baseAddress, height: vImagePixelCount(h), width: vImagePixelCount(w), rowBytes: w)
+                var dst = vImage_Buffer(data: b.baseAddress, height: vImagePixelCount(h), width: vImagePixelCount(w), rowBytes: w)
+                for pass in 0..<3 {
+                    if pass % 2 == 0 {
+                        vImageBoxConvolve_Planar8(&src, &dst, nil, 0, 0, UInt32(size), UInt32(size), 0, vImage_Flags(kvImageEdgeExtend))
+                    } else {
+                        vImageBoxConvolve_Planar8(&dst, &src, nil, 0, 0, UInt32(size), UInt32(size), 0, vImage_Flags(kvImageEdgeExtend))
+                    }
+                }
+            }
+        }
+        plane = tmp
+    }
+
+    /// A colored band around the layer's shape: the alpha dilated by `radius`, drawn behind the pixels.
+    func outline(radius: Double, color: RGBA) {
+        let k = max(1, Int((radius * 2).rounded()) | 1)
+        var alpha = alphaPlane()
+        var dil = [UInt8](repeating: 0, count: w * h)
+        alpha.withUnsafeMutableBufferPointer { a in
+            dil.withUnsafeMutableBufferPointer { d in
+                var src = vImage_Buffer(data: a.baseAddress, height: vImagePixelCount(h), width: vImagePixelCount(w), rowBytes: w)
+                var dst = vImage_Buffer(data: d.baseAddress, height: vImagePixelCount(h), width: vImagePixelCount(w), rowBytes: w)
+                vImageMax_Planar8(&src, &dst, nil, 0, 0, vImagePixelCount(k), vImagePixelCount(k), vImage_Flags(kvImageNoFlags))
+            }
+        }
+        // Soften the band's outer edge by a pixel so it is not jagged.
+        Self.blurPlane(&dil, w: w, h: h, sigma: 0.7)
+        let cr = color.r * color.a, cg = color.g * color.a, cb = color.b * color.a
+        for y in 0..<h {
+            let row = p + y * rb
+            for x in 0..<w {
+                let m = Double(dil[y * w + x]) / 255 * color.a
+                guard m > 0 else { continue }
+                let q = row + 4 * x
+                let inv = 1 - Double(q[3]) / 255 // behind the layer
+                q[0] = UInt8(min(255, Double(q[0]) + cr * m * inv * 255))
+                q[1] = UInt8(min(255, Double(q[1]) + cg * m * inv * 255))
+                q[2] = UInt8(min(255, Double(q[2]) + cb * m * inv * 255))
+                q[3] = UInt8(min(255, Double(q[3]) + m * inv * 255))
+            }
+        }
+    }
+
+    /// Light inside the layer's edges: the blurred outside, masked by the layer, added over it.
+    func innerGlow(_ strength: Double, radius: Double, color: RGBA) {
+        let alpha = alphaPlane()
+        var outside = alpha.map { 255 - $0 }
+        Self.blurPlane(&outside, w: w, h: h, sigma: radius / 2)
+        let cr = color.r, cg = color.g, cb = color.b
+        for y in 0..<h {
+            let row = p + y * rb
+            for x in 0..<w {
+                let i = y * w + x
+                let a = Double(alpha[i]) / 255
+                guard a > 0 else { continue }
+                let m = min(1, Double(outside[i]) / 255 * strength * color.a) * a
+                let q = row + 4 * x
+                // Normal blend of the glow color (premultiplied by m) over the pixel.
+                q[0] = UInt8(min(255, Double(q[0]) * (1 - m) + cr * m * 255))
+                q[1] = UInt8(min(255, Double(q[1]) * (1 - m) + cg * m * 255))
+                q[2] = UInt8(min(255, Double(q[2]) * (1 - m) + cb * m * 255))
+            }
+        }
+    }
+
+    /// Rays streaking out of the bright parts: a copy keeps only bright pixels, is zoom-blurred from `center`
+    /// and added on top.
+    func lightRays(_ strength: Double, length: Double, center: CGPoint) {
+        var scratch = copy()
+        scratch.withUnsafeMutableBufferPointer { s in
+            let buf = PixelBuffer(p: s.baseAddress!, w: w, h: h, rb: rb)
+            // Threshold: luma above 0.45 (of alpha) stays, scaled up.
+            for y in 0..<h {
+                let row = buf.p + y * rb
+                for x in 0..<w {
+                    let q = row + 4 * x
+                    let a = Double(q[3])
+                    guard a > 0 else { continue }
+                    let luma = (0.2126 * Double(q[0]) + 0.7152 * Double(q[1]) + 0.0722 * Double(q[2])) / a
+                    let k = min(max((luma - 0.45) / 0.4, 0), 1)
+                    q[0] = UInt8(Double(q[0]) * k); q[1] = UInt8(Double(q[1]) * k); q[2] = UInt8(Double(q[2]) * k)
+                    q[3] = UInt8(a * k)
+                }
+            }
+            buf.zoomBlur(amount: length, center: center)
+            for y in 0..<h {
+                let row = p + y * rb, srow = buf.p + y * rb
+                for x in 0..<w {
+                    let q = row + 4 * x, r = srow + 4 * x
+                    for k in 0..<4 { q[k] = UInt8(min(255, Int(q[k]) + Int(Double(r[k]) * strength))) }
+                }
+            }
+        }
+    }
 
     // MARK: Per pixel
 

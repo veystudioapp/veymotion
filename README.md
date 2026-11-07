@@ -207,7 +207,9 @@ vmotion render scene.json out.mp4
   `brightness`/`contrast`/`saturation`/`hue`/`tint` (color correction), `wipe` (transition, 0 shown → 1 wiped away),
   stylize `pixelate`/`posterize`/`rgbSplit`/`glitch`/`grain`/`scanlines`/`vignette`, `directionalBlur`/`blurAngle`/
   `zoomBlur`, distort `waveWarp`/`ripple`/`waveLength`/`waveSpeed`/`twirl`/`bulge`/`distortRadius`/`turbulence`,
-  `keyTolerance`/`keySoftness`,
+  `keyTolerance`/`keySoftness`, light `shine`/`shinePosition`/`shineAngle`/`shineWidth`, `rays`/`raysLength`, `outline`,
+  `innerGlow`/`innerGlowRadius`, path operators `offsetPath`/`zigzag`/`wigglePath`/`pucker`/`dashOffset`/`taperStart`/
+  `taperEnd`, text `counter` (number shown for `{n}`)/`scramble`/`textOffset`, video `timeRemap`,
   `emission`/`particleSpeed`/`particleSize` (particles), the colors `fill`, `stroke`, `color`, and a path's shape `d`
   (keyframes morph between shapes).
   Each is a value or `{"keyframes": [...]}` (color keyframes use `"v": "#RRGGBB"`).
@@ -219,15 +221,24 @@ vmotion render scene.json out.mp4
   `gradient` (linear/radial fill for shapes, paths and text), `matte` (track matte: alpha/luma, inverted),
   `repeater` (stepped copies with compounding transform and delay), `motionBlur` (shutter angle), `glowColor`,
   `tintColor`, `wipeStyle` (`linear`, `radial` clock wipe, `iris`, `blinds`, `blocks` dissolve; angle, feather, count),
-  `keyColor` (green/blue screen keying), `posterizeTime` (stop-motion frame rate for one layer).
+  `keyColor` (green/blue screen keying), `posterizeTime` (stop-motion frame rate for one layer), `shineColor`/
+  `outlineColor`/`innerGlowColor`, `dash` (stroke dash pattern), text `stroke` (outline) and `textPath` (text on a
+  curve), `links` (a property follows another layer's: multiply, add, delay), `depth`/`fixed` (camera parallax).
+- Scene `camera`: animatable `x`, `y`, `zoom`, `rotation` (+ `wiggle` for a handheld shake) framing every layer;
+  layers with `depth` move less (far) or more (close).
 - Layer types: `rect` (width, height, cornerRadius, fill, stroke, strokeWidth), `ellipse`,
   `path` (`d` = SVG path data or `star(5,200,80)` / `polygon(6,150)` / `circle(r)` / `ellipse(rx,ry)` / `rect(w,h,r)`,
   fill, stroke, fillRule, lineCap, lineJoin),
   `text` (text, fontSize, fontWeight, fontName = any installed font, a font file in the asset library, or a Google
   font imported with `search_stock`/`import_stock` kind `font`; color, align, maxWidth), `image` (path, width, height),
   `video` (path to a .mov/.mp4 or a folder of numbered images, width, height, trimIn, speed,
-  playback `once`/`hold`/`loop`, fps for image sequences), `particles` (see below), `generator` (audio
-  `spectrum`/`waveform` visualizers in bars, line or circle; fractal `noise`; `lightning`; `grid`).
+  playback `once`/`hold`/`loop`, fps for image sequences, `timeRemap` for speed ramps/freezes/reverse), `particles`
+  (see below), `generator` (audio `spectrum`/`waveform` visualizers in bars, line or circle; fractal `noise`;
+  `lightning`; `grid`; `chart` bar/line/area/pie/donut from `values`; lens `flare`), `group` (`children` drawn as one
+  layer, a precomp).
+- Tools beyond editing: `transition` (fade, dissolve, push, slide, zoom, whip, wipe, iris, blinds, blocks, clock,
+  glitch, flash, blur between two layers), `group_layers`/`ungroup`, `track_motion` (Vision object tracking that pins a
+  layer to something in a video), `auto_reframe` (Vision saliency keeps the subject centered for 9:16 exports).
 - **Particles**: `{"type": "particles", "x": 960, "y": 900, "width": 220, "height": 0, "particles": {"preset": "fire"}}`.
   Presets: `fire`, `smoke`, `dust`, `sparks`, `snow`, `rain`, `confetti`, `bokeh`, `magic`, `explosion`; any field
   overrides the preset (rate, bursts, lifetime, speed, direction, spread, gravity, wind, drag, turbulence, floor/bounce,

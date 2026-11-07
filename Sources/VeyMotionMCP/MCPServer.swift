@@ -411,6 +411,72 @@ public final class MCPServer {
             }
             return text("Shattered into \(layers.count) pieces ('\(prefix)-1'…'\(prefix)-\(layers.count)'), exploding \(direction) from \(start)s over \(duration)s.")
 
+        case "track_motion":
+            let scene = host.currentScene()
+            let id = try string(a, "layer")
+            let layer = try scene.layer(id)
+            guard let x = number(a["x"]), let y = number(a["y"]) else { throw ToolError("`x` and `y` (center of the object, scene px) are required") }
+            let bw = number(a["width"]) ?? 120, bh = number(a["height"]) ?? 120
+            let from = number(a["from"]) ?? layer.start
+            let to = number(a["to"]) ?? layer.effectiveEnd(sceneDuration: scene.duration)
+            let box = CGRect(x: x - bw / 2, y: y - bh / 2, width: bw, height: bh)
+            let samples = try VideoTracking.track(layer: layer, in: scene, box: box, from: from, to: to, step: number(a["step"]) ?? 0)
+            let smooth = Int(number(a["smoothing"]) ?? 3)
+            let series = VideoTracking.smoothed(samples, window: smooth)
+            if let target = (a["target"] as? String).flatMap({ $0.isEmpty ? nil : $0 }) {
+                let keep = a["keepOffset"] as? Bool ?? true
+                let scale = a["scale"] as? Bool ?? false
+                try host.mutate("Track Motion") { try $0.attach(target, to: series, keepOffset: keep, scale: scale) }
+                let last = series.last!
+                return text("Tracked '\(id)' from \(from)s to \(String(format: "%.2f", last.t))s (\(series.count) keys) and attached '\(target)': it now follows the object" + (keep ? " keeping its offset" : "") + ". Lowest confidence \(String(format: "%.2f", series.map(\.confidence).min() ?? 0)).")
+            }
+            let lines = series.map { String(format: "%.2f: %.0f, %.0f (%.0fx%.0f, conf %.2f)", $0.t, $0.center.x, $0.center.y, $0.size.width, $0.size.height, $0.confidence) }
+            return text("Tracked '\(id)' (\(series.count) samples, scene px):\n" + lines.joined(separator: "\n"))
+
+        case "auto_reframe":
+            let scene = host.currentScene()
+            let id = try string(a, "layer")
+            let layer = try scene.layer(id)
+            guard let tw = number(a["width"]), let th = number(a["height"]), tw > 0, th > 0 else {
+                throw ToolError("`width` and `height` of the target format are required (e.g. 1080 x 1920)")
+            }
+            let from = number(a["from"]) ?? layer.start
+            let to = number(a["to"]) ?? layer.effectiveEnd(sceneDuration: scene.duration)
+            let step = max(0.1, number(a["step"]) ?? 0.5)
+            let samples = try VideoTracking.saliency(layer: layer, in: scene, from: from, to: to, step: step)
+            let series = VideoTracking.smoothed(samples, window: Int(number(a["smoothing"]) ?? 3))
+            try host.mutate("Auto Reframe") { try $0.reframe(id, samples: series, targetWidth: tw, targetHeight: th) }
+            let l = try host.currentScene().layer(id)
+            return text("Reframed '\(id)' for \(Int(tw))x\(Int(th)) with \(series.count) position keys (x now \(SceneJSON.string(l.x, pretty: false))). Export with size \(Int(tw))x\(Int(th)) and fit \"crop\" to get the vertical cut; the subject stays centered.")
+
+        case "transition":
+            guard let type = TransitionType(rawValue: try string(a, "type")) else {
+                throw ToolError("`type` must be one of \(TransitionType.allCases.map(\.rawValue))")
+            }
+            guard let at = number(a["at"]) else { throw ToolError("`at` must be a number") }
+            let d = number(a["duration"]) ?? 0.6
+            let outId = (a["out"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            let inId = (a["in"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            try host.mutate("Transition") {
+                try $0.transition(type, out: outId, in: inId, at: at, duration: d, direction: a["direction"] as? String)
+            }
+            return text("\(type.rawValue) transition" + (outId.map { " out: \($0)" } ?? "") + (inId.map { " in: \($0)" } ?? "")
+                + " from \(at)s for \(d)s")
+
+        case "group_layers":
+            guard let ids = (a["ids"] as? [Any])?.compactMap({ $0 as? String }), !ids.isEmpty else {
+                throw ToolError("`ids` must be a non-empty array of layer ids")
+            }
+            var gid = ""
+            try host.mutate("Group Layers") { gid = try $0.groupLayers(ids, id: a["id"] as? String, name: a["name"] as? String) }
+            return text("Grouped \(ids.joined(separator: ", ")) into '\(gid)' (centered on the scene; children keep their coordinates)")
+
+        case "ungroup":
+            let id = try string(a, "id")
+            var count = 0
+            try host.mutate("Ungroup") { s in count = try s.layer(id).children.count; try s.ungroup(id) }
+            return text("Ungrouped '\(id)': \(count) layers are top-level again")
+
         case "set_parent":
             let id = try string(a, "id")
             let parent = a["parent"] as? String

@@ -16,6 +16,16 @@ public enum GeneratorKind: String, Codable, CaseIterable, Sendable {
     case lightning
     /// Lines every `scale` px, optionally scrolling (retro grids, blueprints).
     case grid
+    /// Bar, line, area, pie or donut chart of `values`, growing in with `reveal`.
+    case chart
+    /// Lens flare: a bright source with a halo and ghost discs across the box.
+    case flare
+
+    public var title: String { rawValue.capitalized }
+}
+
+public enum ChartType: String, Codable, CaseIterable, Sendable {
+    case bar, line, area, pie, donut
 
     public var title: String { rawValue.capitalized }
 }
@@ -53,6 +63,10 @@ public struct Generator: Codable, Equatable, Hashable, Sendable {
     public var from: PathPoint?
     public var to: PathPoint?
     public var seed: Int?
+    /// chart: the numbers (one series), their labels, and the kind of chart.
+    public var values: [Double]?
+    public var labels: [String]?
+    public var chart: ChartType?
     /// The audio source as resolved by the scene (not saved).
     public var link: AudioLink?
 
@@ -60,6 +74,7 @@ public struct Generator: Codable, Equatable, Hashable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case kind, source, shape, count, mirror, gain, window, scale, detail, speed, colors, from, to, seed
+        case values, labels, chart
     }
 
     /// Also accepts a bare kind ("noise").
@@ -83,6 +98,9 @@ public struct Generator: Codable, Equatable, Hashable, Sendable {
         from = try c.decodeIfPresent(PathPoint.self, forKey: .from)
         to = try c.decodeIfPresent(PathPoint.self, forKey: .to)
         seed = try c.decodeIfPresent(Int.self, forKey: .seed)
+        values = try c.decodeIfPresent([Double].self, forKey: .values).flatMap { $0.isEmpty ? nil : $0 }
+        labels = try c.decodeIfPresent([String].self, forKey: .labels).flatMap { $0.isEmpty ? nil : $0 }
+        chart = try c.decodeIfPresent(ChartType.self, forKey: .chart)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -101,6 +119,9 @@ public struct Generator: Codable, Equatable, Hashable, Sendable {
         try c.encodeIfPresent(from, forKey: .from)
         try c.encodeIfPresent(to, forKey: .to)
         try c.encodeIfPresent(seed, forKey: .seed)
+        try c.encodeIfPresent(values, forKey: .values)
+        try c.encodeIfPresent(labels, forKey: .labels)
+        try c.encodeIfPresent(chart, forKey: .chart)
     }
 
     // MARK: Values with their per-kind defaults
@@ -122,6 +143,8 @@ public struct Generator: Codable, Equatable, Hashable, Sendable {
     }
     public var colorsValue: [RGBA] { colors ?? [RGBA(r: 0, g: 0, b: 0, a: 1), .white] }
     public var seedValue: Int { seed ?? 0 }
+    public var chartValue: ChartType { chart ?? .bar }
+    public var valuesValue: [Double] { values ?? [3, 5, 2, 8, 6] }
 
     // MARK: Data
 
@@ -161,7 +184,7 @@ public struct Generator: Codable, Equatable, Hashable, Sendable {
             return lightningPath(in: box, at: t, line: line, salt: Noise.hash(layerId))
         case .grid:
             return gridPath(in: box, at: t, line: line)
-        case .noise:
+        case .noise, .chart, .flare:
             return nil
         }
     }

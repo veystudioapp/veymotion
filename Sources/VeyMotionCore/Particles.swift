@@ -480,12 +480,12 @@ extension MotionScene {
         var emitterVelocity = CGPoint.zero
         if let source {
             let local = sampler?(source, tb, r(1), r(2), sys.edge) ?? Self.shapePoint(source, at: tb, r(1), r(2), sys.edge)
-            origin = local.applying(worldTransform(of: source, at: tb))
+            origin = local.applying(sceneTransform(of: source, at: tb))
             if sys.inherit != 0 { emitterVelocity = velocity(of: source, at: tb) }
         } else {
             origin = Self.emitterPoint(layer, sys, at: tb, r(1), r(2))
             if sys.space == .world {
-                let m = worldTransform(of: layer, at: tb)
+                let m = sceneTransform(of: layer, at: tb)
                 origin = origin.applying(m)
                 angle += atan2(m.b, m.a) * 180 / .pi
                 scale = abs(m.a * m.d - m.b * m.c).squareRoot()
@@ -562,8 +562,8 @@ extension MotionScene {
     /// Scene-space velocity of a layer's center, px/s.
     private func velocity(of layer: MotionLayer, at t: Double) -> CGPoint {
         let h = 1.0 / 120
-        let a = CGPoint.zero.applying(worldTransform(of: layer, at: t - h))
-        let b = CGPoint.zero.applying(worldTransform(of: layer, at: t + h))
+        let a = CGPoint.zero.applying(sceneTransform(of: layer, at: t - h))
+        let b = CGPoint.zero.applying(sceneTransform(of: layer, at: t + h))
         return CGPoint(x: (b.x - a.x) / (2 * h), y: (b.y - a.y) / (2 * h))
     }
 
