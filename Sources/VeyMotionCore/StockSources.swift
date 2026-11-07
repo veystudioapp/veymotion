@@ -10,13 +10,15 @@ import UniformTypeIdentifiers
 /// - Iconify (api.iconify.design): 200k+ open-source SVG icons (Material, Tabler, Lucide, Phosphor, …).
 /// - Openverse audio: music from Jamendo and sound effects from Freesound, with the same license filter.
 /// - Google Fonts: open-source font families (see `GoogleFonts`).
+/// - Videos: Pexels and Pixabay through the VeyMotion server, which holds their API keys (see `StockVideoSearch`).
 public enum StockKind: String, CaseIterable, Codable, Sendable {
-    case photo, illustration, icon, music, sound, font
+    case photo, illustration, video, icon, music, sound, font
 
     public var title: String {
         switch self {
         case .photo: return "Photos"
         case .illustration: return "Illustrations"
+        case .video: return "Videos"
         case .icon: return "Icons"
         case .music: return "Music"
         case .sound: return "Sound FX"
@@ -28,7 +30,7 @@ public enum StockKind: String, CaseIterable, Codable, Sendable {
 }
 
 public struct StockItem: Identifiable, Hashable, Sendable {
-    /// "openverse:<uuid>" or "iconify:<prefix>:<name>". Pass it to `StockSearch.importItem`.
+    /// "openverse:<uuid>", "pexels:<id>" or "iconify:<prefix>:<name>". Pass it to `StockSearch.importItem`.
     public var ref: String
     public var kind: StockKind
     public var title: String
@@ -39,9 +41,11 @@ public struct StockItem: Identifiable, Hashable, Sendable {
     /// Multi-color icon (its colors are fixed; `color` does not apply).
     public var isMulticolor = false
     public var credit: AssetCredit
-    /// Full-size file for photos/illustrations/audio (icon files are built from the ref).
+    /// Full-size file for photos/illustrations/audio/video (icon files are built from the ref).
     public var downloadURL: URL?
-    /// Audio length in seconds.
+    /// Videos: the smallest rendition, for hover previews.
+    public var previewURL: URL?
+    /// Audio and video length in seconds.
     public var duration: Double?
     /// Music genres; for fonts: category, weights and "Vietnamese ✓".
     public var genres: [String] = []
@@ -57,6 +61,11 @@ public struct StockItem: Identifiable, Hashable, Sendable {
         var parts = [ref, title]
         if kind == .font {
             parts.append(genres.joined(separator: ", "))
+        } else if kind == .video {
+            var s = duration.map { Self.clock($0) + " " } ?? ""
+            if let w = width, let h = height { s += "\(w)×\(h) " }
+            parts.append(s + fileExtension)
+            if !tags.isEmpty { parts.append("tags: " + tags.prefix(8).joined(separator: ", ")) }
         } else if let d = duration {
             parts.append(Self.clock(d) + " " + fileExtension + (genres.isEmpty ? "" : " — " + genres.prefix(3).joined(separator: ", ")))
             if kind == .sound, !tags.isEmpty { parts.append("tags: " + tags.prefix(8).joined(separator: ", ")) }
@@ -89,15 +98,17 @@ public enum StockSearch {
 
     /// Blocking; call off the main thread. `page` starts at 1.
     /// `vietnamese`: fonts only, keep families with Vietnamese letters.
-    /// `maxDuration`: audio only, leave out longer results (sounds default to `defaultSoundMaxDuration`; 0 = no limit).
+    /// `maxDuration`: audio and video, leave out longer results (sounds default to `defaultSoundMaxDuration`;
+    /// 0 = no limit). `orientation`: videos only, landscape / portrait / square (nil = any).
     public static func search(_ query: String, kind: StockKind, page: Int = 1, vietnamese: Bool = false,
-                              maxDuration: Double? = nil) throws -> [StockItem] {
+                              maxDuration: Double? = nil, orientation: String? = nil) throws -> [StockItem] {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { return [] }
         switch kind {
         case .font: return try GoogleFonts.search(q, page: page, vietnamese: vietnamese)
         case .icon: return try searchIcons(q, page: page)
         case .photo, .illustration: return try searchOpenverse(q, kind: kind, page: page)
+        case .video: return try StockVideoSearch.search(q, page: page, orientation: orientation, maxDuration: maxDuration)
         case .music, .sound:
             let limit = maxDuration ?? (kind == .sound ? defaultSoundMaxDuration : 0)
             return try searchOpenverseAudio(q, kind: kind, page: page, maxDuration: limit > 0 ? limit : nil)
@@ -266,11 +277,13 @@ public enum StockSearch {
             return item
         case "googlefonts" where parts.count == 2:
             return GoogleFonts.item(try GoogleFonts.family(named: parts[1]))
+        case let source? where StockVideoSearch.refPrefixes.contains(source) && parts.count == 2:
+            return try StockVideoSearch.item(source: source, id: parts[1])
         case "iconify" where parts.count == 3:
             let info = try? HTTP.json(URL(string: "https://api.iconify.design/collections?prefixes=\(parts[1])")!)
             return iconItem(prefix: parts[1], name: parts[2], collection: info?[parts[1]] as? [String: Any])
         default:
-            throw AssetError.failed("Unknown ref '\(ref)'. Use a ref from search_stock, e.g. openverse:<id> or iconify:mdi:rocket.")
+            throw AssetError.failed("Unknown ref '\(ref)'. Use a ref from search_stock, e.g. openverse:<id>, pexels:<id> or iconify:mdi:rocket.")
         }
     }
 
@@ -288,6 +301,7 @@ public enum StockSearch {
         case .icon: typeFolder = "icons"
         case .music: typeFolder = "music"
         case .sound: typeFolder = "sfx"
+        case .video: typeFolder = "video"
         default: typeFolder = "images"
         }
         // Projects file stock items by type unless a folder is given.
@@ -319,11 +333,15 @@ public enum StockSearch {
         if item.kind.isAudio, let cached = cachedAudio(item) {
             asset = try AssetStore.write(try Data(contentsOf: cached), name: fileName, folder: folder)
         } else {
-            asset = try AssetStore.download(url, name: fileName, folder: folder)
+            asset = try AssetStore.download(url, name: fileName, folder: folder, timeout: item.kind == .video ? 600 : 120)
         }
         if item.kind.isAudio, asset.duration == nil || !AudioFileInfo.isDecodable(asset.path) {
             _ = try? AssetStore.trash(asset.path)
             throw AssetError.failed("The downloaded file for '\(item.title)' is not playable audio. Try another result.")
+        }
+        if item.kind == .video, asset.kind != .video {
+            _ = try? AssetStore.trash(asset.path)
+            throw AssetError.failed("The downloaded file for '\(item.title)' is not a video. Try another result.")
         }
         AssetStore.setCredit(item.credit, for: asset.name)
         asset.credit = item.credit
@@ -430,7 +448,7 @@ public enum StockSearch {
             return img
         }
         let pixels = (item.width ?? .max / 2) * (item.height ?? 2)
-        guard let original = item.downloadURL, item.fileExtension == "svg" || pixels <= 1_500_000,
+        guard item.kind != .video, let original = item.downloadURL, item.fileExtension == "svg" || pixels <= 1_500_000,
               let data = try? HTTP.get(original, timeout: timeout) else { return nil }
         return decodeImage(data)
     }

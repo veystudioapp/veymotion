@@ -440,6 +440,11 @@ enum Docs {
     - search_stock finds photos/illustrations (Openverse) and icons (Iconify); look at the numbered preview, then
       import_stock the ref you want and use the returned path in an image layer.
     - Icons are SVG and stay sharp at any size: pick a color that contrasts with the background (color param).
+    - Stock video (B-roll backgrounds, city/nature/people shots): search_stock kind "video" (Pexels + Pixabay, no credit
+      needed; orientation "portrait" for 9:16), look at the numbered preview (first frames), import_stock the ref, then
+      add_layer type "video" with the returned path, sized to cover the frame. Set maxDuration ≥ the time it must cover
+      or use playback "loop"; mute it (volume 0) under music or a voice-over. Needs the VeyMotion server: if the search
+      says it is unreachable or not configured, tell the user rather than retrying.
     - Photos: size them to cover the frame (set width = scene width, or height = scene height) when used as backgrounds,
       and dim them with a semi-transparent rect on top if text sits over them.
     - Background music: search_stock kind "music" with a mood/genre (e.g. "calm piano", "upbeat corporate", "cinematic").
@@ -1011,14 +1016,15 @@ enum Docs {
       },
       {
         "name": "search_stock",
-        "description": "Search free assets online: photos and illustrations from Openverse (licenses allowing commercial use and changes), icons from Iconify (200k+ open-source SVG icons), music from Jamendo and sound effects from Freesound (via Openverse), fonts from Google Fonts. Returns numbered results with refs, licenses, durations and a numbered preview image (thumbnails; for sounds, waveforms with each sound's shape, peak and tags). English keywords work best. For common motion sounds (whoosh, pop, click, ding, riser, impact…) generate_sfx is usually the better choice.",
+        "description": "Search free assets online: photos and illustrations from Openverse (licenses allowing commercial use and changes), stock video clips from Pexels and Pixabay (free for commercial use, no credit needed; needs the VeyMotion server), icons from Iconify (200k+ open-source SVG icons), music from Jamendo and sound effects from Freesound (via Openverse), fonts from Google Fonts. Returns numbered results with refs, licenses, durations and a numbered preview image (thumbnails; for sounds, waveforms with each sound's shape, peak and tags). English keywords work best. For common motion sounds (whoosh, pop, click, ding, riser, impact…) generate_sfx is usually the better choice.",
         "inputSchema": {
           "type": "object",
           "properties": {
             "query": { "type": "string", "description": "e.g. \"mountain sunset\", \"rocket\", \"upbeat corporate\", \"whoosh\"." },
-            "kind": { "type": "string", "enum": ["photo", "illustration", "icon", "music", "sound", "font"], "default": "photo" },
+            "kind": { "type": "string", "enum": ["photo", "illustration", "video", "icon", "music", "sound", "font"], "default": "photo" },
+            "orientation": { "type": "string", "enum": ["landscape", "portrait", "square"], "description": "Videos only: frame shape (portrait for 9:16 TikTok/Reels/Shorts). Default: any." },
             "vietnamese": { "type": "boolean", "description": "Fonts only: keep fonts that have Vietnamese letters." },
-            "maxDuration": { "type": "number", "description": "Music/sound: leave out results longer than this many seconds. Sounds default to 10 (one-shot effects); raise it for ambiences, 0 = no limit." },
+            "maxDuration": { "type": "number", "description": "Music/sound/video: leave out results longer than this many seconds. Sounds default to 10 (one-shot effects); raise it for ambiences, 0 = no limit." },
             "page": { "type": "integer", "description": "1-based page (20 results per page, 48 for icons)." },
             "limit": { "type": "integer", "description": "Return at most this many results." },
             "preview": { "type": "boolean", "description": "Include the numbered preview image (thumbnails; for sounds, waveforms plus each sound's shape and peak, which downloads them). Default true." }
@@ -1028,11 +1034,11 @@ enum Docs {
       },
       {
         "name": "import_stock",
-        "description": "Download a search_stock result into the asset library (with its license and credit recorded). Returns the path to use in an image layer. Icons are saved as SVG in `color`. Fonts are installed for the app and used by family name (fontName).",
+        "description": "Download a search_stock result into the asset library (with its license and credit recorded). Returns the path to use in an image layer (a video layer for videos, downloaded as MP4 up to 1920 px on the long side). Icons are saved as SVG in `color`. Fonts are installed for the app and used by family name (fontName).",
         "inputSchema": {
           "type": "object",
           "properties": {
-            "ref": { "type": "string", "description": "From search_stock, e.g. openverse:<id> or iconify:mdi:rocket." },
+            "ref": { "type": "string", "description": "From search_stock, e.g. openverse:<id>, pexels:<id> or iconify:mdi:rocket." },
             "name": { "type": "string", "description": "File name in the library (optional)." },
             "folder": { "type": "string", "description": "Folder to put it in (created if missing). Default: top level." },
             "color": { "type": "string", "description": "Icons only: hex color, default #FFFFFF." },

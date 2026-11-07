@@ -762,7 +762,7 @@ public final class MCPServer {
             let page = max(1, Int(number(a["page"]) ?? 1))
             let maxDuration = number(a["maxDuration"])
             var items = try StockSearch.search(query, kind: kind, page: page, vietnamese: a["vietnamese"] as? Bool ?? false,
-                                               maxDuration: maxDuration)
+                                               maxDuration: maxDuration, orientation: a["orientation"] as? String)
             if let limit = number(a["limit"]), limit > 0 { items = Array(items.prefix(Int(limit))) }
             if items.isEmpty {
                 var msg = "No \(kind.rawValue) results for '\(query)'. Try a simpler or English query."
@@ -821,7 +821,10 @@ public final class MCPServer {
             if item.credit.requiresAttribution {
                 lines.append("Credit required — include in the video or its description: \(item.credit.attribution)")
             }
-            if item.kind == .music {
+            if item.kind == .video {
+                lines.append("Next: add_layer {\"layer\": {\"type\": \"video\", \"path\": \"\(asset.path)\", \"start\": …}} "
+                             + "(size it to cover the frame; muted with \"volume\": 0 if its sound is not wanted).")
+            } else if item.kind == .music {
                 lines.append("Next: add_audio {\"path\": \"\(asset.path)\", \"role\": \"music\", \"start\": 0, \"end\": <scene duration>, \"volume\": 0.6, \"fadeIn\": 0.5, \"fadeOut\": 1.5, \"duckTo\": 0.25}")
             } else if item.kind == .sound {
                 if let p = SoundProfile.cached(path: asset.path) {

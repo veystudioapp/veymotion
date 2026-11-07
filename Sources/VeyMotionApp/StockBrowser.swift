@@ -11,6 +11,8 @@ final class StockBrowserModel {
     var query = ""
     /// Fonts: only families with Vietnamese letters.
     var vietnamese = false
+    /// Videos: "any", "landscape", "portrait" or "square".
+    var orientation = "any"
     var results: [StockItem] = []
     var page = 1
     var isSearching = false
@@ -31,13 +33,15 @@ final class StockBrowserModel {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty, !(more && isSearching) else { return } // a new search replaces one in flight
         let kind = kind, page = more ? page + 1 : 1, vietnamese = vietnamese
+        let orientation = orientation == "any" ? nil : orientation
         if !more { results = []; canLoadMore = false }
         searchToken += 1
         let token = searchToken
         isSearching = true
         error = nil
         DispatchQueue.global(qos: .userInitiated).async {
-            let outcome = Result { try StockSearch.search(q, kind: kind, page: page, vietnamese: vietnamese, maxDuration: 0) }
+            let outcome = Result { try StockSearch.search(q, kind: kind, page: page, vietnamese: vietnamese, maxDuration: 0,
+                                                        orientation: orientation) }
             DispatchQueue.main.async {
                 guard token == self.searchToken else { return }
                 self.isSearching = false
@@ -155,6 +159,18 @@ struct StockBrowserSheet: View {
                     ColorPicker("Color", selection: $iconColor, supportsOpacity: false)
                         .help("Icon color used when importing")
                 }
+                if model.kind == .video {
+                    Picker("", selection: $model.orientation) {
+                        Text("Any shape").tag("any")
+                        Text("Landscape").tag("landscape")
+                        Text("Portrait").tag("portrait")
+                        Text("Square").tag("square")
+                    }
+                    .labelsHidden()
+                    .fixedSize()
+                    .help("Frame shape (Portrait for 9:16 TikTok / Reels / Shorts)")
+                    .onChange(of: model.orientation) { _, _ in model.search() }
+                }
                 if model.kind == .font {
                     Toggle("Vietnamese", isOn: $model.vietnamese)
                         .toggleStyle(.checkbox)
@@ -217,6 +233,8 @@ struct StockBrowserSheet: View {
                 } else {
                     Text(model.kind.isAudio
                          ? "▶ previews · ⤓ adds to Assets. Music: Jamendo · Sound FX: Freesound (via Openverse, commercial use allowed)."
+                         : model.kind == .video
+                         ? "Hover to preview · click to add to Assets · ⊕ adds it to the scene. Videos: Pexels & Pixabay (free, no credit needed)."
                          : model.kind == .font
                          ? "Click to add to Assets · ⊕ sets the selected text's font (or adds a text). Google Fonts, free for commercial use."
                          : "Click to add to Assets · ⊕ adds it to the scene. Photos & illustrations: Openverse (commercial use allowed). Icons: Iconify.")
@@ -238,6 +256,7 @@ struct StockBrowserSheet: View {
         switch model.kind {
         case .photo: return "Search free photos (e.g. city night, coffee, mountain)"
         case .illustration: return "Search illustrations (e.g. rocket, team, map)"
+        case .video: return "Search stock video (e.g. city timelapse, ocean waves, typing on laptop)"
         case .icon: return "Search icons (e.g. rocket, check, chart)"
         case .music: return "Search music by mood or genre (e.g. calm piano, upbeat corporate)"
         case .sound: return "Search sound effects (e.g. whoosh, pop, click, applause)"
@@ -263,6 +282,7 @@ struct StockBrowserSheet: View {
         switch model.kind {
         case .photo: return ["city", "nature", "office", "technology", "food"]
         case .illustration: return ["rocket", "people", "map", "science", "animal"]
+        case .video: return ["city night", "ocean", "office", "abstract", "nature aerial"]
         case .icon: return ["arrow", "check", "chart", "user", "heart"]
         case .music: return ["upbeat", "calm piano", "cinematic", "lofi", "corporate"]
         case .sound: return ["whoosh", "pop", "click", "ding", "transition"]
@@ -273,6 +293,7 @@ struct StockBrowserSheet: View {
     private var emptyIcon: String {
         switch model.kind {
         case .icon: return "star.square.on.square"
+        case .video: return "film"
         case .music: return "music.note.list"
         case .sound: return "speaker.wave.2"
         case .font: return "textformat"
@@ -307,6 +328,9 @@ private struct StockCell: View {
                 } else {
                     ProgressView().controlSize(.small)
                 }
+                if hovering, item.kind == .video, let url = item.previewURL {
+                    LoopingVideoPreview(url: url)
+                }
                 if busy {
                     Color.black.opacity(0.35)
                     ProgressView().controlSize(.small)
@@ -323,6 +347,15 @@ private struct StockCell: View {
                     Text("CC BY").font(.system(size: 9, weight: .bold))
                         .padding(.horizontal, 4).padding(.vertical, 1)
                         .background(Capsule().fill(Color.black.opacity(0.55)))
+                        .foregroundStyle(.white)
+                        .padding(5)
+                }
+            }
+            .overlay(alignment: .bottomLeading) {
+                if item.kind == .video, let d = item.duration {
+                    Text(StockItem.clock(d)).font(.system(size: 10, weight: .semibold).monospacedDigit())
+                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .background(Capsule().fill(Color.black.opacity(0.6)))
                         .foregroundStyle(.white)
                         .padding(5)
                 }
@@ -344,8 +377,53 @@ private struct StockCell: View {
 
             if !isIcon {
                 Text(item.title).font(.caption).lineLimit(1)
-                Text(item.credit.license).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                Text(item.kind == .video ? videoDetails : item.credit.license)
+                    .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
             }
+        }
+    }
+}
+
+private extension StockCell {
+    /// "1920×1080 · Pexels · Name".
+    var videoDetails: String {
+        var parts: [String] = []
+        if let w = item.width, let h = item.height { parts.append("\(w)×\(h)") }
+        parts.append(item.ref.hasPrefix("pixabay:") ? "Pixabay" : "Pexels")
+        if let c = item.credit.creator, !c.isEmpty { parts.append(c) }
+        return parts.joined(separator: " · ")
+    }
+}
+
+/// A muted, looping preview of a stock video (its smallest file, streamed).
+private struct LoopingVideoPreview: NSViewRepresentable {
+    let url: URL
+
+    func makeNSView(context: Context) -> PlayerView { PlayerView(url: url) }
+    func updateNSView(_ view: PlayerView, context: Context) {}
+    static func dismantleNSView(_ view: PlayerView, coordinator: ()) { view.stop() }
+
+    final class PlayerView: NSView {
+        private let player = AVQueuePlayer()
+        private let looper: AVPlayerLooper
+
+        init(url: URL) {
+            looper = AVPlayerLooper(player: player, templateItem: AVPlayerItem(url: url))
+            super.init(frame: .zero)
+            let playerLayer = AVPlayerLayer(player: player)
+            playerLayer.videoGravity = .resizeAspectFill
+            layer = playerLayer // layer-hosting: set the layer before wantsLayer
+            wantsLayer = true
+            player.isMuted = true
+            player.play()
+        }
+
+        required init?(coder: NSCoder) { fatalError("not used") }
+
+        func stop() {
+            looper.disableLooping()
+            player.pause()
+            player.removeAllItems()
         }
     }
 }
