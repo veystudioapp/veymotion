@@ -47,6 +47,12 @@ Same agent in the terminal: `vmotion chat "make the title bounce in"`.
   (toggle with **Beats** in the timeline header). `analyze_audio` gives agents the tempo, beat/downbeat times,
   strong hits and loudness, and `audioReact` makes any number property follow the music (loudness, bass/mid/treble,
   or a pulse on every beat/bar) — set it in the Inspector's Motion section.
+- **Sound effects** (Add → Sound Effect…, or the `generate_sfx` tool): 15 synthesized effects made to measure, offline
+  and license-free (whoosh, swoosh, pop, blip, click, tick, ding, chime, sparkle, riser, impact, thud, drop, glitch,
+  typing) with length, pitch, direction, repeats and reverb. Each knows where its hit is, so it lands on the playhead
+  (a whoosh peaks there, a riser ends there). For stock sounds, agents see each result's shape (hit / whoosh / riser /
+  sustained / several sounds), peak and tags plus a waveform sheet, and `add_audio` with `hitAt` skips leading silence
+  and starts the sound early so its peak lands on the right frame.
 - **Voice-over** (Add Layer → Voice-over…, or the `generate_voice` tool): macOS text-to-speech, offline and free.
   Returns per-word timings, used for **captions** (`add_captions`) and so Claude can time visuals to the narration.
   Better voices: System Settings → Accessibility → Spoken Content → System Voice → Manage Voices.
@@ -161,7 +167,8 @@ claude mcp add veymotion -- /path/to/vmotion mcp /path/to/scene.json
 | `add_layer` / `update_layer` / `remove_layer` / `reorder_layer` | layer edits (`update_layer` is a JSON merge patch) |
 | `set_keyframes` | replace keyframes of one property (numbers or the colors `fill`/`stroke`/`color`) |
 | `apply_preset` | 34 presets: entrances (fade, slide, pop, zoom, blur, bounce, drop, flip, rotate), exits, emphasis (spin, pulse, heartbeat, shake, wobble, jello), `drawOn` for shapes, per-letter/word/line text presets; `ids` + `stagger` cascades over several layers |
-| `analyze_audio` | tempo, beats, downbeats, strong hits and loudness of the music, in scene seconds |
+| `analyze_audio` | tempo, beats, downbeats, strong hits and loudness of the music, in scene seconds (short files: the sound's shape and peak) |
+| `generate_sfx` | synthesized sound effect (whoosh, pop, click, ding, riser, impact…) placed so its hit lands at `hitAt` |
 | `set_parent` | make a layer follow another one (keeps its on-screen position) |
 | `render_frame` | PNG of one frame, so the agent can check its work |
 | `list_assets` / `read_asset` | browse the asset library; image preview / text content |

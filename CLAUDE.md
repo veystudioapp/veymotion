@@ -173,4 +173,13 @@ over the canvas (UI-only, never in the scene), and "Add to chat" renders the fra
 - Particle `trail` re-evaluates each particle at earlier times (closed form, so it stays frame-independent).
 - `blendMode` applies to every visual layer (set on the context before drawing; particles skip the opacity
   transparency layer and take opacity per particle, so they keep adding up).
+- Sound effects (`SoundProfile.swift`, `SoundSynth.swift`): `SoundProfile` splits a short file into bursts (runs
+  above -26 dB, gaps ≥ 80 ms) and finds each one's hit (the strike for a sharp attack, else the top of a 40 ms
+  smoothed loudness), its shape (hit/whoosh/riser/sustained/multiple) and tone; `placement(hitAt:)` is what
+  `add_audio` `hitAt` uses, and `sheet` draws the waveform image `search_stock` kind "sound" returns (it downloads the
+  results into `Application Support/VeyMotion/cache/sounds`, which `importItem` reuses). Sound search defaults to
+  ≤ 10 s for agents (Openverse `length` + a client filter) and puts loops/ambiences last; the app's browser passes
+  `maxDuration: 0`. `SoundSynth` renders `SynthKind`s deterministically (seeded by kind + variant) to a 16-bit WAV
+  named by a settings hash and reports exact hit times. Files are written to a `.part` and moved, never `.atomic`
+  (that stages in the system temp folder, which sandboxed processes cannot use).
 - Layer ids are unique: `addLayer` / `duplicateLayer` auto-suffix them (`title-2`), and renaming to a taken id throws.

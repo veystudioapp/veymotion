@@ -37,7 +37,7 @@ final class StockBrowserModel {
         isSearching = true
         error = nil
         DispatchQueue.global(qos: .userInitiated).async {
-            let outcome = Result { try StockSearch.search(q, kind: kind, page: page, vietnamese: vietnamese) }
+            let outcome = Result { try StockSearch.search(q, kind: kind, page: page, vietnamese: vietnamese, maxDuration: 0) }
             DispatchQueue.main.async {
                 guard token == self.searchToken else { return }
                 self.isSearching = false

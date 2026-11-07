@@ -352,6 +352,20 @@ final class SceneStore: SceneHost {
         selection = id
     }
 
+    /// Adds a synthesized sound effect (from the Sound Effect sheet) so its hit lands at `hitAt`.
+    func addSoundEffect(_ result: SynthResult, title: String, hitAt: Double, volume: Double) {
+        var l = MotionLayer(id: "sfx-\(title.lowercased())", name: title, type: .audio)
+        l.role = .sfx
+        l.path = result.url.path
+        l.sourceDuration = result.duration
+        l.volume = .constant(volume)
+        l.start = hitAt - (result.hits.first ?? 0)
+        if l.start < 0 { l.trimIn = -l.start; l.start = 0 }
+        var id = ""
+        apply("Add Sound Effect") { id = $0.addLayer(l) }
+        selection = id
+    }
+
     func addCaptions(for id: String) {
         do {
             try apply("Add Captions") { _ = try $0.addCaptions(for: id) }

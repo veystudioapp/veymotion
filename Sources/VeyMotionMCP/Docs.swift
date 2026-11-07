@@ -369,6 +369,44 @@ enum Docs {
       put the biggest moment on the loudest part or a strong onset. For continuous motion with the music use
       audioReact (e.g. a logo pulsing on bass, a background breathing with level).
 
+    SOUND EFFECTS
+    A sound effect sells a motion only if it matches it in kind, length and timing. Add sound effects after the visuals
+    are timed, and only where the user wants sound design (or the piece clearly calls for it).
+    - Match the motion (motion → sound): slide/fly-in or camera move → whoosh (duration ≈ the move); quick flick, small
+      element in, fast cut → swoosh; scale-in/appear → pop (blip for UI-like elements); button press, cursor, snap into
+      place → click; counter steps, list items, checkboxes → tick (or click); success, check mark, key number → ding;
+      reveal, achievement, happy ending → chime; shine sweep, magic, stars → sparkle; build-up before a reveal → riser
+      ending exactly on the reveal; title slam, logo landing, beat drop → impact (subtle landing → thud); exit, error,
+      things falling → drop; glitch transition → glitch; typewriter text → typing over the typing time.
+    - Timing is where it goes wrong: the sound's peak must land on the frame where the motion peaks, not where the
+      layer starts. Whoosh: peak at the middle/fastest point of the move, so it starts before the move. Impact, pop,
+      click, thud: on the frame the thing lands or reaches full size (for a popIn preset, ~0.1–0.2 s after its start).
+      Riser: ends on the reveal. Pass hitAt (scene time of that frame) to generate_sfx or add_audio and the tool does
+      the math (skips leading silence, starts early). Never just put start = the visual's start.
+    - Default to generate_sfx for every kind it has (whoosh, swoosh, pop, blip, click, tick, ding, chime, sparkle,
+      riser, impact, thud, drop, glitch, typing), also when reworking a scene that already uses stock effects: it is
+      made to measure (duration = the move, direction "left"/"right" pans a whoosh with the
+      motion, pitch < 1 for bigger/heavier objects and > 1 for small/light ones, count for repeated ticks/clicks) and
+      knows its exact hit. Vary `variant` (or pitch slightly) when the same sound repeats so it does not sound
+      copy-pasted. Use search_stock kind "sound" for real-world sounds the synth cannot make (applause, camera shutter,
+      door, crowd, nature, specific objects).
+    - Picking a stock sound: search_stock lists each sound's shape (hit / whoosh / riser / sustained / multiple), peak,
+      tags and a waveform image. Choose a single clear shape that fits the motion and a length close to it; avoid
+      "sustained" (beds, loops) for one-shots and "multiple" files unless you pass hit to pick one of their sounds.
+      Read the tags, not only the title. If nothing fits, try a different word (e.g. "swipe", "swish", "air pass" for
+      whoosh; "bubble pop", "plop" for pop; "hit", "boom", "slam" for impact) before settling.
+    - Mix: sound effects sit under the voice: volume ~0.4–0.7 (impact/riser ~0.6–0.8, ticks/clicks ~0.3–0.5); keep at
+      most one effect per moment and leave quiet stretches; do not put a sound on every element of a stagger (one for
+      the group, or soft ticks with count). With music, small effects can be dropped entirely.
+    - Sustained sounds (shape "sustained": shimmers, ambiences, loops) have no accent: never place them with hitAt as
+      a hit. Use them only as short beds under a moment (end + fadeIn/fadeOut), and check their level (quiet files
+      need more volume).
+    - Reporting: you cannot hear, but you do know each sound's shape, peak and placement, so do not open with a
+      general "I can't hear audio" disclaimer. Say what you checked (kind matches the motion, peak lands on the frame)
+      and name only the specific sounds the user should audition: stock sounds picked by title/tags, sustained ones,
+      or any whose shape did not clearly match. Synthesized effects need no such note beyond a one-line "listen and
+      tell me what to change".
+
     ASSETS
     The asset library is one shared folder of files (images, audio, …); generated voice-overs are stored there too.
     - Files can be organized in folders. An asset's name is its path inside the library, e.g. logo.png or
@@ -404,8 +442,8 @@ enum Docs {
     - Background music: search_stock kind "music" with a mood/genre (e.g. "calm piano", "upbeat corporate", "cinematic").
       Prefer a track at least as long as the scene; import_stock it, then add_audio with role "music", start 0,
       end = scene duration, volume ~0.6, fadeIn 0.5, fadeOut 1.5, and duckTo ~0.25 if there is a voice-over.
-    - Sound effects: kind "sound" (e.g. "whoosh", "pop", "click", "ding"); add_audio with role "sfx" at the moment a
-      visual enters. Keep them sparse and short.
+    - Sound effects: see SOUND EFFECTS (generate_sfx first; search_stock kind "sound" for real-world sounds, then
+      import_stock and add_audio with role "sfx" and hitAt).
     - Some licenses (CC BY, CC BY-SA) require credit. When you used such assets, call get_credits and tell the user,
       or add a small credits text at the end if they want it in the video.
 
@@ -744,6 +782,29 @@ enum Docs {
         }
       },
       {
+        "name": "generate_sfx",
+        "description": "Synthesize a sound effect made to measure (no download, no license) and add it as an sfx audio layer whose hit lands at hitAt. Kinds: whoosh (slides, zooms, camera moves; peaks mid-way), swoosh (quick flicks/cuts), pop (scale-in, appear), blip (UI elements), click (buttons, snaps), tick (counters, list steps), ding (success, highlight), chime (reveal, achievement), sparkle (shine, magic), riser (build-up whose hit is its end), impact (title slam, logo landing), thud (soft landing), drop (exit, error), glitch (glitch transition), typing (typewriter text). Same settings give the same file.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "kind": { "type": "string", "enum": ["whoosh", "swoosh", "pop", "blip", "click", "tick", "ding", "chime", "sparkle", "riser", "impact", "thud", "drop", "glitch", "typing"] },
+            "hitAt": { "type": "number", "description": "Scene time the hit should land: the frame the motion peaks/lands (whoosh: middle of the move; riser: the reveal; typing: first keystroke). Preferred over start." },
+            "start": { "type": "number", "description": "Scene time the layer starts (when hitAt is not given)." },
+            "duration": { "type": "number", "description": "Seconds. whoosh/swoosh: the move's length (0.2–2); riser: the build-up (1–6); typing: the typing time; drop/glitch/sparkle: length. With count: the span the repeats are spread over." },
+            "pitch": { "type": "number", "description": "Frequency multiplier 0.5–2 (default 1): lower for big/heavy things, higher for small/light ones." },
+            "direction": { "type": "string", "enum": ["left", "right"], "description": "whoosh/swoosh/riser: pan the sound in the direction the object moves." },
+            "count": { "type": "integer", "description": "tick/click/pop/blip/thud/ding: repeat this many times evenly over duration (e.g. a counter); typing: number of keystrokes." },
+            "variant": { "type": "integer", "description": "Different random detail (and chime root note). Change it when the same effect repeats." },
+            "reverb": { "type": "number", "description": "0–1 room tail (defaults: ding/chime 0.3, impact 0.25, sparkle 0.2, others 0)." },
+            "volume": { "type": "number", "description": "Layer volume (1 = full; effects usually sit at 0.4–0.7 under a voice)." },
+            "add": { "type": "boolean", "description": "Add an audio layer (default true). false = only create the file." },
+            "id": { "type": "string" },
+            "folder": { "type": "string", "description": "Asset folder for the file (default sfx/ in projects)." }
+          },
+          "required": ["kind"]
+        }
+      },
+      {
         "name": "generate_voice",
         "description": "Speak a script and add it as a voice audio layer starting at `start`. Returns the audio duration and the scene time of every word, so you can time visuals and captions to the narration. Generate one call per section.",
         "inputSchema": {
@@ -762,7 +823,7 @@ enum Docs {
       },
       {
         "name": "add_audio",
-        "description": "Add an audio file (music, sound effect or recorded voice) as an audio layer.",
+        "description": "Add an audio file (music, sound effect or recorded voice) as an audio layer. For a sound effect, pass hitAt so its peak lands on the right frame; the reply describes the sound's shape.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -775,6 +836,8 @@ enum Docs {
             "fadeIn": { "type": "number" },
             "fadeOut": { "type": "number" },
             "duckTo": { "type": "number", "description": "Music only: volume while a voice speaks, e.g. 0.25." },
+            "hitAt": { "type": "number", "description": "Sound effects: scene time where the sound's peak should land (the frame the motion hits). Sets start, trimIn (skips leading silence) and end (stops after that sound) for you; overrides start." },
+            "hit": { "type": "integer", "description": "With hitAt, for a file holding several separate sounds: which one (1-based, as listed by import_stock / analyze_audio). Default: the loudest." },
             "id": { "type": "string" }
           },
           "required": ["path"]
@@ -787,7 +850,7 @@ enum Docs {
       },
       {
         "name": "analyze_audio",
-        "description": "Find the rhythm of the music: tempo (bpm), beat times, downbeats (first beat of each bar), strong hits (onsets, [time, strength 0..1]) and loudness per second (0..1). Times are scene seconds for a layer. Use it to land entrances, cuts and accents on the beat and big moments on loud parts.",
+        "description": "Find the rhythm of the music: tempo (bpm), beat times, downbeats (first beat of each bar), strong hits (onsets, [time, strength 0..1]) and loudness per second (0..1). Times are scene seconds for a layer. Use it to land entrances, cuts and accents on the beat and big moments on loud parts. For short files (sound effects, ≤ 30 s) it also returns `sound`: shape, peak and the separate sounds as [start, peak, end].",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -945,16 +1008,17 @@ enum Docs {
       },
       {
         "name": "search_stock",
-        "description": "Search free assets online: photos and illustrations from Openverse (licenses allowing commercial use and changes), icons from Iconify (200k+ open-source SVG icons), music from Jamendo and sound effects from Freesound (via Openverse), fonts from Google Fonts. Returns numbered results with refs, licenses, durations and (for images/icons/fonts) a numbered preview image. English keywords work best.",
+        "description": "Search free assets online: photos and illustrations from Openverse (licenses allowing commercial use and changes), icons from Iconify (200k+ open-source SVG icons), music from Jamendo and sound effects from Freesound (via Openverse), fonts from Google Fonts. Returns numbered results with refs, licenses, durations and a numbered preview image (thumbnails; for sounds, waveforms with each sound's shape, peak and tags). English keywords work best. For common motion sounds (whoosh, pop, click, ding, riser, impact…) generate_sfx is usually the better choice.",
         "inputSchema": {
           "type": "object",
           "properties": {
             "query": { "type": "string", "description": "e.g. \"mountain sunset\", \"rocket\", \"upbeat corporate\", \"whoosh\"." },
             "kind": { "type": "string", "enum": ["photo", "illustration", "icon", "music", "sound", "font"], "default": "photo" },
             "vietnamese": { "type": "boolean", "description": "Fonts only: keep fonts that have Vietnamese letters." },
+            "maxDuration": { "type": "number", "description": "Music/sound: leave out results longer than this many seconds. Sounds default to 10 (one-shot effects); raise it for ambiences, 0 = no limit." },
             "page": { "type": "integer", "description": "1-based page (20 results per page, 48 for icons)." },
             "limit": { "type": "integer", "description": "Return at most this many results." },
-            "preview": { "type": "boolean", "description": "Include the numbered thumbnail sheet. Default true." }
+            "preview": { "type": "boolean", "description": "Include the numbered preview image (thumbnails; for sounds, waveforms plus each sound's shape and peak, which downloads them). Default true." }
           },
           "required": ["query"]
         }

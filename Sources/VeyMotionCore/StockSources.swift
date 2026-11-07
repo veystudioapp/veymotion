@@ -45,6 +45,8 @@ public struct StockItem: Identifiable, Hashable, Sendable {
     public var duration: Double?
     /// Music genres; for fonts: category, weights and "Vietnamese ✓".
     public var genres: [String] = []
+    /// Keywords from the source (Freesound tags describe a sound much better than its title).
+    public var tags: [String] = []
     /// Fonts: available styles ("400", "700", "400i"…).
     public var fontStyles: [String] = []
 
@@ -57,6 +59,7 @@ public struct StockItem: Identifiable, Hashable, Sendable {
             parts.append(genres.joined(separator: ", "))
         } else if let d = duration {
             parts.append(Self.clock(d) + " " + fileExtension + (genres.isEmpty ? "" : " — " + genres.prefix(3).joined(separator: ", ")))
+            if kind == .sound, !tags.isEmpty { parts.append("tags: " + tags.prefix(8).joined(separator: ", ")) }
         } else if let w = width, let h = height {
             parts.append("\(w)×\(h) \(fileExtension)")
         } else {
@@ -81,22 +84,33 @@ public enum StockSearch {
 
     // MARK: Search
 
+    /// Sound effects longer than this are left out unless a search asks for longer ones.
+    public static let defaultSoundMaxDuration = 10.0
+
     /// Blocking; call off the main thread. `page` starts at 1.
     /// `vietnamese`: fonts only, keep families with Vietnamese letters.
-    public static func search(_ query: String, kind: StockKind, page: Int = 1, vietnamese: Bool = false) throws -> [StockItem] {
+    /// `maxDuration`: audio only, leave out longer results (sounds default to `defaultSoundMaxDuration`; 0 = no limit).
+    public static func search(_ query: String, kind: StockKind, page: Int = 1, vietnamese: Bool = false,
+                              maxDuration: Double? = nil) throws -> [StockItem] {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { return [] }
         switch kind {
         case .font: return try GoogleFonts.search(q, page: page, vietnamese: vietnamese)
         case .icon: return try searchIcons(q, page: page)
         case .photo, .illustration: return try searchOpenverse(q, kind: kind, page: page)
-        case .music, .sound: return try searchOpenverseAudio(q, kind: kind, page: page)
+        case .music, .sound:
+            let limit = maxDuration ?? (kind == .sound ? defaultSoundMaxDuration : 0)
+            return try searchOpenverseAudio(q, kind: kind, page: page, maxDuration: limit > 0 ? limit : nil)
         }
     }
 
-    private static func searchOpenverseAudio(_ q: String, kind: StockKind, page: Int) throws -> [StockItem] {
+    /// Words that mark a Freesound result as a background bed rather than a one-shot effect.
+    static let bedWords = ["loop", "ambience", "ambiance", "ambient", "atmosphere", "atmos", "soundscape", "field-recording",
+                           "field recording", "drone", "music", "song", "melody", "background", "room tone"]
+
+    private static func searchOpenverseAudio(_ q: String, kind: StockKind, page: Int, maxDuration: Double?) throws -> [StockItem] {
         var c = URLComponents(string: "https://api.openverse.org/v1/audio/")!
-        c.queryItems = [
+        var items = [
             URLQueryItem(name: "q", value: q),
             URLQueryItem(name: "page", value: String(max(1, page))),
             URLQueryItem(name: "page_size", value: "20"),
@@ -104,9 +118,33 @@ public enum StockSearch {
             // Jamendo is all music; Freesound is sound effects (its items have no category).
             URLQueryItem(name: "source", value: kind == .music ? "jamendo" : "freesound"),
         ]
-        let obj = try HTTP.json(c.url!)
+        // Openverse length buckets: shortest < 30 s, short 30 s–2 min, medium 2–10 min, long > 10 min.
+        if let m = maxDuration {
+            let buckets = m <= 30 ? "shortest" : m <= 120 ? "shortest,short" : m <= 600 ? "shortest,short,medium" : nil
+            if let buckets { items.append(URLQueryItem(name: "length", value: buckets)) }
+        }
+        c.queryItems = items
+        let obj: [String: Any]
+        do {
+            obj = try HTTP.json(c.url!)
+        } catch where items.contains(where: { $0.name == "length" }) {
+            // Older API versions reject `length`: retry without it and filter by duration here.
+            c.queryItems = items.filter { $0.name != "length" }
+            obj = try HTTP.json(c.url!)
+        }
         let results = obj["results"] as? [[String: Any]] ?? []
-        return results.compactMap { openverseItem($0, kind: kind) }
+        var found = results.compactMap { openverseItem($0, kind: kind) }
+        if let m = maxDuration { found = found.filter { ($0.duration ?? 0) <= m + 0.05 } }
+        guard kind == .sound else { return found }
+        // One-shot effects first: beds (loops, ambiences, music) go last unless the query asks for one.
+        let lowered = q.lowercased()
+        let wanted = bedWords.filter { lowered.contains($0) }
+        func isBed(_ item: StockItem) -> Bool {
+            guard wanted.isEmpty else { return false }
+            let text = (item.title + " " + item.tags.joined(separator: " ")).lowercased()
+            return bedWords.contains { text.contains($0) }
+        }
+        return found.filter { !isBed($0) } + found.filter(isBed)
     }
 
     private static func searchOpenverse(_ q: String, kind: StockKind, page: Int) throws -> [StockItem] {
@@ -150,6 +188,10 @@ public enum StockSearch {
         item.downloadURL = URL(string: urlString)
         if let ms = r["duration"] as? Double { item.duration = ms / 1000 }
         if let g = r["genres"] as? [String] { item.genres = g }
+        if let tags = r["tags"] as? [[String: Any]] {
+            var seen = Set<String>()
+            item.tags = tags.compactMap { ($0["name"] as? String)?.lowercased() }.filter { !$0.isEmpty && seen.insert($0).inserted }
+        }
         return item
     }
 
@@ -273,7 +315,12 @@ public enum StockSearch {
                   let info = AssetStore.info(existing) {
             return info // already imported (same item, same color)
         }
-        var asset = try AssetStore.download(url, name: fileName, folder: folder)
+        var asset: AssetInfo
+        if item.kind.isAudio, let cached = cachedAudio(item) {
+            asset = try AssetStore.write(try Data(contentsOf: cached), name: fileName, folder: folder)
+        } else {
+            asset = try AssetStore.download(url, name: fileName, folder: folder)
+        }
         if item.kind.isAudio, asset.duration == nil || !AudioFileInfo.isDecodable(asset.path) {
             _ = try? AssetStore.trash(asset.path)
             throw AssetError.failed("The downloaded file for '\(item.title)' is not playable audio. Try another result.")
@@ -307,6 +354,59 @@ public enum StockSearch {
         let trimmed = String(out.trimmingCharacters(in: CharacterSet(charactersIn: "-")).prefix(48))
             .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
         return trimmed.isEmpty ? "image" : trimmed
+    }
+
+    // MARK: Sound previews
+
+    private static var audioCacheDir: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/VeyMotion/cache/sounds", isDirectory: true)
+    }
+
+    private static func audioCacheURL(_ item: StockItem) -> URL {
+        let id = item.ref.split(separator: ":").last.map(String.init) ?? slug(item.title)
+        return audioCacheDir.appendingPathComponent("\(id).\(item.fileExtension)")
+    }
+
+    /// The file of an audio result if a search already downloaded it.
+    static func cachedAudio(_ item: StockItem) -> URL? {
+        let url = audioCacheURL(item)
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
+
+    /// Downloads short audio results (into a cache that `importItem` reuses) and profiles them, keyed by item index,
+    /// so an agent can tell a one-shot whoosh from a loop without listening. Results over `maxDuration` are skipped.
+    /// Blocking.
+    public static func soundProfiles(_ items: [StockItem], maxDuration: Double = 30, timeout: TimeInterval = 20) -> [Int: SoundProfile] {
+        let fm = FileManager.default
+        try? fm.createDirectory(at: audioCacheDir, withIntermediateDirectories: true)
+        pruneAudioCache()
+        var out: [Int: SoundProfile] = [:]
+        let lock = NSLock()
+        DispatchQueue.concurrentPerform(iterations: items.count) { i in
+            let item = items[i]
+            guard item.kind.isAudio, (item.duration ?? 0) <= maxDuration, let remote = item.downloadURL else { return }
+            let url = audioCacheURL(item)
+            if !fm.fileExists(atPath: url.path) {
+                guard let data = try? HTTP.get(remote, timeout: timeout), !data.isEmpty, data.count < 20_000_000 else { return }
+                let part = url.appendingPathExtension("part\(i)")
+                guard (try? data.write(to: part)) != nil else { return }
+                if (try? fm.moveItem(at: part, to: url)) == nil { try? fm.removeItem(at: part) }
+            }
+            guard AudioFileInfo.isDecodable(url.path) else { try? fm.removeItem(at: url); return }
+            guard let p = SoundProfile.cached(path: url.path) else { return }
+            lock.lock(); out[i] = p; lock.unlock()
+        }
+        return out
+    }
+
+    /// Keeps the preview cache to the 400 most recent files.
+    private static func pruneAudioCache() {
+        let fm = FileManager.default
+        guard let files = try? fm.contentsOfDirectory(at: audioCacheDir, includingPropertiesForKeys: [.contentModificationDateKey]),
+              files.count > 400 else { return }
+        let dated = files.map { ($0, (try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast) }
+        for (url, _) in dated.sorted(by: { $0.1 > $1.1 }).dropFirst(400) { try? fm.removeItem(at: url) }
     }
 
     // MARK: Previews

@@ -5,6 +5,7 @@ import VeyMotionCore
 struct ContentView: View {
     @Environment(SceneStore.self) private var store
     @State private var showVoice = false
+    @State private var showSoundEffect = false
     @AppStorage("rightPanelTab") private var rightTab: RightPanelTab = .inspector
     @AppStorage("leftPanelTab") private var leftTab: LeftPanelTab = .layers
     @AppStorage("showSidebar") private var showSidebar = true
@@ -105,6 +106,7 @@ struct ContentView: View {
         .navigationSubtitle([store.project != nil ? "Project" : nil, store.isDirty ? "Edited" : nil]
             .compactMap { $0 }.joined(separator: " — "))
         .sheet(isPresented: $showVoice) { VoiceOverSheet() }
+        .sheet(isPresented: $showSoundEffect) { SoundEffectSheet() }
         .sheet(isPresented: Bindable(store).showExport) { ExportSheet() }
         .sheet(isPresented: Bindable(store).showPublish) { PublishSheet() }
     }
@@ -123,6 +125,7 @@ extension ContentView {
             Button { store.addVideoLayer() } label: { Label("Video or Image Sequence…", systemImage: "film") }
             Button { store.addAudioLayer() } label: { Label("Audio…", systemImage: "music.note") }
             Button { showVoice = true } label: { Label("Voice-over…", systemImage: "mic") }
+            Button { showSoundEffect = true } label: { Label("Sound Effect…", systemImage: "waveform") }
             Divider()
             Menu("Particles") {
                 ForEach(ParticlePreset.allCases, id: \.self) { p in Button(p.title) { store.addParticles(p) } }

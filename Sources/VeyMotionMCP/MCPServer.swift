@@ -224,12 +224,87 @@ public final class MCPServer {
             layer.fadeIn = max(0, number(a["fadeIn"]) ?? 0)
             layer.fadeOut = max(0, number(a["fadeOut"]) ?? 0)
             layer.duckTo = number(a["duckTo"])
+            var hitNote: String?
+            if let hitAt = number(a["hitAt"]) {
+                guard let profile = SoundProfile.cached(path: path) else {
+                    throw ToolError("hitAt needs a sound of at most 60 s that can be decoded; use start instead.")
+                }
+                let hit = number(a["hit"]).map { Int($0) }
+                if let hit, hit < 1 || hit > profile.bursts.count {
+                    throw ToolError("hit must be 1…\(profile.bursts.count): the file has \(profile.bursts.count) separate sound(s).")
+                }
+                guard let place = profile.placement(hitAt: hitAt, hit: hit) else { throw ToolError("The file is silent.") }
+                layer.start = place.start
+                if a["trimIn"] == nil { layer.trimIn = place.trimIn }
+                if a["end"] == nil { layer.end = place.end }
+                if a["fadeOut"] == nil { layer.fadeOut = place.fadeOut }
+                hitNote = String(format: " Its hit lands at %.2fs.", place.hitTime)
+                    + (place.hitTime > hitAt + 0.01 ? " (It could not start early enough: the sound is cut at the scene start.)" : "")
+                if profile.shape == .sustained {
+                    hitNote! += " Warning: this is a sustained sound (steady level, no clear hit), so nothing is heard as an accent at hitAt"
+                        + " and it plays on for its whole length. For an accent use a hit/whoosh/riser sound or generate_sfx;"
+                        + " keep sustained sounds for beds (set end and fadeIn/fadeOut)."
+                }
+                if profile.peakDB < -12 {
+                    hitNote! += String(format: " The file is quiet (peak %.0f dBFS): raise volume to be heard.", profile.peakDB)
+                }
+            }
             var newId = ""
             try host.mutate("Add Audio") { newId = $0.addLayer(layer) }
             let scene = host.currentScene()
             let l = try scene.layer(newId)
-            return text(String(format: "Added %@ layer '%@': %.2fs → %.2fs (file %.2fs).", l.role.rawValue, newId, l.start,
-                               l.effectiveEnd(sceneDuration: scene.duration), duration))
+            var reply = String(format: "Added %@ layer '%@': %.2fs → %.2fs (file %.2fs", l.role.rawValue, newId, l.start,
+                               l.effectiveEnd(sceneDuration: scene.duration), duration)
+            reply += l.trimIn > 0 ? String(format: ", from %.2fs).", l.trimIn) : ")."
+            if let hitNote { reply += hitNote }
+            if l.role == .sfx, a["hitAt"] == nil, duration <= 60, let p = SoundProfile.cached(path: path), p.shape != .silent {
+                reply += String(format: " Sound: %@. Its peak plays at %.2fs; pass hitAt to line the peak up with the picture.",
+                                p.summary, l.start + p.peak - l.trimIn)
+            }
+            return text(reply)
+
+        case "generate_sfx":
+            guard let kind = SynthKind(rawValue: (try string(a, "kind")).lowercased()) else {
+                throw ToolError("kind must be one of: \(SynthKind.allCases.map(\.rawValue).joined(separator: ", "))")
+            }
+            var settings = SynthSettings(kind: kind)
+            settings.duration = number(a["duration"]).map { min(max($0, 0.03), 30) }
+            settings.pitch = min(max(number(a["pitch"]) ?? 1, 0.25), 4)
+            settings.variant = Int(number(a["variant"]) ?? 0)
+            settings.reverb = number(a["reverb"]).map { min(max($0, 0), 1) }
+            settings.direction = a["direction"] as? String
+            settings.count = number(a["count"]).map { max(1, min(200, Int($0))) }
+            let result = try SoundSynth.generate(settings, folder: a["folder"] as? String)
+            let mainHit = result.hits.first ?? 0
+            var lines = [String(format: "Generated %@ (%.2fs, hit at %.2fs in the file): %@", kind.rawValue, result.duration, mainHit, result.url.path)]
+            if a["add"] as? Bool ?? true {
+                var layer = MotionLayer(id: a["id"] as? String ?? "sfx-\(kind.rawValue)", name: kind.title, type: .audio)
+                layer.role = .sfx
+                layer.path = result.url.path
+                layer.sourceDuration = result.duration
+                if let v = number(a["volume"]) { layer.volume = .constant(max(0, v)) }
+                if let hitAt = number(a["hitAt"]) {
+                    layer.start = hitAt - mainHit
+                    if layer.start < 0 { layer.trimIn = -layer.start; layer.start = 0 }
+                } else {
+                    layer.start = max(0, number(a["start"]) ?? 0)
+                }
+                var newId = ""
+                try host.mutate("Generate Sound Effect") { newId = $0.addLayer(layer) }
+                let end = layer.start + result.duration - layer.trimIn
+                lines.append(String(format: "Added sfx layer '%@': %.2fs → %.2fs, hit at %.2fs.", newId, layer.start, end,
+                                    layer.start + mainHit - layer.trimIn))
+                if result.hits.count > 1 {
+                    let ts = result.hits.prefix(40).map { String(format: "%.2f", layer.start + $0 - layer.trimIn) }
+                    lines.append("Hits (scene seconds): " + ts.joined(separator: ", ") + (result.hits.count > 40 ? ", …" : ""))
+                }
+                if end > host.currentScene().duration + 0.01 {
+                    lines.append("Note: it runs past the scene end and is cut there.")
+                }
+            } else {
+                lines.append("Not added: add_audio {\"path\": …, \"role\": \"sfx\", \"hitAt\": <scene time>} places it.")
+            }
+            return text(lines.joined(separator: "\n"))
 
         case "get_audio_info":
             let path = try string(a, "path")
@@ -685,13 +760,36 @@ public final class MCPServer {
                 throw ToolError("`kind` must be one of \(StockKind.allCases.map(\.rawValue))")
             }
             let page = max(1, Int(number(a["page"]) ?? 1))
-            var items = try StockSearch.search(query, kind: kind, page: page, vietnamese: a["vietnamese"] as? Bool ?? false)
+            let maxDuration = number(a["maxDuration"])
+            var items = try StockSearch.search(query, kind: kind, page: page, vietnamese: a["vietnamese"] as? Bool ?? false,
+                                               maxDuration: maxDuration)
             if let limit = number(a["limit"]), limit > 0 { items = Array(items.prefix(Int(limit))) }
-            if items.isEmpty { return text("No \(kind.rawValue) results for '\(query)'. Try a simpler or English query.") }
+            if items.isEmpty {
+                var msg = "No \(kind.rawValue) results for '\(query)'. Try a simpler or English query."
+                if kind == .sound {
+                    msg += String(format: " Only sounds up to %.0f s are listed (maxDuration). generate_sfx makes whoosh/pop/click/ding/riser/impact… without searching.",
+                                  maxDuration ?? StockSearch.defaultSoundMaxDuration)
+                }
+                return text(msg)
+            }
+            let preview = a["preview"] as? Bool ?? true
+            let profiles = kind == .sound && preview ? StockSearch.soundProfiles(items) : [:]
             var lines = ["\(items.count) \(kind.rawValue) results for '\(query)' (page \(page)). Import one with import_stock {\"ref\": …}:"]
-            for (i, item) in items.enumerated() { lines.append("\(i + 1). \(item.summary)") }
+            if kind == .sound, let synth = SynthKind.matching(query) {
+                lines.insert("Tip: generate_sfx {\"kind\": \"\(synth.rawValue)\", \"hitAt\": …} makes this sound to measure (length, pitch, exact hit) — "
+                             + "prefer it unless you need a real recording.", at: 0)
+            }
+            for (i, item) in items.enumerated() {
+                lines.append("\(i + 1). \(item.summary)")
+                if let p = profiles[i] { lines.append("   sound: \(p.summary)") }
+            }
             var content: [[String: Any]] = []
-            if !kind.isAudio, a["preview"] as? Bool ?? true, let png = StockSearch.contactSheet(items) {
+            if kind == .sound, !profiles.isEmpty, let png = SoundProfile.sheet(items.indices.map { profiles[$0] }) {
+                lines.append("The image shows each sound's waveform (dB scale, numbered in the same order): orange = main peak, "
+                             + "blue bands = separate sounds. For a one-shot effect pick a single clear shape that fits the motion: "
+                             + "hit = sharp start, whoosh = swell in the middle, riser = builds to the end.")
+                content.append(["type": "image", "data": png.base64EncodedString(), "mimeType": "image/png"])
+            } else if !kind.isAudio, preview, let png = StockSearch.contactSheet(items) {
                 lines.append(kind == .font ? "The image shows each font's name and a sample, numbered in the same order."
                              : "The image shows the results numbered in the same order.")
                 content.append(["type": "image", "data": png.base64EncodedString(), "mimeType": "image/png"])
@@ -726,7 +824,15 @@ public final class MCPServer {
             if item.kind == .music {
                 lines.append("Next: add_audio {\"path\": \"\(asset.path)\", \"role\": \"music\", \"start\": 0, \"end\": <scene duration>, \"volume\": 0.6, \"fadeIn\": 0.5, \"fadeOut\": 1.5, \"duckTo\": 0.25}")
             } else if item.kind == .sound {
-                lines.append("Next: add_audio {\"path\": \"\(asset.path)\", \"role\": \"sfx\", \"start\": <moment it should play>}")
+                if let p = SoundProfile.cached(path: asset.path) {
+                    lines.append("Sound: \(p.summary)")
+                    if p.shape == .multiple {
+                        let list = p.bursts.enumerated().map { String(format: "%d: %.2f–%.2fs (peak %.2fs)", $0.offset + 1, $0.element.start, $0.element.end, $0.element.peak) }
+                        lines.append("Separate sounds: " + list.joined(separator: "; ") + ". Choose one with \"hit\": <number>.")
+                    }
+                }
+                lines.append("Next: add_audio {\"path\": \"\(asset.path)\", \"role\": \"sfx\", \"hitAt\": <scene time the peak should land>} "
+                             + "(skips leading silence and starts early so the peak lands on that frame).")
             }
             return text(lines.joined(separator: "\n"))
 
@@ -833,6 +939,12 @@ public final class MCPServer {
         fields.append("\"downbeats\":\(times(an.downbeats))")
         fields.append("\"onsets\":[" + onsets.map { "[\(fmt($0.t + offset)),\(fmt($0.strength, 2))]" }.joined(separator: ",") + "]")
         fields.append("\"loudness\":{\"from\":\(fmt(from)),\"step\":1,\"values\":[" + loudness.map { fmt($0, 2) }.joined(separator: ",") + "]}")
+        if an.duration <= 30, let p = SoundProfile.cached(path: path) {
+            // Sound effects: the shape, in the same time base as the rest.
+            let bursts = p.bursts.map { "[\(fmt($0.start + offset)),\(fmt($0.peak + offset)),\(fmt($0.end + offset))]" }
+            fields.append("\"sound\":{\"shape\":\(quoted(p.shape.rawValue)),\"peak\":\(fmt(p.peak + offset)),"
+                          + "\"bursts\":[\(bursts.joined(separator: ","))],\"tone\":\(quoted(p.tone)),\"summary\":\(quoted(p.summary))}")
+        }
         return "{" + fields.joined(separator: ",") + "}"
     }
 
