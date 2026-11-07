@@ -18,6 +18,8 @@ public final class FrameRenderer {
     private var currentParticles: [Particle] = []
     /// Open video decoders by path, reopened when the file (or sequence folder) changes. nil = unreadable.
     private var videoCache: [String: (frames: VideoFrames?, modified: Double?)] = [:]
+    /// Pictures with their background removed, by mode + source + frame.
+    private var cutoutCache: [String: CGImage] = [:]
     public static let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
     /// Sub-frame renders averaged for a layer with motion blur (lower it for a faster preview).
     public var motionBlurSamples = 8
@@ -32,6 +34,7 @@ public final class FrameRenderer {
         maskCache.removeAll()
         glyphCache.removeAll()
         videoCache.removeAll()
+        cutoutCache.removeAll()
     }
 
     /// Device pixels per scene pixel for the frame being drawn (shadow and blur sizes are in device pixels).
@@ -239,7 +242,7 @@ public final class FrameRenderer {
         var union = CGRect.null
         for tk in times {
             guard let local = contentBounds(layer, scene: scene, at: tk) else { return nil }
-            var pad = 3 * max(0, layer.value(.blur, at: tk)) + 4
+            var pad = 3 * (max(0, layer.value(.blur, at: tk)) + scene.focusBlur(for: layer, at: tk)) + 4
             if layer.value(.shadowOpacity, at: tk) > 0.001 {
                 pad += abs(layer.value(.shadowX, at: tk)) + abs(layer.value(.shadowY, at: tk)) + 2 * layer.value(.shadowBlur, at: tk)
             }
@@ -270,7 +273,7 @@ public final class FrameRenderer {
             if layer.particles.usesWorldSpace { m = (copy ?? .identity).concatenating(scene.cameraTransform(for: layer, at: t)) }
         }
         guard abs(m.a * m.d - m.b * m.c) > 1e-8 else { return } // scaled to nothing
-        let blur = max(0, layer.value(.blur, at: t))
+        let blur = max(0, layer.value(.blur, at: t)) + scene.focusBlur(for: layer, at: t)
         let fx = PixelEffects(layer, at: t, fps: scene.fps)
 
         // The wipe clips everything the layer draws: shadow, blur and glow included.
@@ -351,7 +354,7 @@ public final class FrameRenderer {
     private func wipeBox(_ layer: MotionLayer, scene: MotionScene, at t: Double) -> CGRect {
         switch layer.type {
         case .group:
-            return contentBounds(layer, scene: scene, at: t) ?? .zero
+            return flatContentBounds(layer, scene: scene, at: t) ?? .zero
         case .rect, .ellipse, .particles, .generator:
             let w = max(layer.shapeWidth(at: t), 0), h = max(layer.shapeHeight(at: t), 0)
             if layer.type == .particles, w < 1 || h < 1 { return particleBounds(layer) }
@@ -581,7 +584,99 @@ public final class FrameRenderer {
     }
 
     /// `alpha`: opacity particles apply themselves (the context's alpha is replaced per particle).
+    /// Layers with a mesh warp (2.5D rotation, corner pin, puppet pins) are drawn flat, then warped.
     private func drawContent(_ layer: MotionLayer, scene: MotionScene, at t: Double, in ctx: CGContext, alpha: Double = 1) {
+        if layer.type != .particles, layer.rotationXYOrPinned, let flat = flatContentBounds(layer, scene: scene, at: t),
+           let warp = MeshWarp(layer, box: meshBox(layer, scene: scene, flat: flat, at: t), at: t) {
+            if warp.hideBackface && warp.facesAway { return }
+            drawWarped(layer, scene: scene, warp: warp, flat: flat, at: t, in: ctx)
+            return
+        }
+        drawFlatContent(layer, scene: scene, at: t, in: ctx, alpha: alpha)
+    }
+
+    /// The box a corner pin maps from: the layer's own box (not its padded drawing bounds).
+    private func meshBox(_ layer: MotionLayer, scene: MotionScene, flat: CGRect, at t: Double) -> CGRect {
+        let b = wipeBox(layer, scene: scene, at: t)
+        return b.width > 0 && b.height > 0 ? b : flat
+    }
+
+    /// Draws the layer flat into a bitmap at device resolution, then each cell of a grid over it as two triangles
+    /// mapped by an affine transform onto the warped grid.
+    private func drawWarped(_ layer: MotionLayer, scene: MotionScene, warp: MeshWarp, flat: CGRect, at t: Double,
+                            in ctx: CGContext) {
+        let m = ctx.ctm
+        let scale = max(0.05, abs(m.a * m.d - m.b * m.c).squareRoot())
+        // Never more than 4096 px a side (a corner pin can blow a small layer up a lot; the cap keeps memory sane).
+        let k = min(scale, 4096 / max(flat.width, 1), 4096 / max(flat.height, 1))
+        let pw = max(1, Int((flat.width * k).rounded(.up))), ph = max(1, Int((flat.height * k).rounded(.up)))
+        guard let off = Self.bitmap(pw, ph) else { return }
+        off.setShouldAntialias(true)
+        off.interpolationQuality = .high
+        // Layer space (y down) → bitmap with row 0 at flat.minY.
+        off.translateBy(x: 0, y: Double(ph))
+        off.scaleBy(x: Double(pw) / flat.width, y: -Double(ph) / flat.height)
+        off.translateBy(x: -flat.minX, y: -flat.minY)
+        drawFlatContent(layer, scene: scene, at: t, in: off)
+        guard let image = off.makeImage() else { return }
+        let n = warp.cells
+        var grid = [[CGPoint]](repeating: [], count: n + 1)
+        for j in 0...n {
+            for i in 0...n {
+                let p = CGPoint(x: flat.minX + flat.width * Double(i) / Double(n), y: flat.minY + flat.height * Double(j) / Double(n))
+                grid[j].append(warp.map(p))
+            }
+        }
+        // Each triangle's clip grows by about a device pixel so neighbors overlap instead of leaving hairline seams.
+        let grow = 1.0 / scale
+        func drawTriangle(_ s: [CGPoint], _ d: [CGPoint]) {
+            // Affine taking source (flat layer px) to destination (warped layer px).
+            let (s0, s1, s2) = (s[0], s[1], s[2]), (d0, d1, d2) = (d[0], d[1], d[2])
+            let det = (s1.x - s0.x) * (s2.y - s0.y) - (s2.x - s0.x) * (s1.y - s0.y)
+            guard abs(det) > 1e-9 else { return }
+            let ia = (s2.y - s0.y) / det, ib = -(s2.x - s0.x) / det, ic = -(s1.y - s0.y) / det, id = (s1.x - s0.x) / det
+            let ux = d1.x - d0.x, uy = d1.y - d0.y, vx = d2.x - d0.x, vy = d2.y - d0.y
+            let a = ux * ia + vx * ic, b = uy * ia + vy * ic, c = ux * ib + vx * id, dd = uy * ib + vy * id
+            let tx = d0.x - a * s0.x - c * s0.y, ty = d0.y - b * s0.x - dd * s0.y
+            // Grow the triangle around its incenter so every edge moves out by `grow` (thin triangles included).
+            let la = hypot(d2.x - d1.x, d2.y - d1.y), lb = hypot(d2.x - d0.x, d2.y - d0.y), lc = hypot(d1.x - d0.x, d1.y - d0.y)
+            let per = la + lb + lc
+            guard per > 1e-9 else { return }
+            let ix = (la * d0.x + lb * d1.x + lc * d2.x) / per, iy = (la * d0.y + lb * d1.y + lc * d2.y) / per
+            let area = abs((d1.x - d0.x) * (d2.y - d0.y) - (d2.x - d0.x) * (d1.y - d0.y)) / 2
+            let r = 2 * area / per
+            guard r > 1e-9 else { return }
+            let f = min((r + grow) / r, 4)
+            let path = CGMutablePath()
+            for (k, p) in d.enumerated() {
+                let q = CGPoint(x: ix + (p.x - ix) * f, y: iy + (p.y - iy) * f)
+                if k == 0 { path.move(to: q) } else { path.addLine(to: q) }
+            }
+            path.closeSubpath()
+            ctx.saveGState()
+            ctx.addPath(path)
+            ctx.clip()
+            ctx.concatenate(CGAffineTransform(a: a, b: b, c: c, d: dd, tx: tx, ty: ty))
+            ctx.translateBy(x: flat.minX, y: flat.maxY)
+            ctx.scaleBy(x: 1, y: -1)
+            ctx.draw(image, in: CGRect(x: 0, y: 0, width: flat.width, height: flat.height))
+            ctx.restoreGState()
+        }
+        ctx.saveGState()
+        ctx.interpolationQuality = .high
+        for j in 0..<n {
+            for i in 0..<n {
+                let s00 = CGPoint(x: flat.minX + flat.width * Double(i) / Double(n), y: flat.minY + flat.height * Double(j) / Double(n))
+                let s11 = CGPoint(x: flat.minX + flat.width * Double(i + 1) / Double(n), y: flat.minY + flat.height * Double(j + 1) / Double(n))
+                let s10 = CGPoint(x: s11.x, y: s00.y), s01 = CGPoint(x: s00.x, y: s11.y)
+                drawTriangle([s00, s10, s11], [grid[j][i], grid[j][i + 1], grid[j + 1][i + 1]])
+                drawTriangle([s00, s11, s01], [grid[j][i], grid[j + 1][i + 1], grid[j + 1][i]])
+            }
+        }
+        ctx.restoreGState()
+    }
+
+    private func drawFlatContent(_ layer: MotionLayer, scene: MotionScene, at t: Double, in ctx: CGContext, alpha: Double = 1) {
         switch layer.type {
         case .rect, .ellipse, .path: drawShape(layer, at: t, in: ctx)
         case .text: drawText(layer, at: t, in: ctx)
@@ -751,7 +846,32 @@ public final class FrameRenderer {
     }
 
     /// Layer-local bounds of what `drawContent` paints, or nil when unknown (text animators move glyphs anywhere).
+    /// Layer-local bounds of what `drawContent` paints (after any mesh warp), or nil when unknown.
     private func contentBounds(_ layer: MotionLayer, scene: MotionScene, at t: Double) -> CGRect? {
+        guard layer.type != .particles, layer.rotationXYOrPinned, let flat = flatContentBounds(layer, scene: scene, at: t),
+              let warp = MeshWarp(layer, box: meshBox(layer, scene: scene, flat: flat, at: t), at: t)
+        else { return flatContentBounds(layer, scene: scene, at: t) }
+        // The warped outline, sampled along the edges (bends and perspective push the middle of edges out).
+        var out = CGRect.null
+        let steps = 8
+        for k in 0...steps {
+            let f = Double(k) / Double(steps)
+            for p in [CGPoint(x: flat.minX + flat.width * f, y: flat.minY), CGPoint(x: flat.minX + flat.width * f, y: flat.maxY),
+                      CGPoint(x: flat.minX, y: flat.minY + flat.height * f), CGPoint(x: flat.maxX, y: flat.minY + flat.height * f)] {
+                let q = warp.map(p)
+                out = out.union(CGRect(x: q.x, y: q.y, width: 0, height: 0))
+            }
+        }
+        return out.insetBy(dx: -2, dy: -2)
+    }
+
+    /// Bounds of the layer as drawn flat (before a mesh warp); text with animators gets a generous box.
+    private func flatContentBounds(_ layer: MotionLayer, scene: MotionScene, at t: Double) -> CGRect? {
+        if layer.type == .text, layer.textPath == nil, !layer.textAnimators.isEmpty, let box = textLayout(layer, at: t)?.box,
+           layer.rotationXYOrPinned {
+            let pad = max(layer.fontSize, 1) * 2 + layer.textAnimators.map { abs($0.x) + abs($0.y) }.max()!
+            return CGRect(x: -box.width / 2, y: -box.height / 2, width: box.width, height: box.height).insetBy(dx: -pad, dy: -pad)
+        }
         switch layer.type {
         case .rect, .ellipse:
             let w = max(layer.shapeWidth(at: t), 0), h = max(layer.shapeHeight(at: t), 0)
@@ -931,6 +1051,24 @@ public final class FrameRenderer {
         ctx.setLineJoin((layer.lineJoin ?? (isPath ? .round : .miter)).cgLineJoin)
         if !trimmed, !layer.dash.isEmpty, layer.dash.contains(where: { $0 > 0 }) {
             ctx.setLineDash(phase: layer.value(.dashOffset, at: t), lengths: layer.dash.map { max($0, 0.01) })
+        }
+        if trimmed && layer.trimSequential && pieces.count > 1 {
+            // One window over all pieces laid end to end, so letters write one after another.
+            let total = pieces.reduce(0) { $0 + $1.length }
+            let shift = layer.value(.trimOffset, at: t) * total
+            let from = s * total + shift, to = e * total + shift
+            var at = 0.0
+            for piece in pieces where piece.length > 0 {
+                defer { at += piece.length }
+                let a = max(from - at, 0), b = min(to - at, piece.length)
+                guard b - a > 0.01 else { continue }
+                ctx.addPath(piece.path)
+                let period = (b - a) + 3 * piece.length
+                ctx.setLineDash(phase: a > 0 ? period - a : 0, lengths: [b - a, period - (b - a)])
+                ctx.strokePath()
+            }
+            ctx.restoreGState()
+            return
         }
         for piece in pieces where piece.length > 0 {
             ctx.addPath(piece.path)
@@ -1372,13 +1510,16 @@ public final class FrameRenderer {
         let setH = layer.height.map { $0.value(at: t) }.flatMap { $0 > 0 ? $0 : nil }
         var img: CGImage?
         var w = setW ?? 400, h = setH ?? 240
-        let source: (CGImage?, CGSize)?
+        var source: (CGImage?, CGSize)?
         if layer.type == .video {
             source = layer.path.flatMap(videoFrames).map { frames in
-                (layer.videoTime(at: t).flatMap { frames.image(at: $0, fps: layer.fps ?? 30) }, frames.size)
+                (layer.videoTime(at: t).flatMap { videoFrame(layer, frames, at: $0) }, frames.size)
             }
         } else {
             source = layer.path.flatMap(loadImage).map { ($0.0, $0.1) }
+        }
+        if let mode = layer.removeBackground, let loaded = source, let picture = loaded.0 {
+            source = (cutOut(picture, mode: mode, key: "\(layer.path ?? "")|\(layer.videoTime(at: t) ?? -1)"), loaded.1)
         }
         if let loaded = source, loaded.1.width > 0, loaded.1.height > 0 {
             img = loaded.0
@@ -1388,6 +1529,27 @@ public final class FrameRenderer {
             if setH != nil && setW == nil { w = h * iw / ih }
         }
         return (img, CGRect(x: -w / 2, y: -h / 2, width: w, height: h))
+    }
+
+    /// The source frame at `seconds`, or an in-between of the two nearest frames (frameBlend) for slow motion.
+    private func videoFrame(_ layer: MotionLayer, _ frames: VideoFrames, at seconds: Double) -> CGImage? {
+        let fps = layer.fps ?? 30
+        guard layer.frameBlend != .off else { return frames.image(at: seconds, fps: fps) }
+        let fd = frames.frameDuration ?? 1 / max(fps, 1)
+        let k = floor(seconds / fd + 1e-6), f = seconds / fd - k
+        guard f > 0.02, f < 0.98, let a = frames.image(at: k * fd + fd * 0.01, fps: fps),
+              let b = frames.image(at: (k + 1) * fd + fd * 0.01, fps: fps) else { return frames.image(at: seconds, fps: fps) }
+        return PictureML.inBetween(a, b, f, flow: layer.frameBlend == .flow) ?? a
+    }
+
+    /// Background removal, cached per picture (a still image, or one video frame).
+    private func cutOut(_ image: CGImage, mode: BackgroundRemoval, key: String) -> CGImage {
+        let k = "\(mode.rawValue)|\(key)|\(image.width)x\(image.height)"
+        if let hit = cutoutCache[k] { return hit }
+        let result = PictureML.removeBackground(image, mode: mode) ?? image
+        if cutoutCache.count > 8 { cutoutCache.removeAll() }
+        cutoutCache[k] = result
+        return result
     }
 
     private func drawPlaceholder(_ rect: CGRect, in ctx: CGContext) {
@@ -1573,9 +1735,25 @@ extension FrameRenderer {
         for p in currentParticles {
             let a = alpha * p.color.a
             guard a > 0.002 else { continue }
-            ctx.setAlpha(a)
             let color = CGColor(srgbRed: p.color.r, green: p.color.g, blue: p.color.b, alpha: 1)
             let s = p.size
+            if !p.trail.isEmpty {
+                // A ribbon thinning and fading toward its tail.
+                var prev = CGPoint(x: p.x, y: p.y)
+                ctx.setLineCap(.round)
+                ctx.setStrokeColor(color)
+                for (k, q) in p.trail.enumerated() {
+                    let f = 1 - Double(k + 1) / Double(p.trail.count + 1)
+                    ctx.setAlpha(a * f * 0.8)
+                    ctx.setLineWidth(max(0.5, s * (0.3 + 0.7 * f)))
+                    ctx.move(to: prev)
+                    ctx.addLine(to: q)
+                    ctx.strokePath()
+                    prev = q
+                }
+                if sys.shape == .spark { ctx.setLineCap(.round) } else { ctx.setLineCap(.butt) }
+            }
+            ctx.setAlpha(a)
             switch sys.shape {
             case .circle:
                 ctx.setFillColor(color)
@@ -1721,6 +1899,39 @@ extension FrameRenderer {
         let outline = GlyphOutline(path: path)
         glyphCache[key] = outline
         return outline
+    }
+
+    /// A text layer's glyphs as outlines in layer px (around its center, y down), one path per glyph with its
+    /// center, in reading order. Used to turn text into paths.
+    public func glyphPaths(_ layer: MotionLayer, at t: Double) -> [(path: CGPath, center: CGPoint)] {
+        guard layer.type == .text, let layout = textLayout(layer, at: t) else { return [] }
+        let (bw, bh) = (layout.box.width, layout.box.height)
+        let frame = CTFramesetterCreateFrame(layout.setter, CFRange(location: 0, length: 0),
+                                             CGPath(rect: CGRect(x: 0, y: 0, width: bw, height: bh), transform: nil), nil)
+        let lines = CTFrameGetLines(frame) as? [CTLine] ?? []
+        var origins = [CGPoint](repeating: .zero, count: lines.count)
+        CTFrameGetLineOrigins(frame, CFRange(location: 0, length: 0), &origins)
+        var out: [(CGPath, CGPoint)] = []
+        for (li, line) in lines.enumerated() {
+            for run in CTLineGetGlyphRuns(line) as? [CTRun] ?? [] {
+                let n = CTRunGetGlyphCount(run)
+                guard n > 0 else { continue }
+                var glyphs = [CGGlyph](repeating: 0, count: n)
+                var positions = [CGPoint](repeating: .zero, count: n)
+                CTRunGetGlyphs(run, CFRange(location: 0, length: 0), &glyphs)
+                CTRunGetPositions(run, CFRange(location: 0, length: 0), &positions)
+                let attrs = CTRunGetAttributes(run) as NSDictionary
+                let font = attrs[kCTFontAttributeName as String].map { $0 as! CTFont } ?? Self.font(for: layer)
+                for g in 0..<n {
+                    var m = CGAffineTransform(a: 1, b: 0, c: 0, d: -1, tx: origins[li].x + positions[g].x - bw / 2,
+                                              ty: bh / 2 - origins[li].y - positions[g].y)
+                    guard let gp = CTFontCreatePathForGlyph(font, glyphs[g], &m), !gp.isEmpty else { continue }
+                    let b = gp.boundingBoxOfPath
+                    out.append((gp, CGPoint(x: b.midX, y: b.midY)))
+                }
+            }
+        }
+        return out
     }
 
     /// The image's alpha as a grayscale mask (at most 256 px), so it can be painted in any color.

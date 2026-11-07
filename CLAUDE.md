@@ -50,7 +50,7 @@ over the canvas (UI-only, never in the scene), and "Add to chat" renders the fra
 ## Model details that span files
 
 - `Animated<V>` (`AnimValue` = numbers, `ColorValue` = `RGBA`) is either a constant or `{"keyframes":[...]}`. Keyframe `t` is absolute scene seconds, and `easing` applies to the segment *arriving* at that keyframe. A track is addressed as `KeyTrack` (`.number(AnimProperty)` / `.color(ColorProperty)`); timeline ops (`moveKeyframes`, `setEasing`, `deleteKeyframes`, `shiftLayers`) work on both.
-- Render code must read values through `MotionLayer.value(_:at:)` / `color(_:at:)` (they apply `loop` and `wiggle`) and position through `MotionScene.worldTransform(of:at:)` (parents, anchor, skew, motion path), not `layer.x.value(at:)`. The scene is flat 2D: layers draw in list order (first is bottom-most), no camera or depth. True 3D rotation (rotationX/Y) is out of scope: CoreGraphics has no perspective warp.
+- Render code must read values through `MotionLayer.value(_:at:)` / `color(_:at:)` (they apply `loop` and `wiggle`) and position through `MotionScene.worldTransform(of:at:)` (parents, anchor, skew, motion path), not `layer.x.value(at:)`. Layers draw in list order (first is bottom-most). There is no real 3D: CoreGraphics has no perspective warp, so `rotationX/Y` and `cornerPin` are approximated by a triangle mesh (see `Mesh.swift` below), and the camera is 2D.
 - `MotionLayer` has custom Codable: decoding fills in defaults for missing fields, and encoding writes only the fields relevant to the layer's `type` (to keep JSON compact for agents). A new layer field needs `CodingKeys`, `init(from:)`, and `encode(to:)` updated, plus `Docs.instructions`.
 - To add an animatable number: add an `AnimProperty` case (+ `defaultValue`, `title`); if it isn't a stored field, add it to `AnimProperty.extras` and `CodingKeys` (it then lives in `MotionLayer.extra` and is written only when non-default). Then update `applicableProperties`, the `set_keyframes` enum in `Docs.toolsJSON`, `Docs.instructions`, and `FrameRenderer`.
 - Blur renders the layer into a bitmap covering only what it can reach once blurred (`contentBounds` + blur reach; the whole frame for text with animators) and blurs it with vImage (CPU). CoreImage returned nothing in sandboxed processes. Transparency layers (opacity < 1 or shadow) are bounded the same way: an unbounded one costs a full-frame pass per layer.
@@ -154,6 +154,23 @@ over the canvas (UI-only, never in the scene), and "Add to chat" renders the fra
   through `VideoFrames`. Saliency needs the neural engine, which sandboxed processes cannot use ("check process
   entitlements"): test it in the app. Object tracking works in the sandbox on image sequences. `timeRemap` overrides
   `videoTime` (and silences the clip's sound).
+- Mesh warps (`Mesh.swift`): when a layer has `rotationX/Y`, `cornerPin` or moving `pins`
+  (`rotationXYOrPinned` is the cheap pre-check), `drawContent` draws it flat into a bitmap at device resolution,
+  maps a 12×12 (pins: 20×20) grid through `MeshWarp.map` (MLS puppet → homography → 3D rotation + projection) and
+  draws each cell as two triangles clipped and affine-mapped. Triangles are grown ~1 device px around their incenter
+  so neighbors overlap (growing from the centroid left hairline seams on thin triangles). `contentBounds` returns
+  the warped bounds; `wipeBox`/`meshBox` must use `flatContentBounds` (calling `contentBounds` from them recurses).
+- Grading (`Grading.swift`) runs in `PixelEffects.applyBeforeBlur` after the color matrix: one 256-entry tone table
+  (levels + Fritsch–Carlson curve), gradient map, then a trilinear .cube LUT (`CubeLUT.load`, cached by mtime).
+  Camera `focus`/`aperture` add `focusBlur` to a layer's blur (and to `motionBounds` padding).
+- `text_to_path` / `combine_paths` (`PathOps.swift`) bake outlines with `FrameRenderer.glyphPaths` and macOS 14
+  `CGPath` boolean ops; `trimSequential` trims a path's pieces end to end. `Beats.swift` (`sync_to_beats`) and
+  `Templates.swift` (`add_template`, groups whose parts are keyed with presets) are pure scene edits.
+- `VideoML.swift`: background removal (Vision person segmentation / foreground instance mask, cached per frame in
+  `FrameRenderer.cutoutCache`), `frameBlend` in-betweens (cross-fade or Vision optical flow) and `stabilize`
+  (translational registration). Like saliency, the neural requests fail in sandboxed processes; they fall back to
+  the untouched picture, and `update_layer` reports why (`PictureML.probe`). Registration works in the sandbox.
+- Particle `trail` re-evaluates each particle at earlier times (closed form, so it stays frame-independent).
 - `blendMode` applies to every visual layer (set on the context before drawing; particles skip the opacity
   transparency layer and take opacity per particle, so they keep adding up).
 - Layer ids are unique: `addLayer` / `duplicateLayer` auto-suffix them (`title-2`), and renaming to a taken id throws.

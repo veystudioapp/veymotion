@@ -138,7 +138,10 @@ public final class MCPServer {
                 s.refreshMediaInfo()
             }
             let updated = try host.currentScene().layer(newId)
-            return text(SceneJSON.string(updated) + warnings(fontNotes([updated])))
+            let cutout = (updated.removeBackground != nil && (a["changes"] as? [String: Any])?["removeBackground"] != nil)
+                ? PictureML.probe(updated).map { ["Background removal did not work here (\($0)); the picture is drawn whole. It needs the app (not a sandboxed CLI)."] } ?? []
+                : []
+            return text(SceneJSON.string(updated) + warnings(fontNotes([updated]) + cutout))
 
         case "list_fonts":
             return text(fontList(query: a["query"] as? String ?? "", vietnamese: a["vietnamese"] as? Bool ?? false,
@@ -410,6 +413,80 @@ public final class MCPServer {
                 try host.mutate("Shatter Image") { s in for l in layers { s.addLayer(l) } }
             }
             return text("Shattered into \(layers.count) pieces ('\(prefix)-1'…'\(prefix)-\(layers.count)'), exploding \(direction) from \(start)s over \(duration)s.")
+
+        case "sync_to_beats":
+            guard let action = BeatAction(rawValue: try string(a, "action")) else {
+                throw ToolError("`action` must be one of \(BeatAction.allCases.map(\.rawValue))")
+            }
+            let grid = BeatGrid(rawValue: a["every"] as? String ?? "beat") ?? .beat
+            let ids = (a["ids"] as? [Any])?.compactMap { $0 as? String } ?? []
+            let preset = (a["preset"] as? String).flatMap(Preset.init(rawValue:))
+            if action == .preset, preset == nil { throw ToolError("`preset` must be one of \(Preset.allCases.map(\.rawValue))") }
+            let prop = (a["property"] as? String).flatMap(AnimProperty.init(rawValue:))
+            if action == .pulse, prop == nil { throw ToolError("`property` must be an animatable number (scale, brightness, glow…)") }
+            var used = 0
+            var times: [Double] = []
+            try host.mutate("Sync to Beats") { s in
+                times = try s.beatTimes(source: a["source"] as? String, grid: grid, from: number(a["from"]), to: number(a["to"]),
+                                        minStrength: number(a["minStrength"]) ?? 0.4)
+                used = try s.syncToBeats(ids, action: action, times: times, preset: preset, property: prop,
+                                         amount: number(a["amount"]) ?? (action == .flash ? 0.6 : 0.15),
+                                         release: number(a["release"]) ?? 0.25, duration: number(a["duration"]))
+            }
+            let shown = times.prefix(8).map { String(format: "%.2f", $0) }.joined(separator: ", ")
+            return text("\(action.rawValue) on \(used) \(grid.rawValue)s (\(shown)\(times.count > 8 ? ", …" : ""))")
+
+        case "add_template":
+            guard let kind = TemplateKind(rawValue: try string(a, "kind")) else {
+                throw ToolError("`kind` must be one of \(TemplateKind.allCases.map(\.rawValue))")
+            }
+            var o = TemplateOptions()
+            o.title = a["title"] as? String
+            o.subtitle = a["subtitle"] as? String
+            o.accent = (a["accent"] as? String).flatMap(RGBA.init(hex:))
+            o.start = number(a["start"]) ?? 0
+            o.duration = number(a["duration"]) ?? 4
+            o.x = number(a["x"]); o.y = number(a["y"])
+            o.fontName = a["fontName"] as? String
+            var gid = ""
+            try host.mutate("Add \(kind.title)") { gid = try $0.addTemplate(kind, id: a["id"] as? String, options: o) }
+            let g = try host.currentScene().layer(gid)
+            return text("Added \(kind.title) '\(gid)' from \(o.start)s for \(o.duration)s: a group of \(g.children.map(\.id).joined(separator: ", ")). Edit its parts by id (text, colors, timing) like any layer.")
+
+        case "text_to_path":
+            let id = try string(a, "id")
+            let letters = a["letters"] as? Bool ?? false
+            try host.mutate("Text to Path") { s in _ = try s.textToPath(id, letters: letters, at: number(a["time"]) ?? s.layer(id).start) }
+            let l = try host.currentScene().layer(id)
+            return text(letters ? "'\(id)' is now a group of \(l.children.count) letter paths (\(l.children.map(\.id).prefix(3).joined(separator: ", "))…)"
+                : "'\(id)' is now a path layer: trim, morph and path operators work on it (try preset writeOn)")
+
+        case "combine_paths":
+            guard let ids = (a["ids"] as? [Any])?.compactMap({ $0 as? String }), ids.count >= 2 else {
+                throw ToolError("`ids` must list at least two layers")
+            }
+            guard let op = PathCombine(rawValue: a["op"] as? String ?? "union") else {
+                throw ToolError("`op` must be one of \(PathCombine.allCases.map(\.rawValue))")
+            }
+            var newId = ""
+            try host.mutate("Combine Paths") { s in
+                newId = try s.combinePaths(ids, op: op, id: a["id"] as? String, keep: a["keep"] as? Bool ?? false,
+                                           at: number(a["time"]) ?? 0)
+            }
+            return text("Combined \(ids.joined(separator: ", ")) (\(op.rawValue)) into path layer '\(newId)'")
+
+        case "stabilize":
+            let scene = host.currentScene()
+            let id = try string(a, "layer")
+            let layer = try scene.layer(id)
+            let from = number(a["from"]) ?? layer.start
+            let to = number(a["to"]) ?? layer.effectiveEnd(sceneDuration: scene.duration)
+            let drift = try VideoTracking.shake(layer: layer, in: scene, from: from, to: to, step: number(a["step"]) ?? 0)
+            let lock = (a["mode"] as? String ?? "smooth") == "lock"
+            let zoom = max(1, number(a["zoom"]) ?? 1.08)
+            try host.mutate("Stabilize") { try $0.stabilize(id, drift: drift, lock: lock, window: Int(number(a["smoothing"]) ?? 15), zoom: zoom) }
+            let maxShift = drift.map { hypot($0.center.x, $0.center.y) }.max() ?? 0
+            return text("Stabilized '\(id)' (\(lock ? "locked" : "smoothed"), \(drift.count) frames, camera drifted up to \(Int(maxShift)) px; scaled ×\(zoom) to hide the moving edges). Translation only: rotation shake stays.")
 
         case "track_motion":
             let scene = host.currentScene()

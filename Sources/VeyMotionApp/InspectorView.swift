@@ -137,6 +137,7 @@ struct LayerInspector: View {
                 AnimSlider(layer: layer, property: .opacity, label: "Opacity")
                 if layer.type == .text { AnimSlider(layer: layer, property: .reveal, label: "Reveal") }
                 ParentRow(layer: layer)
+                if layer.type != .particles { PerspectiveRows(layer: layer) }
                 if store.scene.camera != nil {
                     HStack(spacing: 8) {
                         NumberField("Depth", layer.depth) { v in store.updateLayer(layer.id, "Depth") { $0.depth = max(-0.9, v) } }
@@ -296,9 +297,17 @@ struct LayerInspector: View {
                 .controlSize(.small)
                 .help("Lay the text along a curve (edit the points in JSON or with Claude)")
             }
+            HStack {
+                Button("Convert to Path") { store.textToPath(id, letters: false) }
+                    .help("Turn the letters into a vector path (trim, morph, Write On preset)")
+                Button("Split into Letters") { store.textToPath(id, letters: true) }
+                    .help("A group with one path per letter, each animatable on its own")
+            }
+            .controlSize(.small)
         case .image:
             FileRow(path: layer.path, kind: .image) { p in store.updateLayer(id, "Change Image") { $0.path = p } }
             sizeFields
+            BackgroundRow(layer: layer)
         case .video:
             let fps = store.scene.fps
             FileRow(path: layer.path, kind: .video) { p in
@@ -344,6 +353,17 @@ struct LayerInspector: View {
                 .controlSize(.small)
             }
             .help("Stop: the layer ends with the clip. Hold: the last frame stays. Loop: the clip starts over.")
+            BackgroundRow(layer: layer)
+            HStack(spacing: 6) {
+                RowLabel("Slow-mo")
+                Picker("", selection: Binding(get: { layer.frameBlend }, set: { v in store.updateLayer(id, "Frame Blending") { $0.frameBlend = v } })) {
+                    Text("Nearest frame").tag(FrameBlend.off)
+                    Text("Blend frames").tag(FrameBlend.blend)
+                    Text("Optical flow").tag(FrameBlend.flow)
+                }
+                .labelsHidden().controlSize(.small)
+            }
+            .help("How in-between source times look when the clip is slowed down (speed < 1 or time remap)")
             if layer.timeRemap != nil {
                 HStack {
                     AnimField(layer: layer, property: .timeRemap, label: "Source", unit: "s")
@@ -520,9 +540,14 @@ struct ColorSection: View {
             Grid(horizontalSpacing: 8, verticalSpacing: 6) {
                 GridRow {
                     AnimField(layer: layer, property: .hue, label: "Hue", unit: "°")
-                    Color.clear.frame(height: 1)
+                    AnimField(layer: layer, property: .levelsGamma, label: "Gamma")
+                }
+                GridRow {
+                    AnimField(layer: layer, property: .levelsBlack, label: "Black pt")
+                    AnimField(layer: layer, property: .levelsWhite, label: "White pt")
                 }
             }
+            .help("Levels: input black/white points (0…1) and gamma")
             AnimSlider(layer: layer, property: .tint, label: "Tint")
             if layer.value(.tint, at: store.panelTime) > 0 || layer[.tint].isAnimated {
                 ColorField("Tint", layer.tintColor ?? .white) { c in
@@ -530,17 +555,139 @@ struct ColorSection: View {
                 }
                 .help("White maps to this color, black stays black")
             }
-            let touched: [AnimProperty] = [.brightness, .contrast, .saturation, .hue, .tint]
-            if touched.contains(where: { layer.extra[$0] != nil }) {
+            GradingRows(layer: layer)
+            let touched: [AnimProperty] = [.brightness, .contrast, .saturation, .hue, .tint, .levelsBlack, .levelsWhite,
+                                           .levelsGamma, .gradientMapAmount, .lutAmount]
+            if touched.contains(where: { layer.extra[$0] != nil }) || !layer.curves.isEmpty || !layer.gradientMap.isEmpty || layer.lut != nil {
                 Button("Reset Color") {
                     store.updateLayer(id, "Reset Color") { l in
                         for p in touched { l[p] = .constant(p.defaultValue) }
                         l.tintColor = nil
+                        l.curves = []; l.gradientMap = []; l.lut = nil
                     }
                 }
                 .controlSize(.small)
             }
         }
+    }
+}
+
+/// Vision background removal on an image or video layer.
+struct BackgroundRow: View {
+    @Environment(SceneStore.self) private var store
+    let layer: MotionLayer
+
+    var body: some View {
+        HStack(spacing: 6) {
+            RowLabel("Cut out")
+            Picker("", selection: Binding(get: { layer.removeBackground?.rawValue ?? "" }, set: { v in
+                store.updateLayer(layer.id, "Remove Background") { $0.removeBackground = BackgroundRemoval(rawValue: v) }
+            })) {
+                Text("Keep background").tag("")
+                Text("Person").tag(BackgroundRemoval.person.rawValue)
+                Text("Main subject").tag(BackgroundRemoval.subject.rawValue)
+            }
+            .labelsHidden().controlSize(.small)
+        }
+        .help("Remove the background with Vision (no green screen needed). Slow on video: each frame is analyzed.")
+    }
+}
+
+/// 2.5D: rotation around X/Y with perspective, card-flip backface, and corner pin / puppet pin status.
+struct PerspectiveRows: View {
+    @Environment(SceneStore.self) private var store
+    let layer: MotionLayer
+
+    var body: some View {
+        let id = layer.id
+        Grid(horizontalSpacing: 8, verticalSpacing: 6) {
+            GridRow {
+                AnimField(layer: layer, property: .rotationX, label: "Rot X", unit: "°")
+                AnimField(layer: layer, property: .rotationY, label: "Rot Y", unit: "°")
+            }
+            if layer.value(.rotationX, at: store.panelTime) != 0 || layer.value(.rotationY, at: store.panelTime) != 0
+                || layer[.rotationX].isAnimated || layer[.rotationY].isAnimated {
+                GridRow {
+                    AnimField(layer: layer, property: .perspective, label: "Persp.")
+                    Toggle("Hide back", isOn: Binding(get: { layer.hideBackface }, set: { v in
+                        store.updateLayer(id, "Backface") { $0.hideBackface = v }
+                    }))
+                    .toggleStyle(.checkbox).controlSize(.small)
+                    .help("Hide the layer while it is turned away (two layers = the two faces of a card)")
+                }
+            }
+        }
+        .help("2.5D rotation: X tips the top back, Y turns the right side back; perspective = viewing distance in px")
+        if layer.cornerPin != nil || !layer.pins.isEmpty {
+            HStack {
+                Image(systemName: "pin").foregroundStyle(.secondary)
+                Text(layer.cornerPin != nil ? "Corner pinned" : "\(layer.pins.count) puppet pins").font(.caption)
+                Spacer()
+                Button("Remove") { store.updateLayer(id, "Remove Pins") { $0.cornerPin = nil; $0.pins = [] } }.controlSize(.small)
+            }
+            .help("Edit the pin positions in JSON or ask Claude")
+        }
+    }
+}
+
+/// Curves, gradient map and LUT.
+struct GradingRows: View {
+    @Environment(SceneStore.self) private var store
+    let layer: MotionLayer
+
+    var body: some View {
+        let id = layer.id
+        HStack(spacing: 6) {
+            RowLabel("Curve")
+            Picker("", selection: Binding(get: { Self.curveName(layer.curves) }, set: { v in
+                store.updateLayer(id, "Curves") { $0.curves = Self.curves[v] ?? [] }
+            })) {
+                ForEach(Self.curveOrder, id: \.self) { Text($0).tag($0) }
+                if Self.curveName(layer.curves) == "Custom" { Text("Custom").tag("Custom") }
+            }
+            .labelsHidden().controlSize(.small)
+        }
+        .help("Tone curve presets (custom points in JSON or with Claude)")
+        if layer.gradientMap.isEmpty {
+            Button("Add gradient map") {
+                store.updateLayer(id, "Gradient Map") { $0.gradientMap = [RGBA(hex: "#1B0F3A")!, RGBA(hex: "#E8436A")!, RGBA(hex: "#FFE7A8")!] }
+            }
+            .controlSize(.small)
+            .help("Map brightness onto colors (duotone / tritone)")
+        } else {
+            ForEach(Array(layer.gradientMap.enumerated()), id: \.offset) { i, c in
+                ColorField(i == 0 ? "Shadows" : i == layer.gradientMap.count - 1 ? "Highlights" : "Mids", c) { nc in
+                    store.updateLayer(id, "Gradient Map") { $0.gradientMap[i] = nc }
+                }
+            }
+            HStack {
+                AnimSlider(layer: layer, property: .gradientMapAmount, label: "Map")
+                Button { store.updateLayer(id, "Remove Gradient Map") { $0.gradientMap = [] } } label: { Image(systemName: "xmark") }
+                    .buttonStyle(.borderless)
+            }
+        }
+        FileRow(path: layer.lut, kind: .other) { p in store.updateLayer(id, "LUT") { $0.lut = p } }
+            .help("A .cube color lookup table (film looks, camera LUTs)")
+        if layer.lut != nil {
+            HStack {
+                AnimSlider(layer: layer, property: .lutAmount, label: "LUT")
+                Button { store.updateLayer(id, "Remove LUT") { $0.lut = nil } } label: { Image(systemName: "xmark") }
+                    .buttonStyle(.borderless)
+            }
+        }
+    }
+
+    static let curveOrder = ["None", "S-curve", "Soft", "Fade", "Crush"]
+    static let curves: [String: [PathPoint]] = [
+        "None": [],
+        "S-curve": [PathPoint(x: 0, y: 0), PathPoint(x: 0.25, y: 0.18), PathPoint(x: 0.75, y: 0.85), PathPoint(x: 1, y: 1)],
+        "Soft": [PathPoint(x: 0, y: 0.04), PathPoint(x: 0.5, y: 0.52), PathPoint(x: 1, y: 0.96)],
+        "Fade": [PathPoint(x: 0, y: 0.12), PathPoint(x: 0.5, y: 0.5), PathPoint(x: 1, y: 0.92)],
+        "Crush": [PathPoint(x: 0, y: 0), PathPoint(x: 0.2, y: 0.05), PathPoint(x: 0.8, y: 0.95), PathPoint(x: 1, y: 1)],
+    ]
+
+    static func curveName(_ pts: [PathPoint]) -> String {
+        curves.first { $0.value == pts }?.key ?? "Custom"
     }
 }
 
@@ -667,6 +814,15 @@ struct CameraSection: View {
                     }
                 }))
                 .toggleStyle(.checkbox).controlSize(.small)
+                Grid(horizontalSpacing: 8, verticalSpacing: 6) {
+                    GridRow {
+                        NumberField("Focus", cam.focus.value(at: t), digits: 2) { v in edit("Camera Focus") { $0.focus = $0.focus.setting(v, at: store.time) } }
+                        NumberField("Aperture", cam.aperture.value(at: t), unit: "px", digits: 1) { v in
+                            edit("Camera Aperture") { $0.aperture = $0.aperture.setting(max(0, v), at: store.time) }
+                        }
+                    }
+                }
+                .help("Depth of field: layers whose depth differs from Focus blur by Aperture px per unit (0 = off)")
             }
         }
     }
@@ -1094,6 +1250,16 @@ struct StrokeTrimRows: View {
             GridRow {
                 AnimField(layer: layer, property: .taperStart, label: "Taper in")
                 AnimField(layer: layer, property: .taperEnd, label: "Taper out")
+            }
+            if layer.type == .path {
+                GridRow {
+                    Toggle("Trim pieces in order", isOn: Binding(get: { layer.trimSequential }, set: { v in
+                        store.updateLayer(id, "Trim Order") { $0.trimSequential = v }
+                    }))
+                    .toggleStyle(.checkbox).controlSize(.small)
+                    .help("Trim runs through the pieces one after another (handwriting) instead of all at once")
+                    .gridCellColumns(2)
+                }
             }
             GridRow {
                 AnimField(layer: layer, property: .offsetPath, label: "Offset")
@@ -1606,7 +1772,7 @@ struct FileRow: View {
                 .help(path ?? "")
             Spacer(minLength: 4)
             Menu("Replace") {
-                let assets = AssetLibrary.shared.assets.filter { $0.kind == kind }
+                let assets = AssetLibrary.shared.assets.filter { $0.kind == kind && (kind != .other || $0.name.lowercased().hasSuffix(".cube")) }
                 if !assets.isEmpty {
                     Section("Assets") {
                         ForEach(assets) { a in Button(a.name) { onPick(a.path) } }
@@ -1619,6 +1785,7 @@ struct FileRow: View {
                     case .video:
                         panel.allowedContentTypes = [.movie, .folder] // a folder = image sequence
                         panel.canChooseDirectories = true
+                    case .other: panel.allowedContentTypes = [.data] // .cube LUTs
                     default: panel.allowedContentTypes = [.audio]
                     }
                     if panel.runModal() == .OK, let url = panel.url { onPick(url.path) }

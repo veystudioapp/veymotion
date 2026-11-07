@@ -110,6 +110,14 @@ struct ContentView: View {
                         Label("Generate", systemImage: "waveform.path.ecg")
                     }
                     .help("Add a generator: audio spectrum, waveform, fractal noise, lightning, grid")
+                    Menu {
+                        ForEach(TemplateKind.allCases, id: \.self) { k in
+                            Button(k.title) { store.addTemplate(k) }
+                        }
+                    } label: {
+                        Label("Templates", systemImage: "rectangle.stack")
+                    }
+                    .help("Add an animated template: lower third, call-out, subscribe, end card, title card, quote")
                     Button { store.addAudioLayer() } label: { Label("Audio", systemImage: "music.note") }
                         .help("Add audio file")
                     Button { showVoice = true } label: { Label("Voice-over", systemImage: "mic") }

@@ -41,6 +41,11 @@ enum Docs {
           {"t":4,"v":2}]} = normal speed, a fast ramp through 3 seconds of footage, a 1.5 s freeze frame, then
           reverse. Flat segments freeze, steep ones speed up, decreasing ones play backwards. Mark the layer's end
           yourself (once-playback no longer ends it).
+          frameBlend: "off" (default) | "blend" (cross-fades the two nearest source frames: smoother slow motion) |
+          "flow" (optical flow in-betweens, the smoothest; slow, needs the app). Use with speed < 1 or timeRemap.
+    removeBackground (image and video): "person" or "subject" cuts out the person / main subject with Vision (no
+          green screen needed). Text BEHIND a person: the full video, then the text, then a copy of the video with
+          removeBackground "person" on top. Works in the app (sandboxed CLIs lack the Vision entitlement).
           sourceDuration / transcript / words are filled in by the app.
     particles: see PARTICLES.
     generator: see GENERATORS.
@@ -56,7 +61,9 @@ enum Docs {
       saturation, hue, tint, tintColor, wipe, wipeStyle, keyColor, keyTolerance, keySoftness, waveWarp, ripple,
       waveLength, waveSpeed, twirl, bulge, distortRadius, turbulence, posterize, pixelate, rgbSplit, glitch, grain,
       scanlines, vignette, directionalBlur, blurAngle, zoomBlur, posterizeTime (see AFTER EFFECTS-STYLE TOOLS),
-      depth, fixed (see CAMERA), links (see LINKS)
+      depth, fixed (see CAMERA), links (see LINKS), rotationX, rotationY, perspective, hideBackface, cornerPin, pins
+      (see 2.5D AND WARPS), levelsBlack, levelsWhite, levelsGamma, curves, gradientMap, gradientMapAmount, lut,
+      lutAmount (see GRADING), removeBackground
 
     ANIMATION
     Every number above (x, y, scale, scaleX, scaleY, rotation, skewX, skewY, anchorX, anchorY, opacity,
@@ -94,7 +101,8 @@ enum Docs {
     - Trim paths: trimStart and trim (= end), 0..1 along the outline, draw only part of the stroke; trimOffset slides
       that part along (1 = one full lap; it wraps around). Draw on: trim 0→1. Draw on then off: trim 0→1 and trimStart
       0→1 starting a bit later. Chasing dash on a ring: trimStart 0, trim 0.25, trimOffset 0→1 (linear) + loop offset.
-      A path made of several pieces trims each piece on its own.
+      A path made of several pieces trims each piece on its own, unless trimSequential: true (pieces one after
+      another: handwriting). Text → handwriting: text_to_path, then preset writeOn.
     - lineCap: butt | round | square (paths default round); lineJoin: miter | round | bevel (paths default round).
 
     AFTER EFFECTS-STYLE TOOLS
@@ -227,7 +235,8 @@ enum Docs {
         turbulenceScale (swirl size px), turbulenceSpeed (how fast swirls change), floor (scene y to bounce on), bounce,
         friction
       look: shape (soft | circle | square | spark | image), size (diameter px), sizeRandom, grow (size at death ×; 0 shrinks
-        away, 3 spreads like smoke), streak (spark length in seconds of travel), orient (face direction of travel),
+        away, 3 spreads like smoke), streak (spark length in seconds of travel), trail (seconds of past path drawn
+        as a fading ribbon: comets, light painting, magic wands; 0.2–0.8), orient (face direction of travel),
         angleRandom, spin (deg/s), spinRandom, flutter (flips/s, confetti), colors ["#FFE9A050","#FF541048",...]
         (gradient over the life; #RRGGBBAA alpha matters with add), colorMode (life | random: one color each),
         fadeIn, fadeOut (fractions of the life)
@@ -256,6 +265,31 @@ enum Docs {
       layers with depth 1–3 drift slowly, foreground ones with depth -0.3…-0.6 rush past: parallax from one camera
       move. fixed: true keeps a layer where it is (captions, logos, HUDs).
     - World-space particles follow the camera like everything else; group children see no camera of their own.
+    - Depth of field: camera focus (the depth in focus, default 0) and aperture (px of blur per unit of depth away
+      from it, default 0 = off; 4–10 is cinematic). Rack focus = keyframe focus from one layer's depth to another's.
+
+    2.5D AND WARPS (every visual layer except particles; the layer is drawn flat, then warped)
+    - rotationX (degrees, + tips the top back), rotationY (+ turns the right side back), perspective (viewing distance
+      px, default 1200; smaller = stronger). Animatable: card flips, panels swinging in, a title tilting into place,
+      a group (whole UI card) turning in 3D. hideBackface: true hides the layer while it faces away (past 90°): a
+      two-sided card = two layers at the same place, back one starting at rotationY 180, both animating +180.
+      Cube-like transitions: the outgoing group rotationY 0 → -90 while the incoming goes 90 → 0.
+    - cornerPin: {"tl":[x,y],"tr":[x,y],"br":[x,y],"bl":[x,y]} (layer px around its center) pins the layer's box
+      corners there — a picture on a phone/laptop screen, a sign, a billboard; keyframe it like any value
+      ({"keyframes":[{"t":0,"v":{"tl":…}}, …]}), or match a moving screen with track_motion samples.
+    - pins: [{"x":-200,"y":-100},{"x":200,"y":100,"dx":{"keyframes":[…]},"dy":40}] puppet pins: each (x, y) point
+      (layer px at rest) moves by (dx, dy) and the picture bends around them (rigid-as-possible); pins that do not
+      move hold their part. Waving flags, a character's arm, a logo that bends and springs back.
+    - Every effect still applies after the warp (blur, shadow, glow, wipe…); the warp itself costs about a dozen
+      image draws, so keep it to the layers that need it.
+
+    GRADING (every visual layer; applied after brightness/contrast/saturation/hue/tint)
+    - levelsBlack / levelsWhite (input points 0..1) and levelsGamma (default 1; >1 brighter mids).
+    - curves: [[0,0],[0.25,0.18],[0.75,0.85],[1,1]] a smooth master tone curve (this one = S-curve contrast; lift
+      [0,0.1] for a faded film look).
+    - gradientMap: ["#1B0F3A","#E8436A","#FFE7A8"] maps brightness from shadows to highlights onto these colors
+      (duotone, tritone, neon looks); gradientMapAmount (0..1, default 1) mixes it in.
+    - lut: a .cube 3D LUT file (asset name or path; import it with import_asset), lutAmount (0..1, default 1).
 
     GROUPS (precomps)
     {"id":"card","type":"group","x":960,"y":540,"children":[{...layer...},{...layer...}]}
@@ -467,7 +501,7 @@ enum Docs {
           "type": "object",
           "properties": {
             "id": { "type": "string" },
-            "property": { "type": "string", "enum": ["counter", "scramble", "textOffset", "timeRemap", "x", "y", "scale", "scaleX", "scaleY", "rotation", "skewX", "skewY", "anchorX", "anchorY", "opacity", "width", "height", "cornerRadius", "strokeWidth", "trim", "trimStart", "trimOffset", "reveal", "letterSpacing", "blur", "shadowX", "shadowY", "shadowBlur", "shadowOpacity", "glow", "glowRadius", "pathProgress", "volume", "emission", "particleSpeed", "particleSize", "brightness", "contrast", "saturation", "hue", "tint", "wipe", "keyTolerance", "keySoftness", "waveWarp", "ripple", "waveLength", "waveSpeed", "twirl", "bulge", "distortRadius", "turbulence", "posterize", "pixelate", "rgbSplit", "glitch", "grain", "scanlines", "vignette", "directionalBlur", "blurAngle", "zoomBlur", "fill", "stroke", "color", "d"] },
+            "property": { "type": "string", "enum": ["counter", "scramble", "textOffset", "timeRemap", "rotationX", "rotationY", "perspective", "levelsBlack", "levelsWhite", "levelsGamma", "gradientMapAmount", "lutAmount", "x", "y", "scale", "scaleX", "scaleY", "rotation", "skewX", "skewY", "anchorX", "anchorY", "opacity", "width", "height", "cornerRadius", "strokeWidth", "trim", "trimStart", "trimOffset", "reveal", "letterSpacing", "blur", "shadowX", "shadowY", "shadowBlur", "shadowOpacity", "glow", "glowRadius", "pathProgress", "volume", "emission", "particleSpeed", "particleSize", "brightness", "contrast", "saturation", "hue", "tint", "wipe", "keyTolerance", "keySoftness", "waveWarp", "ripple", "waveLength", "waveSpeed", "twirl", "bulge", "distortRadius", "turbulence", "posterize", "pixelate", "rgbSplit", "glitch", "grain", "scanlines", "vignette", "directionalBlur", "blurAngle", "zoomBlur", "fill", "stroke", "color", "d"] },
             "keyframes": {
               "type": "array",
               "items": {
@@ -488,7 +522,7 @@ enum Docs {
           "properties": {
             "id": { "type": "string" },
             "ids": { "type": "array", "items": { "type": "string" }, "description": "Several layers, in cascade order." },
-            "preset": { "type": "string", "enum": ["fadeIn", "slideUp", "slideDown", "slideInLeft", "slideInRight", "popIn", "zoomIn", "blurIn", "bounceIn", "dropIn", "flipIn", "rotateIn", "wipeIn", "fadeOut", "slideOutUp", "slideOutDown", "slideOutLeft", "slideOutRight", "popOut", "zoomOut", "blurOut", "flipOut", "wipeOut", "spin", "pulse", "heartbeat", "shake", "wobble", "jello", "glitchBurst", "drawOn", "typewriter", "textRise", "textPop", "textDrop", "textLines", "textOut", "decode", "textBlurIn", "textFocus"] },
+            "preset": { "type": "string", "enum": ["fadeIn", "slideUp", "slideDown", "slideInLeft", "slideInRight", "popIn", "zoomIn", "blurIn", "bounceIn", "dropIn", "flipIn", "rotateIn", "wipeIn", "fadeOut", "slideOutUp", "slideOutDown", "slideOutLeft", "slideOutRight", "popOut", "zoomOut", "blurOut", "flipOut", "wipeOut", "spin", "pulse", "heartbeat", "shake", "wobble", "jello", "glitchBurst", "drawOn", "writeOn", "typewriter", "textRise", "textPop", "textDrop", "textLines", "textOut", "decode", "textBlurIn", "textFocus"] },
             "start": { "type": "number" },
             "duration": { "type": "number", "default": 0.6 },
             "stagger": { "type": "number", "description": "Seconds between layers when several ids are given." }
@@ -518,6 +552,93 @@ enum Docs {
             "seed": { "type": "integer", "description": "Random seed; same seed + pieces always shatters the same way." },
             "id": { "type": "string", "description": "Prefix for the shard layer ids (e.g. \"dog\" → dog-1, dog-2, …). Default: the source layer's id, or \"shatter\"." }
           }
+        }
+      },
+      {
+        "name": "sync_to_beats",
+        "description": "Edits to the music in one step, on the beats of an audio layer (default the music): preset = apply a preset at each beat, cycling through `ids` (words popping one per beat, a logo pulsing); pulse = kick `property` of each layer up by `amount` at every beat and fall back over `release` s (scale 0.1, brightness 0.4, glow 1, y -20); cut = show `ids` one after another, one beat interval each (a slideshow cut to the music; their keyframes move with them); flash = white flash over the frame on each beat (`amount` = strength 0..1).",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "action": { "type": "string", "enum": ["preset", "pulse", "cut", "flash"] },
+            "ids": { "type": "array", "items": { "type": "string" } },
+            "every": { "type": "string", "enum": ["beat", "half", "bar", "onset"], "default": "beat", "description": "beat, every other beat, first beat of each bar, or strong hits." },
+            "preset": { "type": "string", "description": "For action preset (e.g. pulse, popIn, textPop, glitchBurst, shake)." },
+            "duration": { "type": "number", "description": "Preset length (default ~85% of a beat, at most 0.6 s)." },
+            "property": { "type": "string", "description": "For action pulse." },
+            "amount": { "type": "number" },
+            "release": { "type": "number", "default": 0.25 },
+            "source": { "type": "string", "description": "Audio layer id (default the music layer)." },
+            "from": { "type": "number" },
+            "to": { "type": "number" },
+            "minStrength": { "type": "number", "default": 0.4, "description": "every=onset: weakest hit kept (0..1)." }
+          },
+          "required": ["action"]
+        }
+      },
+      {
+        "name": "add_template",
+        "description": "Adds a ready-made animated piece as a group (its parts are normal layers you can edit by id): lowerThird (name + role bar, bottom left), callout (dot + line + label pointing at x/y), subscribe (button that gets clicked), endCard (title, two video placeholders, subscribe), titleCard (big title with shine, rule, subtitle), quote (quote marks, text popping by word, author). Entrances and exits are keyed inside start..start+duration.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "kind": { "type": "string", "enum": ["lowerThird", "callout", "subscribe", "endCard", "titleCard", "quote"] },
+            "title": { "type": "string" },
+            "subtitle": { "type": "string" },
+            "accent": { "type": "string", "description": "Accent color #RRGGBB." },
+            "start": { "type": "number", "default": 0 },
+            "duration": { "type": "number", "default": 4 },
+            "x": { "type": "number", "description": "Position (scene px): the point a callout points at, the left edge of a lower third, the center of the others." },
+            "y": { "type": "number" },
+            "fontName": { "type": "string" },
+            "id": { "type": "string" }
+          },
+          "required": ["kind"]
+        }
+      },
+      {
+        "name": "text_to_path",
+        "description": "Turns a text layer into vector paths: one path layer (same id), or with letters=true a group (same id) of one path per letter, each centered on its letter so it can move, spin and scale alone. Then trim (handwriting: preset writeOn), morph keyframes on d, zigzag/wiggle/offset and combine_paths work on the letters. The font is baked in at that moment.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "id": { "type": "string" },
+            "letters": { "type": "boolean", "default": false },
+            "time": { "type": "number", "description": "Scene time whose text (counter, scramble) is used (default the layer's start)." }
+          },
+          "required": ["id"]
+        }
+      },
+      {
+        "name": "combine_paths",
+        "description": "Boolean operation on the outlines of rect/ellipse/path/text layers (as placed at `time`): union, subtract (the first minus the others), intersect or exclude. Creates one path layer with the first layer's fill/stroke/gradient where the result is; removes the sources unless keep=true. Logo building, cut-out text, ring shapes, Venn overlaps.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "ids": { "type": "array", "items": { "type": "string" } },
+            "op": { "type": "string", "enum": ["union", "subtract", "intersect", "exclude"], "default": "union" },
+            "id": { "type": "string", "description": "Id of the new path layer." },
+            "keep": { "type": "boolean", "default": false },
+            "time": { "type": "number", "default": 0 }
+          },
+          "required": ["ids"]
+        }
+      },
+      {
+        "name": "stabilize",
+        "description": "Removes camera shake from a video layer (Vision frame registration, translation only): mode smooth (default) keeps intended pans and removes the jitter around them; lock cancels all camera motion (a locked-off shot). Keys the layer's x/y against the shake and scales it by `zoom` so the moving edges stay out of frame.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "layer": { "type": "string" },
+            "mode": { "type": "string", "enum": ["smooth", "lock"], "default": "smooth" },
+            "zoom": { "type": "number", "default": 1.08, "description": "Scale-up hiding the edges (1.05–1.15)." },
+            "smoothing": { "type": "integer", "default": 15, "description": "smooth mode: frames averaged for the intended path." },
+            "from": { "type": "number" },
+            "to": { "type": "number" },
+            "step": { "type": "number", "description": "Seconds between samples (default every frame)." }
+          },
+          "required": ["layer"]
         }
       },
       {

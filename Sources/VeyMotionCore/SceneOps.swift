@@ -8,7 +8,7 @@ public enum Preset: String, CaseIterable, Codable, Sendable {
     // Emphasis
     case spin, pulse, heartbeat, shake, wobble, jello, glitchBurst
     // Shapes
-    case drawOn
+    case drawOn, writeOn
     // Text
     case typewriter, textRise, textPop, textDrop, textLines, textOut, decode, textBlurIn, textFocus
 
@@ -45,6 +45,7 @@ public enum Preset: String, CaseIterable, Codable, Sendable {
         case .jello: return "Jello"
         case .glitchBurst: return "Glitch"
         case .drawOn: return "Draw On"
+        case .writeOn: return "Write On"
         case .typewriter: return "Typewriter"
         case .textRise: return "Letters Rise"
         case .textPop: return "Words Pop"
@@ -68,7 +69,7 @@ public enum Preset: String, CaseIterable, Codable, Sendable {
         case .fadeOut, .slideOutUp, .slideOutDown, .slideOutLeft, .slideOutRight, .popOut, .zoomOut, .blurOut,
              .flipOut, .wipeOut: return .exit
         case .spin, .pulse, .heartbeat, .shake, .wobble, .jello, .glitchBurst: return .emphasis
-        case .drawOn: return .shape
+        case .drawOn, .writeOn: return .shape
         case .typewriter, .textRise, .textPop, .textDrop, .textLines, .textOut, .decode, .textBlurIn, .textFocus: return .text
         }
     }
@@ -466,6 +467,17 @@ extension MotionScene {
             }
             if l.strokeWidth.value(at: s) <= 0 { l.strokeWidth = .constant(6) }
             put(.trim, [kf(s, 0, .linear), kf(e, 1, .curve(.cubic, .inOut))])
+        case .writeOn:
+            // Handwriting: the outline writes piece by piece (letters one after another), then the fill fades in.
+            let color = l.fill.value(at: e)
+            if l.stroke == nil { l.stroke = .constant(color.a > 0 ? color : .white) }
+            if l.strokeWidth.value(at: s) <= 0 { l.strokeWidth = .constant(3) }
+            l.trimSequential = true
+            put(.trim, [kf(s, 0, .linear), kf(s + d * 0.8, 1, .linear)])
+            var clear = color
+            clear.a = 0
+            l.fill = l.fill.inserting([Keyframe(t: s, v: clear, easing: .linear), Keyframe(t: s + d * 0.7, v: clear, easing: .hold),
+                                       Keyframe(t: e, v: color, easing: .easeOut)], replacing: s, e)
         case .typewriter:
             put(.reveal, [kf(s, 0, .linear), kf(e, 1, .linear)])
         case .decode:

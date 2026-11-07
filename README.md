@@ -209,7 +209,8 @@ vmotion render scene.json out.mp4
   `zoomBlur`, distort `waveWarp`/`ripple`/`waveLength`/`waveSpeed`/`twirl`/`bulge`/`distortRadius`/`turbulence`,
   `keyTolerance`/`keySoftness`, light `shine`/`shinePosition`/`shineAngle`/`shineWidth`, `rays`/`raysLength`, `outline`,
   `innerGlow`/`innerGlowRadius`, path operators `offsetPath`/`zigzag`/`wigglePath`/`pucker`/`dashOffset`/`taperStart`/
-  `taperEnd`, text `counter` (number shown for `{n}`)/`scramble`/`textOffset`, video `timeRemap`,
+  `taperEnd`, text `counter` (number shown for `{n}`)/`scramble`/`textOffset`, video `timeRemap`, 2.5D
+  `rotationX`/`rotationY`/`perspective`, grading `levelsBlack`/`levelsWhite`/`levelsGamma`/`gradientMapAmount`/`lutAmount`,
   `emission`/`particleSpeed`/`particleSize` (particles), the colors `fill`, `stroke`, `color`, and a path's shape `d`
   (keyframes morph between shapes).
   Each is a value or `{"keyframes": [...]}` (color keyframes use `"v": "#RRGGBB"`).
@@ -223,9 +224,12 @@ vmotion render scene.json out.mp4
   `tintColor`, `wipeStyle` (`linear`, `radial` clock wipe, `iris`, `blinds`, `blocks` dissolve; angle, feather, count),
   `keyColor` (green/blue screen keying), `posterizeTime` (stop-motion frame rate for one layer), `shineColor`/
   `outlineColor`/`innerGlowColor`, `dash` (stroke dash pattern), text `stroke` (outline) and `textPath` (text on a
-  curve), `links` (a property follows another layer's: multiply, add, delay), `depth`/`fixed` (camera parallax).
+  curve), `links` (a property follows another layer's: multiply, add, delay), `depth`/`fixed` (camera parallax),
+  `cornerPin` (pin the box corners, animatable), `pins` (puppet pins), `hideBackface`, `trimSequential`
+  (handwriting trim), `curves`, `gradientMap`, `lut` (.cube), `removeBackground` (`person`/`subject`, Vision),
+  `frameBlend` (`blend`/`flow` slow motion).
 - Scene `camera`: animatable `x`, `y`, `zoom`, `rotation` (+ `wiggle` for a handheld shake) framing every layer;
-  layers with `depth` move less (far) or more (close).
+  layers with `depth` move less (far) or more (close); `focus` + `aperture` blur layers away from the focus depth.
 - Layer types: `rect` (width, height, cornerRadius, fill, stroke, strokeWidth), `ellipse`,
   `path` (`d` = SVG path data or `star(5,200,80)` / `polygon(6,150)` / `circle(r)` / `ellipse(rx,ry)` / `rect(w,h,r)`,
   fill, stroke, fillRule, lineCap, lineJoin),
@@ -238,7 +242,10 @@ vmotion render scene.json out.mp4
   layer, a precomp).
 - Tools beyond editing: `transition` (fade, dissolve, push, slide, zoom, whip, wipe, iris, blinds, blocks, clock,
   glitch, flash, blur between two layers), `group_layers`/`ungroup`, `track_motion` (Vision object tracking that pins a
-  layer to something in a video), `auto_reframe` (Vision saliency keeps the subject centered for 9:16 exports).
+  layer to something in a video), `auto_reframe` (Vision saliency keeps the subject centered for 9:16 exports),
+  `stabilize` (removes camera shake), `sync_to_beats` (presets, pulses, cuts or flashes on the music's beats),
+  `add_template` (lower third, call-out, subscribe, end card, title card, quote), `text_to_path` (text → vector
+  paths, whole or per letter), `combine_paths` (union / subtract / intersect / exclude outlines).
 - **Particles**: `{"type": "particles", "x": 960, "y": 900, "width": 220, "height": 0, "particles": {"preset": "fire"}}`.
   Presets: `fire`, `smoke`, `dust`, `sparks`, `snow`, `rain`, `confetti`, `bokeh`, `magic`, `explosion`; any field
   overrides the preset (rate, bursts, lifetime, speed, direction, spread, gravity, wind, drag, turbulence, floor/bounce,

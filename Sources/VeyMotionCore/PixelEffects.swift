@@ -19,6 +19,7 @@ struct PixelEffects {
     var rays = 0.0, raysLength = 0.6, outline = 0.0, innerGlow = 0.0, innerGlowRadius = 20.0
     var outlineColor = RGBA.white, innerGlowColor = RGBA.white
     var shine = 0.0
+    var grading: Grading?
     var time = 0.0
     var frame = 0
     var seed: UInt64 = 0
@@ -43,6 +44,7 @@ struct PixelEffects {
         innerGlow = min(max(v(.innerGlow), 0), 4); innerGlowRadius = max(1, v(.innerGlowRadius))
         innerGlowColor = layer.innerGlowColor ?? .white
         shine = min(max(v(.shine), 0), 4)
+        grading = Grading(layer, at: t)
         time = t
         frame = Int(floor(t * Double(max(fps, 1)) + 1e-6))
         seed = Noise.hash(layer.id)
@@ -54,7 +56,7 @@ struct PixelEffects {
     var isActive: Bool {
         keyColor != nil || distorts || colors != nil || posterize >= 2 || pixelate >= 1 || directionalBlur >= 1
             || zoomBlur > 0.001 || rgbSplit != 0 || glitch > 0.001 || grain > 0.001 || scanlines > 0.001
-            || vignette > 0.001 || rays > 0.001 || outline >= 0.5 || innerGlow > 0.001 || shine > 0.001
+            || vignette > 0.001 || rays > 0.001 || outline >= 0.5 || innerGlow > 0.001 || shine > 0.001 || grading != nil
     }
 
 
@@ -72,6 +74,7 @@ struct PixelEffects {
         if let keyColor { buf.key(keyColor, tolerance: keyTolerance, softness: keySoftness) }
         if distorts { distort(&buf, center: center, scale: scale) }
         if let colors { FrameRendererPixels.applyColors(ctx, colors) }
+        grading?.apply(buf)
         if posterize >= 2 { buf.posterize(levels: min(posterize, 64)) }
         if pixelate * scale >= 1.5 { buf.pixelate(size: pixelate * scale, center: center) }
         if innerGlow > 0.001 { buf.innerGlow(innerGlow, radius: innerGlowRadius * scale, color: innerGlowColor) }

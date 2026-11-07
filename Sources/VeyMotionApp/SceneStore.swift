@@ -268,6 +268,21 @@ final class SceneStore: SceneHost {
         selection = id
     }
 
+    func textToPath(_ id: String, letters: Bool) {
+        do { try apply(letters ? "Split into Letters" : "Convert to Path") { _ = try $0.textToPath(id, letters: letters, at: time) } }
+        catch { message = error.localizedDescription }
+    }
+
+    func addTemplate(_ kind: TemplateKind) {
+        var o = TemplateOptions()
+        o.start = time
+        o.duration = min(4, max(1, scene.duration - time))
+        var id = ""
+        do { try apply("Add \(kind.title)") { id = try $0.addTemplate(kind, id: nil, options: o) } }
+        catch { message = error.localizedDescription; return }
+        selection = id
+    }
+
     /// Adds a generator sized for its kind: visualizers along the bottom, noise over the whole frame.
     func addGenerator(_ kind: GeneratorKind) {
         let w = Double(scene.width), h = Double(scene.height)

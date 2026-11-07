@@ -127,6 +127,8 @@ public struct ParticleSystem: Equatable, Hashable, Sendable {
     public var grow = 1.0
     /// Spark length in seconds of travel.
     public var streak = 0.04
+    /// Seconds of past positions drawn behind each particle as a tapering ribbon (0 = none).
+    public var trail = 0.0
     /// Turn each particle to face where it goes.
     public var orient = false
     /// Random starting rotation, ± degrees.
@@ -257,7 +259,7 @@ extension ParticleSystem: Codable {
         case preset, seed, rate, bursts, prewarm, lifetime, lifetimeRandom, emitter, edge, from, space
         case speed, speedRandom, direction, spread, inherit, gravity, wind, drag
         case turbulence, turbulenceScale, turbulenceSpeed, floor, bounce, friction
-        case shape, size, sizeRandom, grow, streak, orient, angleRandom, spin, spinRandom, flutter
+        case shape, size, sizeRandom, grow, streak, trail, orient, angleRandom, spin, spinRandom, flutter
         case colors, colorMode, fadeIn, fadeOut, tint
     }
 
@@ -304,6 +306,7 @@ extension ParticleSystem: Codable {
         sizeRandom = try unit(.sizeRandom, b.sizeRandom)
         grow = max(0, try d(.grow, b.grow))
         streak = max(0, try d(.streak, b.streak))
+        trail = min(max(0, try d(.trail, b.trail)), 3)
         orient = try d(.orient, b.orient)
         angleRandom = try d(.angleRandom, b.angleRandom)
         spin = try d(.spin, b.spin)
@@ -351,6 +354,7 @@ extension ParticleSystem: Codable {
         try e(sizeRandom, b.sizeRandom, .sizeRandom)
         try e(grow, b.grow, .grow)
         try e(streak, b.streak, .streak)
+        try e(trail, b.trail, .trail)
         try e(orient, b.orient, .orient)
         try e(angleRandom, b.angleRandom, .angleRandom)
         try e(spin, b.spin, .spin)
@@ -406,6 +410,8 @@ public struct Particle: Sendable {
     public var scaleY: Double
     /// Color with the particle's fades in `a`.
     public var color: RGBA
+    /// Earlier positions, newest first (when the system has a trail).
+    public var trail: [CGPoint] = []
 }
 
 /// Picks an emission point on a layer (layer-local px, y down), from two random numbers in [0, 1).
@@ -459,8 +465,19 @@ extension MotionScene {
         let source = sys.from.flatMap { id in layers.first { $0.id == id && $0.id != layer.id } }
         var out: [Particle] = []
         out.reserveCapacity(births.count)
+        // Trails cost a re-evaluation per point: fewer points when there are many particles.
+        let trailPoints = sys.trail > 0 ? max(3, min(12, 30_000 / max(births.count, 1))) : 0
         for b in births {
-            if let p = particle(layer, sys, born: b.t, key: b.key, at: t, source: source, sampler: sampler) { out.append(p) }
+            guard var p = particle(layer, sys, born: b.t, key: b.key, at: t, source: source, sampler: sampler) else { continue }
+            if trailPoints > 0 {
+                for k in 1...trailPoints {
+                    let tk = t - sys.trail * Double(k) / Double(trailPoints)
+                    guard tk >= b.t, let q = particle(layer, sys, born: b.t, key: b.key, at: tk, source: source, sampler: sampler)
+                    else { break }
+                    p.trail.append(CGPoint(x: q.x, y: q.y))
+                }
+            }
+            out.append(p)
         }
         return out
     }

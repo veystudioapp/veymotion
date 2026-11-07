@@ -99,8 +99,13 @@ extension MotionLayer {
 /// Gives the frame of a video source at a time. Not thread-safe (owned by one FrameRenderer).
 protocol VideoFrames: AnyObject {
     var size: CGSize { get }
+    /// Seconds per source frame for movies (sequences use the layer's fps).
+    var frameDuration: Double? { get }
     func image(at seconds: Double, fps: Double) -> CGImage?
 }
+
+extension SequenceFrames { var frameDuration: Double? { nil } }
+extension MovieFrames { var frameDuration: Double? { info.frameDuration } }
 
 enum VideoFramesFactory {
     static func open(_ path: String) -> VideoFrames? {
@@ -160,7 +165,7 @@ struct MovieInfo: @unchecked Sendable {
 /// Decodes a movie with AVAssetReader, reading forward while the requested times move forward (export, playback)
 /// and restarting the reader at the new time on a seek (scrubbing).
 final class MovieFrames: VideoFrames {
-    private let info: MovieInfo
+    fileprivate let info: MovieInfo
     var size: CGSize { info.displaySize }
     private var reader: AVAssetReader?
     private var output: AVAssetReaderTrackOutput?

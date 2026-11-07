@@ -133,6 +133,7 @@ struct ParticlesEditor: View {
             GridRow {
                 if p.shape == .spark {
                     number("Streak", \.streak, unit: "s", digits: 3, min: 0)
+                    number("Trail", \.trail, unit: "s", digits: 2, min: 0)
                 } else {
                     number("Flutter", \.flutter, unit: "/s", min: 0)
                 }

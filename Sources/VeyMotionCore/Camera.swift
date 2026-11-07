@@ -16,13 +16,17 @@ public struct Camera: Codable, Equatable, Sendable {
     public var rotation: AnimValue
     /// Handheld shake: smooth noise on x, y, zoom or rotation.
     public var wiggle: [String: Wiggle]
+    /// Depth of field: layers whose `depth` differs from `focus` blur by `aperture` px per unit of difference.
+    public var focus: AnimValue
+    public var aperture: AnimValue
 
     public init(x: Double, y: Double, zoom: Double = 1, rotation: Double = 0) {
         self.x = .constant(x); self.y = .constant(y); self.zoom = .constant(zoom); self.rotation = .constant(rotation)
         wiggle = [:]
+        focus = .constant(0); aperture = .constant(0)
     }
 
-    enum CodingKeys: String, CodingKey { case x, y, zoom, rotation, wiggle }
+    enum CodingKeys: String, CodingKey { case x, y, zoom, rotation, wiggle, focus, aperture }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -32,6 +36,8 @@ public struct Camera: Codable, Equatable, Sendable {
         zoom = try c.decodeIfPresent(AnimValue.self, forKey: .zoom) ?? .constant(1)
         rotation = try c.decodeIfPresent(AnimValue.self, forKey: .rotation) ?? .constant(0)
         wiggle = try c.decodeIfPresent([String: Wiggle].self, forKey: .wiggle) ?? [:]
+        focus = try c.decodeIfPresent(AnimValue.self, forKey: .focus) ?? .constant(0)
+        aperture = try c.decodeIfPresent(AnimValue.self, forKey: .aperture) ?? .constant(0)
         for k in wiggle.keys where !["x", "y", "zoom", "rotation"].contains(k) {
             throw DecodingError.dataCorruptedError(forKey: .wiggle, in: c,
                 debugDescription: "Unknown camera property '\(k)' in wiggle. Use x, y, zoom or rotation.")
@@ -45,6 +51,8 @@ public struct Camera: Codable, Equatable, Sendable {
         if zoom != .constant(1) { try c.encode(zoom, forKey: .zoom) }
         if rotation != .constant(0) { try c.encode(rotation, forKey: .rotation) }
         if !wiggle.isEmpty { try c.encode(wiggle, forKey: .wiggle) }
+        if focus != .constant(0) { try c.encode(focus, forKey: .focus) }
+        if aperture != .constant(0) { try c.encode(aperture, forKey: .aperture) }
     }
 
     /// The camera with missing x/y set to the scene center.
@@ -77,6 +85,7 @@ public struct Camera: Codable, Equatable, Sendable {
 
     public mutating func shiftKeys(by d: Double) {
         x = x.shifted(by: d); y = y.shifted(by: d); zoom = zoom.shifted(by: d); rotation = rotation.shifted(by: d)
+        focus = focus.shifted(by: d); aperture = aperture.shifted(by: d)
     }
 }
 
@@ -85,6 +94,14 @@ extension MotionScene {
     public func cameraTransform(for layer: MotionLayer, at t: Double) -> CGAffineTransform {
         guard let camera, !layer.fixed else { return .identity }
         return camera.resolved(in: self).transform(depth: layer.depth, sceneWidth: width, sceneHeight: height, at: t)
+    }
+
+    /// Extra blur (px) the camera's depth of field gives a layer.
+    public func focusBlur(for layer: MotionLayer, at t: Double) -> Double {
+        guard let camera, !layer.fixed else { return 0 }
+        let a = camera.aperture.value(at: t)
+        guard a > 0 else { return 0 }
+        return a * abs(layer.depth - camera.focus.value(at: t))
     }
 
     /// The scene a group's children are drawn in: the group's box, no camera, same timing.

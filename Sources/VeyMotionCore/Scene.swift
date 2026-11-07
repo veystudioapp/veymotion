@@ -74,6 +74,10 @@ public enum AnimProperty: String, Codable, CaseIterable, Sendable {
     case offsetPath, zigzag, wigglePath, pucker, dashOffset, taperStart, taperEnd
     /// Video: the source second shown (keyframed: speed ramps, freeze frames, reverse). Replaces speed/trimIn.
     case timeRemap
+    /// 2.5D: turn around the layer's horizontal / vertical axis (degrees), seen from `perspective` px away.
+    case rotationX, rotationY, perspective
+    /// Grading: input levels (black/white point 0…1, gamma), and how much of `gradientMap` / `lut` applies (0…1).
+    case levelsBlack, levelsWhite, levelsGamma, gradientMapAmount, lutAmount
 
     /// Value a layer has when the property is not set.
     public var defaultValue: Double {
@@ -91,6 +95,8 @@ public enum AnimProperty: String, Codable, CaseIterable, Sendable {
         case .waveLength: return 120
         case .waveSpeed: return 1
         case .distortRadius: return 300
+        case .perspective: return 1200
+        case .levelsWhite, .levelsGamma, .gradientMapAmount, .lutAmount: return 1
         case .shineAngle: return 30
         case .shineWidth: return 120
         case .shinePosition: return 0.5
@@ -112,7 +118,8 @@ public enum AnimProperty: String, Codable, CaseIterable, Sendable {
                                          .counter, .scramble, .textOffset,
                                          .shine, .shinePosition, .shineAngle, .shineWidth, .rays, .raysLength, .outline,
                                          .innerGlow, .innerGlowRadius, .offsetPath, .zigzag, .wigglePath, .pucker,
-                                         .dashOffset, .taperStart, .taperEnd]
+                                         .dashOffset, .taperStart, .taperEnd, .rotationX, .rotationY, .perspective,
+                                         .levelsBlack, .levelsWhite, .levelsGamma, .gradientMapAmount, .lutAmount]
 
     public var title: String {
         switch self {
@@ -194,6 +201,14 @@ public enum AnimProperty: String, Codable, CaseIterable, Sendable {
         case .taperStart: return "Taper Start"
         case .taperEnd: return "Taper End"
         case .timeRemap: return "Time Remap"
+        case .rotationX: return "Rotation X"
+        case .rotationY: return "Rotation Y"
+        case .perspective: return "Perspective"
+        case .levelsBlack: return "Levels Black"
+        case .levelsWhite: return "Levels White"
+        case .levelsGamma: return "Gamma"
+        case .gradientMapAmount: return "Gradient Map"
+        case .lutAmount: return "LUT"
         }
     }
 
@@ -204,7 +219,8 @@ public enum AnimProperty: String, Codable, CaseIterable, Sendable {
              .pathProgress, .volume, .emission, .particleSpeed, .particleSize,
              .brightness, .contrast, .saturation, .tint, .wipe, .keyTolerance, .keySoftness, .waveSpeed, .bulge,
              .glitch, .grain, .scanlines, .vignette, .zoomBlur, .scramble, .shine, .shinePosition, .rays, .raysLength,
-             .innerGlow, .pucker, .taperStart, .taperEnd: return true
+             .innerGlow, .pucker, .taperStart, .taperEnd, .levelsBlack, .levelsWhite, .levelsGamma,
+             .gradientMapAmount, .lutAmount: return true
         default: return false
         }
     }
@@ -306,6 +322,24 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
     public var innerGlowColor: RGBA?
     /// Stroke dash pattern in px (on, off, …); empty = solid.
     public var dash: [Double]
+    /// The layer's box corners pinned elsewhere (screens, signs), animatable.
+    public var cornerPin: CornerPinValue?
+    /// Puppet pins bending the layer.
+    public var pins: [PuppetPin]
+    /// Hide the layer while it is turned away (rotationX/Y past 90°), e.g. the two faces of a card flip.
+    public var hideBackface: Bool
+    /// Trim runs through the path's pieces one after another (handwriting) instead of all at once.
+    public var trimSequential: Bool
+    /// Master tone curve: points [x, y] in 0…1 (smooth, monotone between them).
+    public var curves: [PathPoint]
+    /// Colors from shadows to highlights the layer's brightness is mapped onto (duotone, tritone…).
+    public var gradientMap: [RGBA]
+    /// A 3D color lookup table (.cube file, asset name or path) applied to the layer.
+    public var lut: String?
+    /// Images/videos: cut out the person ("person") or the main subject ("subject") with Vision.
+    public var removeBackground: BackgroundRemoval?
+    /// Videos: how in-between source times are shown in slow motion (nearest frame, a blend, or optical flow).
+    public var frameBlend: FrameBlend
     /// Color keyed out (green/blue screen); nil = no keying.
     public var keyColor: RGBA?
     /// Plays the layer's animation at this many frames per second (stop-motion look); nil = every frame.
@@ -411,6 +445,15 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         outlineColor = nil
         innerGlowColor = nil
         dash = []
+        cornerPin = nil
+        pins = []
+        hideBackface = false
+        trimSequential = false
+        curves = []
+        gradientMap = []
+        lut = nil
+        removeBackground = nil
+        frameBlend = .off
         keyColor = nil
         posterizeTime = nil
         width = nil
@@ -533,7 +576,8 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
     /// Properties that make sense for this layer type (inspector, timeline).
     public var applicableProperties: [AnimProperty] {
         if type == .audio { return [.volume] }
-        var list: [AnimProperty] = [.x, .y, .scale, .scaleX, .scaleY, .rotation, .skewX, .skewY, .anchorX, .anchorY, .opacity]
+        var list: [AnimProperty] = [.x, .y, .scale, .scaleX, .scaleY, .rotation, .rotationX, .rotationY, .perspective,
+                                    .skewX, .skewY, .anchorX, .anchorY, .opacity]
         switch type {
         case .rect: list += [.width, .height, .cornerRadius, .strokeWidth, .trimStart, .trim, .trimOffset]
         case .ellipse: list += [.width, .height, .strokeWidth, .trimStart, .trim, .trimOffset]
@@ -554,7 +598,9 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         case .audio: break
         }
         list += [.blur, .shadowX, .shadowY, .shadowBlur, .shadowOpacity, .glow, .glowRadius]
-        list += [.brightness, .contrast, .saturation, .hue, .tint, .wipe]
+        list += [.brightness, .contrast, .saturation, .hue, .tint, .wipe, .levelsBlack, .levelsWhite, .levelsGamma]
+        if !gradientMap.isEmpty { list.append(.gradientMapAmount) }
+        if lut != nil { list.append(.lutAmount) }
         list += [.posterize, .pixelate, .rgbSplit, .glitch, .grain, .scanlines, .vignette, .directionalBlur, .blurAngle,
                  .zoomBlur, .waveWarp, .ripple, .waveLength, .waveSpeed, .twirl, .bulge, .distortRadius, .turbulence]
         if keyColor != nil { list += [.keyTolerance, .keySoftness] }
@@ -684,6 +730,9 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         self.d = self.d.shifted(by: d)
         gradient = gradient?.shifted(by: d)
         repeater = repeater?.shifted(by: d)
+        cornerPin = cornerPin?.shifted(by: d)
+        pins = pins.map { $0.shifted(by: d) }
+        timeRemap = timeRemap?.shifted(by: d)
     }
 
     /// Earliest keyframe, text-animator or particle-burst time, if any.
@@ -720,6 +769,9 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         case counter, scramble, textOffset
         case shine, shinePosition, shineAngle, shineWidth, rays, raysLength, outline, innerGlow, innerGlowRadius
         case shineColor, outlineColor, innerGlowColor, dash
+        case rotationX, rotationY, perspective, cornerPin, pins, hideBackface, trimSequential
+        case levelsBlack, levelsWhite, levelsGamma, gradientMapAmount, lutAmount, curves, gradientMap, lut
+        case removeBackground, frameBlend
         case offsetPath, zigzag, wigglePath, pucker, dashOffset, taperStart, taperEnd
         case parent, motionPath, loop, wiggle, audioReact, textAnimators
         case width, height, cornerRadius, fill, stroke, strokeWidth, lineCap, lineJoin, d, fillRule
@@ -779,6 +831,16 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         shineColor = try c.decodeIfPresent(RGBA.self, forKey: .shineColor)
         outlineColor = try c.decodeIfPresent(RGBA.self, forKey: .outlineColor)
         innerGlowColor = try c.decodeIfPresent(RGBA.self, forKey: .innerGlowColor)
+        cornerPin = try c.decodeIfPresent(CornerPinValue.self, forKey: .cornerPin)
+        pins = try c.decodeIfPresent([PuppetPin].self, forKey: .pins) ?? []
+        hideBackface = try c.decodeIfPresent(Bool.self, forKey: .hideBackface) ?? false
+        trimSequential = try c.decodeIfPresent(Bool.self, forKey: .trimSequential) ?? false
+        curves = (try c.decodeIfPresent([PathPoint].self, forKey: .curves) ?? [])
+            .map { PathPoint(x: min(max($0.x, 0), 1), y: min(max($0.y, 0), 1)) }.sorted { $0.x < $1.x }
+        gradientMap = try c.decodeIfPresent([RGBA].self, forKey: .gradientMap) ?? []
+        lut = try c.decodeIfPresent(String.self, forKey: .lut).flatMap { $0.isEmpty ? nil : $0 }
+        removeBackground = try c.decodeIfPresent(BackgroundRemoval.self, forKey: .removeBackground)
+        frameBlend = try c.decodeIfPresent(FrameBlend.self, forKey: .frameBlend) ?? .off
         dash = (try c.decodeIfPresent([Double].self, forKey: .dash) ?? []).map { max(0, $0) }
         if dash.allSatisfy({ $0 <= 0 }) { dash = [] }
         depth = max(-0.9, try c.decodeIfPresent(Double.self, forKey: .depth) ?? 0)
@@ -886,6 +948,15 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         try c.encodeIfPresent(outlineColor, forKey: .outlineColor)
         try c.encodeIfPresent(innerGlowColor, forKey: .innerGlowColor)
         if !dash.isEmpty && type.isShape { try c.encode(dash, forKey: .dash) }
+        try c.encodeIfPresent(cornerPin, forKey: .cornerPin)
+        if !pins.isEmpty { try c.encode(pins, forKey: .pins) }
+        if hideBackface { try c.encode(hideBackface, forKey: .hideBackface) }
+        if trimSequential && type.isShape { try c.encode(trimSequential, forKey: .trimSequential) }
+        if !curves.isEmpty { try c.encode(curves, forKey: .curves) }
+        if !gradientMap.isEmpty { try c.encode(gradientMap, forKey: .gradientMap) }
+        try c.encodeIfPresent(lut, forKey: .lut)
+        if type.hasNaturalSize { try c.encodeIfPresent(removeBackground, forKey: .removeBackground) }
+        if type == .video && frameBlend != .off { try c.encode(frameBlend, forKey: .frameBlend) }
         if depth != 0 { try c.encode(depth, forKey: .depth) }
         if fixed { try c.encode(fixed, forKey: .fixed) }
         if !links.isEmpty { try c.encode(links, forKey: .links) }

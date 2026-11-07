@@ -70,6 +70,9 @@ struct VeyMotionApp: App {
                 Button("Add Image…") { store.addImageLayer() }
                 Button("Add Video or Image Sequence…") { store.addVideoLayer() }
                 Button("Add Audio File…") { store.addAudioLayer() }
+                Menu("Add Template") {
+                    ForEach(TemplateKind.allCases, id: \.self) { k in Button(k.title) { store.addTemplate(k) } }
+                }
                 Menu("Add Generator") {
                     ForEach(GeneratorKind.allCases, id: \.self) { k in Button(k.title) { store.addGenerator(k) } }
                 }

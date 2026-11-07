@@ -209,3 +209,133 @@ struct PathOps {
         return path
     }
 }
+
+// MARK: - Text to paths, boolean combinations
+
+public enum PathCombine: String, CaseIterable, Codable, Sendable {
+    case union, subtract, intersect, exclude
+}
+
+extension MotionScene {
+    /// Replaces a text layer by a path layer of its letters (or, with `letters`, a group with one path per letter,
+    /// each centered on its letter so it can move and turn on its own). Fill keeps the text color; trim, morph,
+    /// zigzag and every path tool then work on the text.
+    @discardableResult
+    public mutating func textToPath(_ id: String, letters: Bool, at t: Double) throws -> String {
+        let i = try layerIndex(id)
+        let text = layers[i]
+        guard text.type == .text else { throw SceneError.invalid("'\(id)' is not a text layer") }
+        let glyphs = FrameRenderer().glyphPaths(text, at: t)
+        guard !glyphs.isEmpty else { throw SceneError.invalid("'\(id)' has no visible letters") }
+        func pathLayer(_ path: CGPath, id: String, name: String) -> MotionLayer {
+            var l = text
+            l.type = .path
+            l.id = id
+            l.name = name
+            l.d = .constant(PathShape(subpaths: PathParser.subpaths(of: path)))
+            l.fill = text.color
+            l.stroke = text.stroke
+            if text.stroke == nil { l.strokeWidth = .constant(0) }
+            l.fillRule = .nonzero
+            l.textAnimators = []
+            l.textPath = nil
+            return l
+        }
+        if !letters {
+            let all = CGMutablePath()
+            for g in glyphs { all.addPath(g.path) }
+            layers[i] = pathLayer(all, id: text.id, name: text.name)
+            return text.id
+        }
+        var group = text
+        group.type = .group
+        group.width = nil; group.height = nil
+        group.textAnimators = []
+        let cx = Double(width) / 2, cy = Double(height) / 2
+        var children: [MotionLayer] = []
+        var seen = Set(allLayers.map(\.id))
+        for (k, g) in glyphs.enumerated() {
+            var m = CGAffineTransform(translationX: -g.center.x, y: -g.center.y)
+            guard let centered = g.path.copy(using: &m) else { continue }
+            var c = MotionLayer(type: .path)
+            c.d = .constant(PathShape(subpaths: PathParser.subpaths(of: centered)))
+            c.fill = text.color
+            c.stroke = text.stroke
+            c.strokeWidth = text.stroke == nil ? .constant(0) : text.strokeWidth
+            c.gradient = text.gradient
+            c.x = .constant(cx + g.center.x)
+            c.y = .constant(cy + g.center.y)
+            c.start = text.start
+            c.end = text.end
+            var cid = "\(text.id)-\(k + 1)"
+            var n = 2
+            while seen.contains(cid) { cid = "\(text.id)-\(k + 1)-\(n)"; n += 1 }
+            seen.insert(cid)
+            c.id = cid
+            c.name = "Letter \(k + 1)"
+            children.append(c)
+        }
+        group.children = children
+        // Effects stay on the group; the letters only carry their shapes.
+        group.gradient = nil
+        layers[i] = group
+        return text.id
+    }
+
+    /// Combines the outlines of shapes, paths and texts (union, the first minus the rest, intersection, or
+    /// exclusion) into a new path layer placed where they are. The sources are removed unless `keep`.
+    @discardableResult
+    public mutating func combinePaths(_ ids: [String], op: PathCombine, id newId: String?, keep: Bool, at t: Double) throws -> String {
+        guard ids.count >= 2 else { throw SceneError.invalid("Give at least two layer ids") }
+        let renderer = FrameRenderer()
+        var outlines: [CGPath] = []
+        for lid in ids {
+            let l = try layer(lid)
+            let local: CGPath
+            switch l.type {
+            case .rect:
+                let w = l.shapeWidth(at: t), h = l.shapeHeight(at: t), r = max(0, min(l.value(.cornerRadius, at: t), w / 2, h / 2))
+                local = CGPath(roundedRect: CGRect(x: -w / 2, y: -h / 2, width: w, height: h), cornerWidth: r, cornerHeight: r, transform: nil)
+            case .ellipse:
+                let w = l.shapeWidth(at: t), h = l.shapeHeight(at: t)
+                local = CGPath(ellipseIn: CGRect(x: -w / 2, y: -h / 2, width: w, height: h), transform: nil)
+            case .path:
+                local = l.pathShape(at: t).cgPath
+            case .text:
+                let all = CGMutablePath()
+                for g in renderer.glyphPaths(l, at: t) { all.addPath(g.path) }
+                local = all
+            default:
+                throw SceneError.invalid("'\(lid)' is a \(l.type.rawValue) layer: combine rect, ellipse, path or text layers")
+            }
+            var m = sceneTransform(of: l, at: t)
+            guard let world = local.copy(using: &m) else { continue }
+            outlines.append(world)
+        }
+        guard var result = outlines.first else { throw SceneError.invalid("Nothing to combine") }
+        for other in outlines.dropFirst() {
+            switch op {
+            case .union: result = result.union(other)
+            case .subtract: result = result.subtracting(other)
+            case .intersect: result = result.intersection(other)
+            case .exclude: result = result.symmetricDifference(other)
+            }
+        }
+        let box = result.boundingBoxOfPath
+        guard !box.isNull, box.width > 0 || box.height > 0 else { throw SceneError.invalid("The result is empty") }
+        var center = CGAffineTransform(translationX: -box.midX, y: -box.midY)
+        guard let local = result.copy(using: &center) else { throw SceneError.invalid("The result is empty") }
+        let first = try layer(ids[0])
+        var l = MotionLayer(id: newId ?? "\(ids[0])-\(op.rawValue)", name: newId ?? "Combined", type: .path, x: box.midX, y: box.midY)
+        l.d = .constant(PathShape(subpaths: PathParser.subpaths(of: local)))
+        l.fill = first.type == .text ? first.color : first.fill
+        l.stroke = first.stroke
+        l.strokeWidth = first.stroke == nil ? .constant(0) : first.strokeWidth
+        l.gradient = first.gradient
+        l.start = first.start
+        l.end = first.end
+        let index = layers.firstIndex { $0.id == ids[0] }
+        if !keep { for lid in ids where layers.contains(where: { $0.id == lid }) { try removeLayer(lid) } }
+        return addLayer(l, at: index.map { min($0, layers.count) })
+    }
+}
