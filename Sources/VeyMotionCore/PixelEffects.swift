@@ -83,7 +83,7 @@ struct PixelEffects {
 
     /// Effects after the gaussian blur.
     func applyAfterBlur(_ ctx: CGContext, center: CGPoint, scale: Double, pixelScale: Double) {
-        guard var buf = PixelBuffer(ctx) else { return }
+        guard let buf = PixelBuffer(ctx) else { return }
         if directionalBlur * scale >= 1 { buf.directionalBlur(length: directionalBlur * scale, degrees: blurAngle) }
         if zoomBlur > 0.001 { buf.zoomBlur(amount: zoomBlur, center: center) }
         if rays > 0.001 { buf.lightRays(rays, length: raysLength, center: center) }

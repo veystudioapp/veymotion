@@ -275,7 +275,7 @@ public enum StockSearch {
         }
         var asset = try AssetStore.download(url, name: fileName, folder: folder)
         if item.kind.isAudio, asset.duration == nil || !AudioFileInfo.isDecodable(asset.path) {
-            try? AssetStore.trash(asset.path)
+            _ = try? AssetStore.trash(asset.path)
             throw AssetError.failed("The downloaded file for '\(item.title)' is not playable audio. Try another result.")
         }
         AssetStore.setCredit(item.credit, for: asset.name)
