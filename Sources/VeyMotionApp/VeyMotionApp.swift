@@ -92,6 +92,11 @@ struct VeyMotionApp: App {
                 Button("Previous Frame") { store.step(frames: -1) }.keyboardShortcut(.leftArrow)
                 Button("Next Frame") { store.step(frames: 1) }.keyboardShortcut(.rightArrow)
                 Button("Go to Start") { store.seek(0) }.keyboardShortcut(.leftArrow, modifiers: [.command, .shift])
+                Divider()
+                Toggle("Cache Frames in Background", isOn: Binding(
+                    get: { FrameCache.shared.fillsWhenIdle },
+                    set: { FrameCache.shared.fillsWhenIdle = $0 }))
+                Button("Purge Frame Cache") { FrameCache.shared.purge() }
             }
         }
     }

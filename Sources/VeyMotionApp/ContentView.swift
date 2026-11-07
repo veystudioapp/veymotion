@@ -186,17 +186,42 @@ struct ResizeHandle: View {
 
 /// Renders canvas frames on a background queue. Requests made while a frame is rendering are coalesced:
 /// only the latest one is drawn next, so a slow scene drops frames instead of stalling the UI.
+/// Frames in the `FrameCache` (RAM preview) are shown at once; rendered frames are added to it.
 @Observable
 final class PreviewRenderer {
     private(set) var image: CGImage?
     @ObservationIgnored private let queue = DispatchQueue(label: "VeyMotion.preview", qos: .userInteractive)
     @ObservationIgnored private let renderer = FrameRenderer() // only used on `queue`
     @ObservationIgnored private var busy = false
-    @ObservationIgnored private var pending: (scene: MotionScene, time: Double, scale: Double, fast: Bool)?
+    @ObservationIgnored private var pending: Job?
+    /// Requests are numbered so a slow render finishing late never replaces a newer frame shown from the cache.
+    @ObservationIgnored private var lastRequest = 0
+    @ObservationIgnored private var shownRequest = 0
 
-    /// Call on the main thread. `fast` (while playing) renders motion blur with fewer samples.
-    func request(_ scene: MotionScene, at time: Double, scale: Double, fast: Bool = false) {
-        pending = (scene, time, scale, fast)
+    private struct Job {
+        var scene: MotionScene
+        var time: Double
+        var scale: Double
+        var fast: Bool
+        var id: Int
+        var cacheKey: FrameCache.Key?
+    }
+
+    /// Call on the main thread. `fast` (while playing) renders motion blur with fewer samples. With `cacheKey`
+    /// a cached frame is shown immediately (and, when it already has the requested size, nothing is rendered).
+    func request(_ scene: MotionScene, at time: Double, scale: Double, fast: Bool = false,
+                 cacheKey: FrameCache.Key? = nil) {
+        lastRequest += 1
+        if let cacheKey, let img = FrameCache.shared.image(at: time, fps: scene.fps, key: cacheKey) {
+            image = img
+            shownRequest = lastRequest
+            // Playing, or the cached frame is the canvas's size: nothing sharper to render.
+            if fast || img.width == FrameCache.pixelWidth(scene, scale: scale) {
+                pending = nil
+                return
+            }
+        }
+        pending = Job(scene: scene, time: time, scale: scale, fast: fast, id: lastRequest, cacheKey: cacheKey)
         renderNext()
     }
 
@@ -215,8 +240,16 @@ final class PreviewRenderer {
             let img = AudioAnalysisCache.withoutWaiting {
                 renderer.makeImage(job.scene, at: job.time, scale: job.scale)
             }
+            // Kept only at the playback size (the cache checks); frames drawn before an audio analysis was ready
+            // are dropped by the `invalidate()` that follows `didAnalyze`.
+            if let img, let key = job.cacheKey {
+                FrameCache.shared.insert(img, at: job.time, fps: job.scene.fps, key: key)
+            }
             DispatchQueue.main.async {
-                self.image = img
+                if job.id >= self.shownRequest {
+                    self.image = img
+                    self.shownRequest = job.id
+                }
                 self.busy = false
                 self.renderNext()
             }
@@ -236,6 +269,11 @@ struct CanvasView: View {
         var scale: Double
     }
 
+    private struct CacheSource: Equatable {
+        var revision: Int
+        var pixelWidth: Int
+    }
+
     var body: some View {
         GeometryReader { geo in
             let scene = store.scene
@@ -246,9 +284,13 @@ struct CanvasView: View {
                 : CGSize(width: avail.width, height: avail.width / aspect)
             // Render at the canvas's real pixel size (not capped at the scene size, so vector content stays sharp
             // when the canvas is larger than the scene); while playing, at most 1.5 px/pt to keep frames cheap.
-            let density = store.isPlaying ? min(displayScale, 1.5) : displayScale
+            // The RAM preview cache holds frames at the playback density.
+            let playDensity = min(displayScale, 1.5)
+            let density = store.isPlaying ? playDensity : displayScale
             let scale = fit.width * density / Double(scene.width)
             let key = FrameKey(revision: store.sceneRevision, time: store.time, scale: scale)
+            let cacheSource = CacheSource(revision: store.sceneRevision,
+                                          pixelWidth: FrameCache.pixelWidth(scene, scale: fit.width * playDensity / Double(scene.width)))
             ZStack {
                 if let img = preview.image {
                     Image(decorative: img, scale: 1)
@@ -279,14 +321,29 @@ struct CanvasView: View {
             .onChange(of: store.documentRevision) { annotations.close() }
             .onChange(of: store.isPlaying) { _, playing in if playing { annotations.close() } }
             // Before the new document's first frame (declared first, so it runs first; the queue is serial).
-            .onChange(of: store.documentRevision) { preview.clearCaches() }
+            .onChange(of: store.documentRevision) {
+                preview.clearCaches()
+                FrameCache.shared.purge(dropRenderers: true)
+            }
+            // Before `key` (same update, declared first), so the request below already sees the new cache key.
+            .onChange(of: cacheSource, initial: true) { _, s in
+                FrameCache.shared.setSource(store.scene, revision: s.revision, pixelWidth: s.pixelWidth, playhead: store.time)
+            }
             .onChange(of: key, initial: true) { _, k in
-                preview.request(store.scene, at: k.time, scale: k.scale, fast: store.isPlaying)
+                preview.request(store.scene, at: k.time, scale: k.scale, fast: store.isPlaying, cacheKey: FrameCache.shared.key)
             }
             // An image file overwritten in place (e.g. by write_asset) leaves the scene unchanged.
-            .onChange(of: AssetLibrary.shared.assets) { preview.request(store.scene, at: key.time, scale: key.scale) }
+            .onChange(of: AssetLibrary.shared.assets) {
+                FrameCache.shared.invalidate()
+                preview.request(store.scene, at: key.time, scale: key.scale, cacheKey: FrameCache.shared.key)
+            }
             .onReceive(NotificationCenter.default.publisher(for: AudioAnalysisCache.didAnalyze)) { _ in
-                preview.request(store.scene, at: key.time, scale: key.scale, fast: store.isPlaying)
+                FrameCache.shared.invalidate()
+                preview.request(store.scene, at: key.time, scale: key.scale, fast: store.isPlaying,
+                                cacheKey: FrameCache.shared.key)
+            }
+            .onChange(of: store.exportProgress != nil, initial: true) { _, exporting in
+                FrameCache.shared.isSuspended = exporting
             }
         }
         .background(Color(nsColor: .underPageBackgroundColor))
@@ -420,6 +477,8 @@ struct MiniScrubber: View {
             let x = min(max(store.time / d, 0), 1) * w
             ZStack(alignment: .leading) {
                 Capsule().fill(Color.secondary.opacity(0.25)).frame(height: 4)
+                // Frames held in the RAM preview cache, just under the track.
+                CachedFramesStrip(pointsPerSecond: w / d).offset(y: 4)
                 Capsule().fill(Color.accentColor).frame(width: x, height: 4)
                 Circle()
                     .fill(Color.white)

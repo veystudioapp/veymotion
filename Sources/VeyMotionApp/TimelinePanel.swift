@@ -1090,6 +1090,8 @@ struct TimeRuler: View {
                          with: .color(.secondary.opacity(0.12)))
             }
         }
+        // RAM preview cache, along the top edge (its own view, so filling doesn't redraw the ticks).
+        .overlay(alignment: .top) { CachedFramesStrip(pointsPerSecond: pps, offset: scrollX) }
         .contentShape(Rectangle())
         .gesture(DragGesture(minimumDistance: 0).onChanged { g in
             onSeek(tl.time(atX: g.location.x))
