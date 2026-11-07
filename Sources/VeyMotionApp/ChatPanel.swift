@@ -3,6 +3,7 @@ import SwiftUI
 
 struct ChatPanel: View {
     @Environment(ChatStore.self) private var chat
+    @State private var showVersions = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -10,6 +11,10 @@ struct ChatPanel: View {
                 ClaudeLogo(size: 16)
                 Text("Claude").font(.headline)
                 Spacer()
+                Button { showVersions.toggle() } label: { Image(systemName: "clock.arrow.circlepath") }
+                    .buttonStyle(.borderless)
+                    .help("The scene after each prompt to Claude")
+                    .popover(isPresented: $showVersions, arrowEdge: .bottom) { VersionsPopover() }
                 Button { chat.newChat() } label: { Image(systemName: "square.and.pencil") }
                     .buttonStyle(.borderless)
                     .help("New conversation")

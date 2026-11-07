@@ -4,7 +4,6 @@ import VeyMotionCore
 
 struct ContentView: View {
     @Environment(SceneStore.self) private var store
-    @State private var showVersions = false
     @State private var showVoice = false
     @AppStorage("rightPanelTab") private var rightTab: RightPanelTab = .inspector
     @AppStorage("leftPanelTab") private var leftTab: LeftPanelTab = .layers
@@ -70,72 +69,13 @@ struct ContentView: View {
         }
         .toolbar {
             ToolbarItem(placement: .navigation) {
-                Button { store.showProjects = true } label: { Label("Projects", systemImage: "square.grid.2x2") }
-                    .help("All projects (⇧⌘P)")
-            }
-            ToolbarItem(placement: .navigation) {
                 Button { withAnimation(.easeOut(duration: 0.2)) { showSidebar.toggle() } } label: {
                     Label("Layers & Assets", systemImage: "sidebar.left")
                 }
                 .help("Show or hide Layers & Assets (⌃⌘S)")
-                .keyboardShortcut("s", modifiers: [.control, .command])
-            }
-            ToolbarItem(placement: .principal) {
-                ControlGroup {
-                    Button { store.addLayer(.rect) } label: { Label("Rectangle", systemImage: "rectangle") }
-                        .help("Add rectangle")
-                    Button { store.addLayer(.ellipse) } label: { Label("Ellipse", systemImage: "circle") }
-                        .help("Add ellipse")
-                    Button { store.addLayer(.path) } label: { Label("Path", systemImage: "scribble.variable") }
-                        .help("Add a vector path (edit its shape in the inspector or ask Claude)")
-                    Button { store.addLayer(.text) } label: { Label("Text", systemImage: "textformat") }
-                        .help("Add text (⇧⌘T)")
-                    Button { store.addImageLayer() } label: { Label("Image", systemImage: "photo") }
-                        .help("Add image from a file")
-                    Button { store.addVideoLayer() } label: { Label("Video", systemImage: "film") }
-                        .help("Add a movie or an image sequence (e.g. a 3D render from Blender)")
-                    Menu {
-                        ForEach(ParticlePreset.allCases, id: \.self) { p in
-                            Button(p.title) { store.addParticles(p) }
-                        }
-                    } label: {
-                        Label("Particles", systemImage: "sparkles")
-                    }
-                    .help("Add particles: fire, smoke, dust, sparks, snow…")
-                    Menu {
-                        ForEach(GeneratorKind.allCases, id: \.self) { k in
-                            Button(k.title) { store.addGenerator(k) }
-                        }
-                    } label: {
-                        Label("Generate", systemImage: "waveform.path.ecg")
-                    }
-                    .help("Add a generator: audio spectrum, waveform, fractal noise, lightning, grid")
-                    Menu {
-                        ForEach(TemplateKind.allCases, id: \.self) { k in
-                            Button(k.title) { store.addTemplate(k) }
-                        }
-                    } label: {
-                        Label("Templates", systemImage: "rectangle.stack")
-                    }
-                    .help("Add an animated template: lower third, call-out, subscribe, end card, title card, quote")
-                    Button { store.addAudioLayer() } label: { Label("Audio", systemImage: "music.note") }
-                        .help("Add audio file")
-                    Button { showVoice = true } label: { Label("Voice-over", systemImage: "mic") }
-                        .help("Generate a voice-over")
-                }
-                .controlGroupStyle(.navigation)
             }
             ToolbarItemGroup(placement: .primaryAction) {
-                Button { withAnimation(.easeOut(duration: 0.2)) { showTimeline.toggle() } } label: {
-                    Label("Timeline", systemImage: showTimeline ? "rectangle.bottomthird.inset.filled" : "rectangle")
-                }
-                .help("Show or hide the Timeline (⌃⌘T)")
-                .keyboardShortcut("t", modifiers: [.control, .command])
-                Button { showVersions.toggle() } label: {
-                    Label("Versions", systemImage: "clock.arrow.circlepath")
-                }
-                .help("The scene after each prompt to Claude")
-                .popover(isPresented: $showVersions, arrowEdge: .bottom) { VersionsPopover() }
+                addMenu
                 Button {
                     if showInspector && rightTab == .claude {
                         rightTab = .inspector
@@ -148,15 +88,17 @@ struct ContentView: View {
                 }
                 .help("Chat with Claude (⌘L)")
                 .keyboardShortcut("l")
-                Button { store.exportVideo() } label: { Label("Export", systemImage: "square.and.arrow.up") }
-                    .help("Export video (⌘E)")
-                Button { store.showPublish = true } label: { Label("Publish", systemImage: "paperplane") }
-                    .help("Connect YouTube, TikTok, Facebook or X and publish a video (⇧⌘E)")
+                Menu {
+                    Button("Export Video…") { store.exportVideo() }
+                    Button("Publish…") { store.showPublish = true }
+                } label: {
+                    Label("Export", systemImage: "square.and.arrow.up")
+                }
+                .help("Export or publish the video (⌘E)")
                 Button { withAnimation(.easeOut(duration: 0.2)) { showInspector.toggle() } } label: {
                     Label("Inspector", systemImage: "sidebar.right")
                 }
                 .help("Show or hide the Inspector (⌥⌘I)")
-                .keyboardShortcut("i", modifiers: [.option, .command])
             }
         }
         .navigationTitle(store.project?.lastPathComponent ?? store.fileURL?.deletingPathExtension().lastPathComponent ?? "Untitled")
@@ -165,6 +107,36 @@ struct ContentView: View {
         .sheet(isPresented: $showVoice) { VoiceOverSheet() }
         .sheet(isPresented: Bindable(store).showExport) { ExportSheet() }
         .sheet(isPresented: Bindable(store).showPublish) { PublishSheet() }
+    }
+}
+
+extension ContentView {
+    /// One menu for everything that can be added to the scene.
+    fileprivate var addMenu: some View {
+        Menu {
+            Button { store.addLayer(.text) } label: { Label("Text", systemImage: "textformat") }
+            Button { store.addLayer(.rect) } label: { Label("Rectangle", systemImage: "rectangle") }
+            Button { store.addLayer(.ellipse) } label: { Label("Ellipse", systemImage: "circle") }
+            Button { store.addLayer(.path) } label: { Label("Path", systemImage: "scribble.variable") }
+            Divider()
+            Button { store.addImageLayer() } label: { Label("Image…", systemImage: "photo") }
+            Button { store.addVideoLayer() } label: { Label("Video or Image Sequence…", systemImage: "film") }
+            Button { store.addAudioLayer() } label: { Label("Audio…", systemImage: "music.note") }
+            Button { showVoice = true } label: { Label("Voice-over…", systemImage: "mic") }
+            Divider()
+            Menu("Particles") {
+                ForEach(ParticlePreset.allCases, id: \.self) { p in Button(p.title) { store.addParticles(p) } }
+            }
+            Menu("Generator") {
+                ForEach(GeneratorKind.allCases, id: \.self) { k in Button(k.title) { store.addGenerator(k) } }
+            }
+            Menu("Template") {
+                ForEach(TemplateKind.allCases, id: \.self) { k in Button(k.title) { store.addTemplate(k) } }
+            }
+        } label: {
+            Label("Add", systemImage: "plus")
+        }
+        .help("Add text, shapes, media, particles, generators or templates")
     }
 }
 

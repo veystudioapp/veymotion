@@ -8,6 +8,9 @@ struct VeyMotionApp: App {
     @State private var store = SceneStore.shared
     @State private var chat = ChatStore.shared
     @State private var annotations = AnnotationStore.shared
+    @AppStorage("showSidebar") private var showSidebar = true
+    @AppStorage("showInspector") private var showInspector = true
+    @AppStorage("showTimeline") private var showTimeline = false
 
     init() {
         AudioAnalysisCache.waitsOnMainThread = false
@@ -61,6 +64,14 @@ struct VeyMotionApp: App {
                         .keyboardShortcut("z", modifiers: [.command, .shift])
                         .disabled(!store.canRedo)
                 }
+            }
+            CommandGroup(after: .sidebar) {
+                Button(showSidebar ? "Hide Layers & Assets" : "Show Layers & Assets") { showSidebar.toggle() }
+                    .keyboardShortcut("s", modifiers: [.control, .command])
+                Button(showInspector ? "Hide Inspector" : "Show Inspector") { showInspector.toggle() }
+                    .keyboardShortcut("i", modifiers: [.option, .command])
+                Button(showTimeline ? "Hide Timeline" : "Show Timeline") { showTimeline.toggle() }
+                    .keyboardShortcut("t", modifiers: [.control, .command])
             }
             CommandMenu("Layer") {
                 Button("Add Rectangle") { store.addLayer(.rect) }
