@@ -9,7 +9,7 @@ VeyMotion is a native macOS (14+) motion-graphics editor in SwiftUI, built with 
 ```bash
 swift build                      # builds all targets, including the vmotion CLI
 swift run VeyMotion              # run the app (run `swift build` first: the in-app chat needs vmotion next to the app binary)
-bash scripts/bundle.sh           # release build -> dist/VeyMotion.app (ad-hoc signed) + dist/vmotion
+bash scripts/bundle.sh           # release build -> "dist/Vey Motion.app" (ad-hoc signed) + dist/vmotion
 ```
 
 There is no test target and no linter configured. To check Core/MCP changes without the GUI, use the CLI against a scene file:
@@ -45,6 +45,12 @@ The same `MCPServer` is served three ways: HTTP on `127.0.0.1:19790/mcp` (`Trans
 server `veymotion` = `vmotion mcp` with no scene (`MCPSocketBridge`, stdio → control socket), so tool calls show up
 as `mcp__veymotion__<tool>`. Models come from `codex debug models`. Model/effort are stored per provider, and each
 conversation keeps one session per provider (`sessionId` / `codexSessionId` in `.chat.json`).
+Setup (`AgentSetup.swift`): `ChatStore.detect` locates each CLI and asks `claude auth status --json` /
+`codex login status` (a custom `model_provider` in config.toml counts as logged in); missing or logged out blocks
+sending and shows `AgentSetupCard` (install/log in through a Terminal `.command` file, API key, Check Again —
+also re-run when the app becomes active). `AgentSetup.classify` turns refused logins (→ `.authFailed`) and
+credit/usage-limit errors into readable notices. A Claude API key is kept by `AnthropicKeyStore` (Keychain) and
+passed as `ANTHROPIC_API_KEY` through `AgentCLI.extraEnvironment`; Codex keys go to `codex login --with-api-key`.
 Frame annotation (`Annotations.swift`, ⇧⌘A or the pencil in the transport bar): pauses, draws marks in scene units
 over the canvas (UI-only, never in the scene), and "Add to chat" renders the frame + marks to a JPEG attachment whose
 `note` tells the agent what it is. While active, the menu's Undo/Redo/Delete act on the marks and Space does not play.

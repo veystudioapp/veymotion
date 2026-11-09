@@ -9,8 +9,8 @@ Native macOS motion-graphics editor (SwiftUI) with a built-in MCP server, so AI 
 
 ```bash
 swift build && swift run VeyMotion   # dev run; `swift build` first so the vmotion CLI exists for the chat
-bash scripts/bundle.sh               # build dist/VeyMotion.app (+ vmotion inside it)
-open dist/VeyMotion.app
+bash scripts/bundle.sh               # build "dist/Vey Motion.app" (+ vmotion inside it)
+open "dist/Vey Motion.app"
 ```
 
 Requires macOS 14+. The Claude chat needs [Claude Code](https://claude.com/claude-code) installed and logged in.
@@ -40,8 +40,9 @@ Same agent in the terminal: `vmotion chat "make the title bounce in"`.
 
 ### Codex instead of Claude
 
-Pick **Codex** in the chat's model menu (needs the [Codex CLI](https://github.com/openai/codex) installed and
-`codex login` done; set `VEYMOTION_CODEX` if it is not found). Each message runs one `codex exec --json` (the
+Pick **Codex** in the chat's model menu (needs the [Codex CLI](https://learn.chatgpt.com/docs/codex/cli) —
+`curl -fsSL https://chatgpt.com/codex/install.sh | sh`, then `codex login`; the chat offers both when they are
+missing. Set `VEYMOTION_CODEX` if it is not found). Each message runs one `codex exec --json` (the
 thread continues with `codex exec resume`):
 
 ```

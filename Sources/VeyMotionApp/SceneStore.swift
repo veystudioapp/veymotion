@@ -839,7 +839,7 @@ final class SceneStore: SceneHost {
     /// Opens a project folder (or its scene.json).
     func openProject(_ url: URL) {
         guard let folder = ProjectStore.project(for: url) else {
-            message = "\(url.lastPathComponent) is not a VeyMotion project (no scene.json inside)"
+            message = "\(url.lastPathComponent) is not a Vey Motion project (no scene.json inside)"
             return
         }
         guard folder != project else { return }

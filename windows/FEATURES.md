@@ -184,3 +184,84 @@ Tick ở cột Windows khi tính năng đã được triển khai đầy đủ t
 | 178 | Tool `list_fonts` | ✅ | ✅ |
 | 179 | Tool `get_credits` | ✅ | ✅ |
 | 180 | Tool `export_video` | ✅ | ✅ |
+| 181 | Bố cục mặc định gọn: canvas + chat (sidebar Layers/Assets ẩn, panel phải mở tab Chat) |  | ✅ |
+| 182 | Toolbar gọn: bỏ nút Claude, ⌘L = Show Chat, menu View có Show Inspector, nút panel phải là "Chat & Inspector" |  | ✅ |
+| 183 | Bỏ header của chat: nút Versions và New chat nằm trên thanh tab của panel phải |  | ✅ |
+| 184 | Thanh phát tối giản: thời gian, về đầu, Play/Pause, nút timeline (bước frame vẫn có phím tắt) |  | ✅ |
+| 185 | Thanh trạng thái chỉ hiện khi có việc; thông báo tự ẩn sau 8 giây; "Agents ready" chỉ hiện khi có lỗi kết nối |  | ✅ |
+| 186 | Menu Help → "Copy Claude Code MCP Command" |  | ✅ |
+| 187 | Chọn Claude hoặc Codex trong popover model; mỗi bên có model, effort và session riêng |  | ✅ |
+| 188 | Agent Codex: `codex exec --json` mỗi tin nhắn, `resume` / `fork`, shell chỉ đọc, sửa scene qua MCP |  | ✅ |
+| 189 | `vmotion mcp` không có file scene → cầu nối stdio tới app đang chạy (`MCPSocketBridge`) |  | ✅ |
+| 190 | Danh sách model Codex lấy từ `codex debug models` |  | ✅ |
+| 191 | Logo Codex (SVG, đổi màu theo chế độ sáng/tối) |  | ✅ |
+| 192 | Phát hiện CLI chưa cài / chưa đăng nhập (`claude auth status --json`, `codex login status`) và chặn gửi |  | ✅ |
+| 193 | Thẻ hướng dẫn trên ô nhập: cài hoặc đăng nhập qua cửa sổ terminal, Check Again, chuyển sang agent còn lại |  | ✅ |
+| 194 | Tự kiểm tra lại khi quay về app (sau khi cài / đăng nhập trong terminal) |  | ✅ |
+| 195 | Dùng API key: Claude (lưu an toàn, truyền `ANTHROPIC_API_KEY`), Codex (`codex login --with-api-key`) |  | ✅ |
+| 196 | Nhận diện lỗi lúc chạy: đăng nhập bị từ chối / hết hạn → thẻ đăng nhập; hết credit / hạn mức → thông báo rõ ràng |  | ✅ |
+| 197 | Trạng thái từng agent ("Not installed", "Not logged in"…) hiện ngay trong popover chọn Claude/Codex |  | ✅ |
+| 198 | Gộp thông báo "Now chatting with…" khi đổi qua lại giữa Claude và Codex |  | ✅ |
+| 199 | Script test các tình huống cài đặt / đăng nhập (`scripts/test-agent-setup.sh`, CLI giả) |  | ✅ |
+
+## Ghi chú triển khai cho Windows (mục 181–199)
+
+Tham chiếu bản macOS, chỉ ghi những chỗ Windows phải làm khác.
+
+### Giao diện gọn (181–186)
+
+- Mã nguồn macOS: `ContentView.swift`, `ChatPanel.swift` (`ChatHeaderButtons`), `VeyMotionApp.swift` (menu View, Help).
+- Giá trị mặc định lưu bằng key mới (`ui.showSidebar = false`, `ui.rightPanelTab = claude`) để máy đã dùng app cũng
+  nhận bố cục mới một lần. Trên Windows làm tương tự trong `AppSettings.cs`.
+- Thanh trạng thái: chỉ hiện khi đang export, có thông báo, có hành động của agent, hoặc kết nối agent có lỗi.
+  Thông báo và hành động của agent tự xoá sau 8 giây.
+
+### Codex (187–191)
+
+- Mã nguồn macOS: `CodexAgent.swift`, `ChatStore.swift` (provider, `sessionIds` theo provider, `codexSessionId`
+  trong `.chat.json`), `AgentPrompt.codexPrompt`, `Transports.swift` (`MCPSocketBridge`).
+- Hai agent dùng chung interface `ChatAgent` và phát cùng các `AgentEvent`. Trên Windows nên tách interface ra khỏi
+  `ClaudeCodeAgent.cs`.
+- Mỗi tin nhắn chạy một `codex exec --json`. Prompt đi qua **stdin** (tham số cuối là `-`), ảnh đính kèm ghi ra
+  file rồi truyền `-i`. Xem `CodexAgent.arguments()`: `--skip-git-repo-check --ignore-rules`, **không** dùng
+  `--ignore-user-config` (sẽ mất `model_provider` / `base_url` của proxy).
+- Các `-c` ghi đè config: `sandbox_mode="read-only"`, `approval_policy="never"`, `developer_instructions`, và
+  MCP server `veymotion` = `vmotion mcp` (không có scene, `default_tools_approval_mode="approve"`,
+  `tool_timeout_sec=900`). Trên macOS biến `VEYMOTION_SOCKET` chỉ tới control socket, trên Windows thay bằng tên
+  named pipe.
+- `vmotion/Program.cs`: `case "mcp"` hiện bắt buộc có file scene. Cần thêm nhánh không có file: chuyển từng request
+  JSON-RPC qua named pipe điều khiển (`ControlPipe.cs`), app không chạy thì trả `isError`.
+- Kiểm tra trên Windows: sandbox chỉ đọc của Codex (xem trang `codex/windows/windows-sandbox` trong tài liệu Codex).
+
+### Cài đặt / đăng nhập (192–199)
+
+- Mã nguồn macOS: `AgentSetup.swift` (kiểm tra đăng nhập, nhận diện lỗi, script terminal, `AnthropicKeyStore`),
+  `ChatStore.swift` (`AgentState`, `detect`, `openSetupInTerminal`, `useAPIKey`, `explainFailure`),
+  `ChatPanel.swift` (`AgentSetupCard`), `ChatComposer.swift` (trạng thái trong popover).
+- Trạng thái mỗi agent: `checking`, `missing`, `loggedOut` (chặn gửi), `authFailed` (vẫn cho gửi lại), `ready`.
+  Lệnh kiểm tra lỗi hoặc CLI quá cũ thì coi như sẵn sàng, để lỗi lúc chạy quyết định.
+- Đọc trạng thái đăng nhập: `claude auth status --json` → `loggedIn`. `codex login status` → có "Not logged in" là
+  chưa đăng nhập, trừ khi `config.toml` (trong `CODEX_HOME`, mặc định `~/.codex`) đặt `model_provider` khác `openai`.
+- Lệnh cài trên Windows (theo tài liệu chính thức, kiểm tra lại trước khi làm):
+  - Claude Code (PowerShell): `irm https://claude.ai/install.ps1 | iex`. Đăng nhập: `claude auth login`.
+    Nguồn: https://code.claude.com/docs/en/quickstart
+  - Codex: trang https://learn.chatgpt.com/docs/codex/cli có tab Windows riêng, chưa đối chiếu được. Đăng nhập:
+    `codex login`.
+- Mở terminal: macOS ghi file `.command` rồi mở bằng Terminal. Windows nên ghi file `.ps1` rồi chạy
+  `powershell -NoExit -ExecutionPolicy Bypass -File <file>` (hoặc `wt.exe` nếu có). File cần `$env:CLAUDE_CONFIG_DIR` /
+  `$env:CODEX_HOME` nếu app đang chạy với các biến đó, để đăng nhập vào đúng cấu hình app dùng.
+- Tự kiểm tra lại: macOS dùng `didBecomeActiveNotification`, Windows dùng `Application.Activated` (WPF). Chỉ kiểm
+  tra lại agent đang không ở trạng thái `ready`.
+- Lưu API key Claude: macOS dùng Keychain. Windows dùng Credential Manager (`CredWrite`/`CredRead`) hoặc DPAPI
+  (`ProtectedData`, phạm vi CurrentUser). Truyền `ANTHROPIC_API_KEY` cho **mọi** tiến trình `claude` (agent, danh sách
+  model, `PublishCopywriter`). Chọn "Log In" thì xoá key đã lưu (key được ưu tiên hơn tài khoản).
+- Codex API key: chạy `codex login --with-api-key`, key đi qua stdin.
+- Nhận diện lỗi: dùng chung danh sách từ khoá trong `AgentSetup.classify`, gồm `401`, "invalid api key",
+  "please run /login", "token has expired", "unauthorized" (đăng nhập) và `402`/`429`, "credit balance is too low",
+  "usage limit", "exceeded your current quota" (hạn mức). Chép nguyên danh sách để hai bản cư xử giống nhau.
+- Tìm CLI: `VEYMOTION_CLAUDE` / `VEYMOTION_CODEX` (giá trị `none` = coi như chưa cài, dùng để test), rồi các thư mục
+  cài mặc định, rồi PATH. Codex còn tôn trọng `CODEX_INSTALL_DIR`. Cần kiểm tra trên máy Windows thư mục mà installer
+  chính thức đặt `claude.exe` / `codex.exe`, rồi thêm vào danh sách tìm.
+- Test: port `scripts/test-agent-setup.sh` sang PowerShell. Các case dùng biến môi trường (`*-missing`,
+  `*-logged-out`, `claude-bad-key`) chuyển thẳng được. CLI giả (`claude-credit`, `codex-auth`…) viết thành file `.cmd`
+  in ra các dòng JSON giống bản `.sh`. CLI giả của Codex phải đọc hết stdin trước khi thoát.

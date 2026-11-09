@@ -18,7 +18,7 @@ struct VeyMotionApp: App {
     }
 
     var body: some Scene {
-        WindowGroup("VeyMotion") {
+        WindowGroup("Vey Motion") {
             ContentView()
                 .environment(store)
                 .environment(chat)

@@ -142,7 +142,7 @@ struct ProjectsScreen: View {
             .padding(.vertical, 12)
         }
         .background(Color(nsColor: .windowBackgroundColor))
-        .navigationTitle("VeyMotion")
+        .navigationTitle("Vey Motion")
         .navigationSubtitle("Projects")
         .onAppear(perform: reload)
         .sheet(isPresented: $creating) { NewProjectSheet(onCreated: { store.showProjects = false }) }

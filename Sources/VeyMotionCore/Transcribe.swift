@@ -325,9 +325,9 @@ public enum Transcriber {
     /// so processes without one (the debug build, the CLI) get an error instead.
     static func authorize() throws {
         guard Bundle.main.object(forInfoDictionaryKey: "NSSpeechRecognitionUsageDescription") != nil else {
-            throw AudioError.failed("Speech recognition needs the VeyMotion app bundle: this process (the debug build from "
+            throw AudioError.failed("Speech recognition needs the Vey Motion app bundle: this process (the debug build from "
                                     + "swift run, or vmotion --scene) has no Info.plist to ask for the permission. "
-                                    + "Run bash scripts/bundle.sh, open dist/VeyMotion.app and transcribe there.")
+                                    + "Run bash scripts/bundle.sh, open \"dist/Vey Motion.app\" and transcribe there.")
         }
         var status = SFSpeechRecognizer.authorizationStatus()
         if status == .notDetermined {

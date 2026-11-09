@@ -176,24 +176,17 @@ private struct ModelPicker: View {
             case .main:
                 header("Assistant")
                 ForEach(AgentProvider.allCases, id: \.self) { p in
-                    row(p.displayName, help: "Run the chat with \(p.cliName)", checked: chat.provider == p) {
-                        chat.provider = p // stays open so a model can be picked next
+                    let state = chat.agentStates[p] ?? .checking
+                    PickerRow(title: p.displayName, checked: chat.provider == p, trailing: nil, chevron: false,
+                              subtitle: state.label, warning: state != .checking) {
+                        chat.provider = p
+                        // Ready: stay open so a model can be picked next. Otherwise show the setup card below.
+                        if state != .ready { close() }
                     }
+                    .help(state.label.map { "\(p.cliName): \($0)" } ?? "Run the chat with \(p.cliName)")
                 }
-                Divider().padding(.vertical, 4)
-                header("Model · this session")
-                ForEach(Array(mainModels.enumerated()), id: \.element.value) { i, m in
-                    row(m.displayName, help: m.description, checked: isSelected(m, inMain: true),
-                        trailing: i < 9 ? "\(i + 1)" : nil) { pick(m) }
-                }
-                if !chat.modelEfforts.isEmpty || !moreModels.isEmpty { Divider().padding(.vertical, 4) }
-                if !chat.modelEfforts.isEmpty {
-                    row("Effort", trailing: Self.effortName(chat.effort), chevron: true) { page = .effort }
-                }
-                if !moreModels.isEmpty {
-                    if !chat.modelEfforts.isEmpty { Divider().padding(.vertical, 4) }
-                    row("More models", chevron: true) { page = .more }
-                }
+                // Models and effort only mean something once the CLI can run.
+                if chat.agentState.canSend { modelSection }
             case .effort:
                 back("Effort")
                 ForEach(Array(([""] + chat.modelEfforts).enumerated()), id: \.element) { i, e in
@@ -219,13 +212,31 @@ private struct ModelPicker: View {
             if press.key == .escape, page != .main { page = .main; return .handled }
             guard let n = Int(press.characters), n >= 1 else { return .ignored }
             switch page {
-            case .main: if n <= mainModels.count { pick(mainModels[n - 1]); return .handled }
+            case .main:
+                if chat.agentState.canSend, n <= mainModels.count { pick(mainModels[n - 1]); return .handled }
             case .more: if n <= moreModels.count { pick(moreModels[n - 1]); return .handled }
             case .effort:
                 let list = [""] + chat.modelEfforts
                 if n <= list.count { chat.effort = list[n - 1]; close(); return .handled }
             }
             return .ignored
+        }
+    }
+
+    @ViewBuilder private var modelSection: some View {
+        Divider().padding(.vertical, 4)
+        header("Model · this session")
+        ForEach(Array(mainModels.enumerated()), id: \.element.value) { i, m in
+            row(m.displayName, help: m.description, checked: isSelected(m, inMain: true),
+                trailing: i < 9 ? "\(i + 1)" : nil) { pick(m) }
+        }
+        if !chat.modelEfforts.isEmpty || !moreModels.isEmpty { Divider().padding(.vertical, 4) }
+        if !chat.modelEfforts.isEmpty {
+            row("Effort", trailing: Self.effortName(chat.effort), chevron: true) { page = .effort }
+        }
+        if !moreModels.isEmpty {
+            if !chat.modelEfforts.isEmpty { Divider().padding(.vertical, 4) }
+            row("More models", chevron: true) { page = .more }
         }
     }
 
@@ -271,13 +282,27 @@ private struct PickerRow: View {
     let checked: Bool
     let trailing: String?
     let chevron: Bool
+    /// A second line under the title, e.g. "Not installed".
+    var subtitle: String? = nil
+    /// Draw the subtitle as a problem (orange).
+    var warning = false
     let action: () -> Void
     @State private var hover = false
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: 8) {
-                Text(title).lineLimit(1)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title).lineLimit(1)
+                    if let subtitle {
+                        HStack(spacing: 3) {
+                            if warning { Image(systemName: "exclamationmark.circle.fill") }
+                            Text(subtitle)
+                        }
+                        .font(.system(size: 11))
+                        .foregroundStyle(warning ? AnyShapeStyle(Color.orange) : AnyShapeStyle(.secondary))
+                    }
+                }
                 Spacer(minLength: 12)
                 if chevron {
                     if let trailing { Text(trailing).foregroundStyle(.secondary) }

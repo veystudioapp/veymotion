@@ -431,7 +431,7 @@ struct PublishView: View {
         if let e = publisher.providersError { return e }
         if !publisher.isConfigured(platform) {
             let key = "NITRO_SOCIAL_\(platform.rawValue.uppercased())"
-            return "\(platform.name) is not set up on the VeyMotion server yet: add \(key)_CLIENT_ID and \(key)_CLIENT_SECRET to server/.env, restart the server (cd server && bun run dev), then press Retry."
+            return "\(platform.name) is not set up on the Vey Motion server yet: add \(key)_CLIENT_ID and \(key)_CLIENT_SECRET to server/.env, restart the server (cd server && bun run dev), then press Retry."
         }
         return nil
     }

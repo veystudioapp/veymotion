@@ -45,10 +45,20 @@ public protocol ChatAgent: AnyObject {
 extension ClaudeCodeAgent: ChatAgent {}
 
 public enum AgentCLI {
+    /// Added to every `claude` process's environment (e.g. the user's `ANTHROPIC_API_KEY`). Read from any thread.
+    public static var extraEnvironment: [String: String] {
+        get { envLock.lock(); defer { envLock.unlock() }; return _extraEnvironment }
+        set { envLock.lock(); _extraEnvironment = newValue; envLock.unlock() }
+    }
+    private static var _extraEnvironment: [String: String] = [:]
+    private static let envLock = NSLock()
+
     /// Finds an executable: `$envVar`, `candidates`, PATH, then a login shell (`command -v`).
+    /// `$envVar=none` acts as if it were not installed (to test the setup screens).
     public static func locate(_ name: String, envVar: String, candidates: [String]) -> String? {
         let fm = FileManager.default
         let env = ProcessInfo.processInfo.environment
+        if env[envVar] == "none" { return nil }
         if let p = env[envVar], fm.isExecutableFile(atPath: p) { return p }
         let all = candidates + (env["PATH"] ?? "").split(separator: ":").map { "\($0)/\(name)" }
         if let found = all.first(where: { fm.isExecutableFile(atPath: $0) }) { return found }
@@ -181,6 +191,7 @@ public final class ClaudeCodeAgent {
         var env = ProcessInfo.processInfo.environment
         let basePath = env["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
         env["PATH"] = ([config.vmotionDirectory, basePath, "/opt/homebrew/bin", "/usr/local/bin"]).joined(separator: ":")
+        for (k, v) in AgentCLI.extraEnvironment { env[k] = v }
         for (k, v) in config.extraEnvironment { env[k] = v }
         p.environment = env
 
@@ -397,6 +408,7 @@ public final class ClaudeCodeAgent {
         p.currentDirectoryURL = workingDirectory
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = [env["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin", "/opt/homebrew/bin", "/usr/local/bin"].joined(separator: ":")
+        for (k, v) in AgentCLI.extraEnvironment { env[k] = v }
         p.environment = env
         let inPipe = Pipe(), outPipe = Pipe()
         p.standardInput = inPipe
@@ -462,6 +474,7 @@ public final class ClaudeCodeAgent {
         p.currentDirectoryURL = workingDirectory
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = [env["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin", "/opt/homebrew/bin", "/usr/local/bin"].joined(separator: ":")
+        for (k, v) in AgentCLI.extraEnvironment { env[k] = v }
         p.environment = env
         let inPipe = Pipe(), outPipe = Pipe(), errPipe = Pipe()
         p.standardInput = inPipe

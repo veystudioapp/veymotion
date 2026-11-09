@@ -56,8 +56,140 @@ struct ChatPanel: View {
             }
 
             Divider()
+            if chat.agentState != .ready {
+                AgentSetupCard()
+                Divider()
+            }
             ChatComposer()
         }
+    }
+}
+
+/// What to do when the chat's CLI is missing, logged out or was refused: install or log in through Terminal,
+/// paste an API key, check again, or switch to the other CLI.
+private struct AgentSetupCard: View {
+    @Environment(ChatStore.self) private var chat
+    @State private var enteringKey = false
+    @State private var key = ""
+
+    private var provider: AgentProvider { chat.provider }
+    private var other: AgentProvider { provider == .claude ? .codex : .claude }
+
+    var body: some View {
+        Group {
+            switch chat.agentState {
+            case .ready:
+                EmptyView()
+            case .checking:
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Checking \(provider.cliName)…").font(.caption).foregroundStyle(.secondary)
+                    Spacer(minLength: 0)
+                }
+            case .missing:
+                card(title: "\(provider.cliName) isn't installed",
+                     text: provider == .claude
+                        ? "The chat runs on Claude Code, with your Claude plan (Pro, Max, Ultra, Team, Enterprise), a Claude Console account or an Anthropic API key."
+                        : "The chat runs on the Codex CLI, with your ChatGPT plan or an OpenAI API key.",
+                     command: AgentSetup.installCommand(provider)) {
+                    Button("Install in Terminal") { chat.openSetupInTerminal(install: true) }
+                        .buttonStyle(.borderedProminent)
+                    checkAgain
+                }
+            case .loggedOut:
+                card(title: "Log in to \(provider.cliName)",
+                     text: "\(provider.cliName) is installed but not logged in. Log in with your "
+                        + (provider == .claude ? "Claude account" : "ChatGPT account") + ", or use an API key.") {
+                    loginButtons
+                }
+            case let .authFailed(detail):
+                card(title: "\(provider.cliName) couldn't sign in",
+                     text: "Its login or API key was refused or has expired. Log in again or use another API key.",
+                     detail: detail) {
+                    loginButtons
+                }
+            }
+        }
+        .padding(12)
+        .onChange(of: provider) { enteringKey = false; key = "" }
+    }
+
+    private func card<Buttons: View>(title: String, text: String, command: String? = nil, detail: String? = nil,
+                                     @ViewBuilder buttons: () -> Buttons) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                AgentLogo(provider: provider, size: 14)
+                Text(title).font(.callout.weight(.semibold))
+            }
+            Text(text).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            if let detail, !detail.isEmpty {
+                Text(detail.prefix(300)).font(.caption2.monospaced()).foregroundStyle(.tertiary)
+                    .lineLimit(3).textSelection(.enabled)
+            }
+            if let command {
+                Text(command).font(.caption.monospaced()).textSelection(.enabled)
+                    .padding(6).frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 5).fill(Color.primary.opacity(0.06)))
+            }
+            if enteringKey {
+                keyField
+            } else {
+                HStack(spacing: 8) { buttons() }.controlSize(.small)
+            }
+            if chat.agentStates[other] == .ready {
+                Button("Use \(other.displayName) instead") { chat.provider = other }
+                    .buttonStyle(.link).font(.caption)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.orange.opacity(0.08)))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.orange.opacity(0.25)))
+    }
+
+    @ViewBuilder private var loginButtons: some View {
+        Button("Log In in Terminal") { chat.openSetupInTerminal(install: false) }
+            .buttonStyle(.borderedProminent)
+        Button("Use API Key…") { enteringKey = true }
+        checkAgain
+        if provider == .claude, AnthropicKeyStore.hasKey {
+            Button("Forget Key") { chat.forgetAnthropicKey() }
+                .help("Remove the Anthropic API key saved in VeyMotion")
+        }
+    }
+
+    private var checkAgain: some View {
+        Button("Check Again") { chat.detect(provider) }
+            .help("VeyMotion also checks again when you come back from Terminal")
+    }
+
+    private var keyField: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            SecureField(provider == .claude ? "Anthropic API key (sk-ant-…)" : "OpenAI API key (sk-…)", text: $key)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit(save)
+            HStack(spacing: 8) {
+                Button("Save", action: save).buttonStyle(.borderedProminent)
+                    .disabled(key.trimmingCharacters(in: .whitespaces).isEmpty)
+                Button("Cancel") { enteringKey = false; key = "" }
+                Spacer(minLength: 0)
+                Link("Get a key", destination: URL(string: provider == .claude
+                    ? "https://platform.claude.com/settings/keys"
+                    : "https://platform.openai.com/api-keys")!)
+                    .font(.caption)
+            }
+            .controlSize(.small)
+            Text(provider == .claude
+                 ? "Kept in your Keychain and used instead of your Claude account login."
+                 : "Saved by the Codex CLI (`codex login --with-api-key`).")
+                .font(.caption2).foregroundStyle(.tertiary)
+        }
+    }
+
+    private func save() {
+        chat.useAPIKey(key)
+        key = ""
+        enteringKey = false
     }
 }
 

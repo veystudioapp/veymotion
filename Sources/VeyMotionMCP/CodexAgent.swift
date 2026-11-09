@@ -388,8 +388,10 @@ public final class CodexAgent: ChatAgent {
     /// Finds the `codex` executable: $VEYMOTION_CODEX, common install paths, PATH, then a login shell.
     public static func locateCodex() -> String? {
         let home = NSHomeDirectory()
+        // The official installer honors CODEX_INSTALL_DIR (default ~/.local/bin).
+        let custom = ProcessInfo.processInfo.environment["CODEX_INSTALL_DIR"].map { ["\($0)/codex"] } ?? []
         return AgentCLI.locate("codex", envVar: "VEYMOTION_CODEX",
-                               candidates: ["\(home)/.local/bin/codex", "/opt/homebrew/bin/codex",
+                               candidates: custom + ["\(home)/.local/bin/codex", "/opt/homebrew/bin/codex",
                                             "/usr/local/bin/codex", "\(home)/.npm-global/bin/codex"])
     }
 }

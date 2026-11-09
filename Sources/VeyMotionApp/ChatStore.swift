@@ -172,32 +172,158 @@ final class ChatStore {
         scene.onProjectChange = { [weak self] change in self?.projectChanged(change) }
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil,
                                                queue: .main) { [weak self] _ in self?.saveConversation() }
-        DispatchQueue.global(qos: .utility).async {
-            let path = ClaudeCodeAgent.locateClaude()
-            DispatchQueue.main.async { self.claudePath = path; self.checkSetup() }
-            guard let path, let models = ClaudeCodeAgent.supportedModels(
-                claudePath: path, workingDirectory: ClaudeCodeAgent.Config.defaultWorkingDirectory) else { return }
-            let mapped = models.map { m -> ClaudeCodeAgent.ModelInfo in
-                var m = m
-                if m.value == "default" { m.value = "" }
-                return m
+        // Back from Terminal (installing or logging in): look again at the CLIs that were not ready.
+        NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil,
+                                               queue: .main) { [weak self] _ in
+            guard let self else { return }
+            for p in AgentProvider.allCases where ![.ready, .checking].contains(self.agentStates[p] ?? .checking) {
+                self.detect(p)
             }
-            DispatchQueue.main.async { self.claudeModels = mapped }
         }
-        DispatchQueue.global(qos: .utility).async {
-            let path = CodexAgent.locateCodex()
-            DispatchQueue.main.async { self.codexPath = path; self.checkSetup() }
-            guard let path, let models = CodexAgent.supportedModels(
-                codexPath: path, workingDirectory: ClaudeCodeAgent.Config.defaultWorkingDirectory) else { return }
-            let all = Array(Set(models.flatMap(\.efforts)))
-            let efforts = Self.codexEfforts + all.filter { !Self.codexEfforts.contains($0) }.sorted()
-            let def = ClaudeCodeAgent.ModelInfo(value: "", resolvedModel: nil, displayName: "Default",
-                                                description: "Codex's default model", efforts: efforts)
-            DispatchQueue.main.async { self.codexModels = [def] + models }
+        if let key = AnthropicKeyStore.load() { AgentCLI.extraEnvironment["ANTHROPIC_API_KEY"] = key }
+        if vmotionDirectory == nil {
+            setupProblem = "The `vmotion` CLI was not found next to the app. Build everything with `swift build` (or `bash scripts/bundle.sh`)."
         }
+        for p in AgentProvider.allCases { detect(p) }
     }
 
     // MARK: - Setup
+
+    /// Where a chat CLI stands.
+    enum AgentState: Equatable {
+        case checking
+        /// Not found on this Mac.
+        case missing
+        /// Its status command says nobody is logged in: messages are not sent until that changes.
+        case loggedOut
+        /// A message was refused (bad or expired key/login). Sending still tries.
+        case authFailed(String)
+        case ready
+
+        var canSend: Bool { self == .ready || { if case .authFailed = self { return true }; return false }() }
+
+        /// Short status for the assistant picker (nil when ready).
+        var label: String? {
+            switch self {
+            case .checking: return "Checking…"
+            case .missing: return "Not installed"
+            case .loggedOut: return "Not logged in"
+            case .authFailed: return "Sign-in failed"
+            case .ready: return nil
+            }
+        }
+    }
+
+    private(set) var agentStates: [AgentProvider: AgentState] = [.claude: .checking, .codex: .checking]
+    var agentState: AgentState { agentStates[provider] ?? .checking }
+    @ObservationIgnored private var detecting: Set<AgentProvider> = []
+
+    /// Finds the CLI, asks whether it is logged in, then loads its models.
+    func detect(_ p: AgentProvider) {
+        guard detecting.insert(p).inserted else { return }
+        agentStates[p] = .checking
+        DispatchQueue.global(qos: .userInitiated).async {
+            let path = p == .claude ? ClaudeCodeAgent.locateClaude() : CodexAgent.locateCodex()
+            let login = path.map { AgentSetup.login(p, path: $0) }
+            DispatchQueue.main.async {
+                self.detecting.remove(p)
+                if p == .claude { self.claudePath = path } else { self.codexPath = path }
+                let state: AgentState = path == nil ? .missing : login == .loggedOut ? .loggedOut : .ready
+                self.agentStates[p] = state
+                guard let path, state == .ready else { return }
+                // A new login or install: the running process still has the old one.
+                if p == self.provider, self.agent != nil { if self.isBusy { self.needsRestart = true } else { self.restartAgent() } }
+                self.loadModels(p, path: path)
+            }
+        }
+    }
+
+    private func loadModels(_ p: AgentProvider, path: String) {
+        let work = ClaudeCodeAgent.Config.defaultWorkingDirectory
+        DispatchQueue.global(qos: .utility).async {
+            switch p {
+            case .claude:
+                guard let models = ClaudeCodeAgent.supportedModels(claudePath: path, workingDirectory: work) else { return }
+                let mapped = models.map { m -> ClaudeCodeAgent.ModelInfo in
+                    var m = m
+                    if m.value == "default" { m.value = "" }
+                    return m
+                }
+                DispatchQueue.main.async { self.claudeModels = mapped }
+            case .codex:
+                guard let models = CodexAgent.supportedModels(codexPath: path, workingDirectory: work) else { return }
+                let all = Array(Set(models.flatMap(\.efforts)))
+                let efforts = Self.codexEfforts + all.filter { !Self.codexEfforts.contains($0) }.sorted()
+                let def = ClaudeCodeAgent.ModelInfo(value: "", resolvedModel: nil, displayName: "Default",
+                                                    description: "Codex's default model", efforts: efforts)
+                DispatchQueue.main.async { self.codexModels = [def] + models }
+            }
+        }
+    }
+
+    /// Opens Terminal to install the current CLI (and log in), or just to log in.
+    func openSetupInTerminal(install: Bool) {
+        let p = provider
+        // An API key overrides the account login, so logging in means dropping the saved key.
+        if p == .claude, !install, AnthropicKeyStore.hasKey { forgetAnthropicKey() }
+        let commands = install ? AgentSetup.installScript(p) : AgentSetup.loginScript(p, path: p == .claude ? claudePath : codexPath)
+        do {
+            let url = try AgentSetup.terminalScript(named: install ? "Install \(p.cliName)" : "Log in to \(p.cliName)",
+                                                    commands: commands)
+            if !NSWorkspace.shared.open(url) { throw CocoaError(.fileReadUnknown) }
+        } catch {
+            append(.notice("Could not open Terminal. Run this in Terminal yourself:\n\(commands)", isError: true))
+        }
+    }
+
+    /// Uses an API key instead of an account: Claude gets it as `ANTHROPIC_API_KEY` (kept in the Keychain),
+    /// Codex stores it itself (`codex login --with-api-key`).
+    func useAPIKey(_ raw: String) {
+        let key = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { return }
+        switch provider {
+        case .claude:
+            do { try AnthropicKeyStore.save(key) } catch {
+                append(.notice(error.localizedDescription, isError: true))
+                return
+            }
+            AgentCLI.extraEnvironment["ANTHROPIC_API_KEY"] = key
+            detect(.claude) // restarts a running agent with the key
+        case .codex:
+            guard let path = codexPath else { return }
+            agentStates[.codex] = .checking
+            DispatchQueue.global(qos: .userInitiated).async {
+                let error = AgentSetup.codexLogin(apiKey: key, path: path)
+                DispatchQueue.main.async {
+                    if let error { self.append(.notice("Codex did not take the key: \(error)", isError: true)) }
+                    self.detect(.codex)
+                }
+            }
+        }
+    }
+
+    func forgetAnthropicKey() {
+        AnthropicKeyStore.delete()
+        AgentCLI.extraEnvironment["ANTHROPIC_API_KEY"] = nil
+        detect(.claude)
+    }
+
+    /// Error text from the CLI, explained when it is a login or billing problem (a refused login also brings up
+    /// the setup card).
+    private func explainFailure(_ text: String, details: String = "") -> String {
+        switch AgentSetup.classify(text + "\n" + details) {
+        case .auth?:
+            agentStates[provider] = .authFailed(text)
+            return "\(provider.cliName) could not sign in: its login or API key was refused or has expired.\n\(text)"
+        case .limit?:
+            let fix = provider == .claude
+                ? "Check your Claude plan's usage, or your Anthropic API credits."
+                : "Check your ChatGPT plan's usage, or your OpenAI API credits."
+            return "\(provider.cliName) is out of credits or hit a usage limit. \(fix)\n\(text)"
+        case nil:
+            return text
+        }
+    }
 
     private var vmotionDirectory: String? {
         let fm = FileManager.default
@@ -207,20 +333,7 @@ final class ChatStore {
         return dirs.first { fm.isExecutableFile(atPath: "\($0)/vmotion") }
     }
 
-    private func checkSetup() {
-        if provider == .claude, claudePath == nil {
-            setupProblem = "Claude Code (`claude`) was not found. Install it, run `claude` once in Terminal to log in, then reopen VeyMotion."
-        } else if provider == .codex, codexPath == nil {
-            setupProblem = "The Codex CLI (`codex`) was not found. Install it (`npm i -g @openai/codex` or `brew install codex`), run `codex login` in Terminal, then reopen VeyMotion."
-        } else if vmotionDirectory == nil {
-            setupProblem = "The `vmotion` CLI was not found next to the app. Build everything with `swift build` (or `bash scripts/bundle.sh`)."
-        } else {
-            setupProblem = nil
-        }
-    }
-
     private func makeAgent(resume: String?) -> ChatAgent? {
-        checkSetup()
         guard let dir = vmotionDirectory else { return nil }
         let work = ClaudeCodeAgent.Config.defaultWorkingDirectory
         let a: ChatAgent
@@ -259,8 +372,9 @@ final class ChatStore {
 
     // MARK: - Actions
 
+    /// Not while the CLI is missing, logged out or still being checked: the setup card says what to do.
     var canSend: Bool {
-        !isBusy && (!input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty)
+        !isBusy && agentState.canSend && (!input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty)
     }
 
     func send() {
@@ -514,6 +628,8 @@ final class ChatStore {
         return s
     }
 
+    private static let switchNoticePrefix = "Now chatting with "
+
     /// Switching CLIs: the old one's session is kept for when the user switches back.
     private func providerChanged(from old: AgentProvider) {
         UserDefaults.standard.set(provider.rawValue, forKey: "agent.provider")
@@ -526,9 +642,10 @@ final class ChatStore {
         model = UserDefaults.standard.string(forKey: Self.settingKey("model", provider)) ?? ""
         effort = UserDefaults.standard.string(forKey: Self.settingKey("effort", provider)) ?? ""
         needsRestart = false
-        checkSetup()
+        // Switching back and forth: keep only the latest of these notices.
+        if case let .notice(text, _)? = items.last?.kind, text.hasPrefix(Self.switchNoticePrefix) { items.removeLast() }
         if items.contains(where: { if case .user = $0.kind { return true }; return false }) {
-            append(.notice("Now chatting with \(provider.displayName). \(old.displayName) and \(provider.displayName) keep "
+            append(.notice("\(Self.switchNoticePrefix)\(provider.displayName). \(old.displayName) and \(provider.displayName) keep "
                            + "separate conversations: \(provider.displayName) does not see the messages above, but it sees the scene.",
                            isError: false))
         }
@@ -706,7 +823,10 @@ final class ChatStore {
             retriedFresh = false
             recordVersion()
             if isError {
-                append(.notice(result ?? "\(provider.cliName) reported an error.", isError: true))
+                append(.notice(explainFailure(result ?? "\(provider.cliName) reported an error.", details: stderrTail),
+                               isError: true))
+            } else if case .authFailed = agentState {
+                agentStates[provider] = .ready // signed in again
             }
             var parts: [String] = []
             if let ms { parts.append(String(format: "%.1fs", Double(ms) / 1000)) }
@@ -746,7 +866,8 @@ final class ChatStore {
             recordVersion()
             if !stoppedByUser && (code != 0 || wasBusy) {
                 let detail = stderrTail.trimmingCharacters(in: .whitespacesAndNewlines)
-                append(.notice("\(provider.cliName) exited (code \(code)).\(detail.isEmpty ? "" : "\n" + detail)", isError: true))
+                append(.notice(explainFailure("\(provider.cliName) exited (code \(code)).\(detail.isEmpty ? "" : "\n" + detail)"),
+                               isError: true))
             }
         }
     }
