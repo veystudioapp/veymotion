@@ -74,6 +74,12 @@ struct ContentView: View {
         }
         .toolbar {
             ToolbarItem(placement: .navigation) {
+                Button { store.showProjects = true } label: {
+                    Label("Projects", systemImage: "square.grid.2x2")
+                }
+                .help("Back to Projects (⇧⌘P)")
+            }
+            ToolbarItem(placement: .navigation) {
                 Button { withAnimation(.easeOut(duration: 0.2)) { showSidebar.toggle() } } label: {
                     Label("Layers & Assets", systemImage: "sidebar.left")
                 }

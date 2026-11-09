@@ -53,6 +53,15 @@ struct ChatPanel: View {
                 .onChange(of: chat.scrollToken) { _, _ in
                     withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo("bottom", anchor: .bottom) }
                 }
+                // The editor (and this panel) is created after the project's transcript loads, so its scroll
+                // request is missed; start at the latest message. The lazy stack only estimates rows it has not
+                // drawn, so the first jump lands short: repeat once the rows near the bottom are measured.
+                .task {
+                    for ms in [0, 60, 200] {
+                        guard (try? await Task.sleep(for: .milliseconds(ms))) != nil else { return }
+                        proxy.scrollTo("bottom", anchor: .bottom)
+                    }
+                }
             }
 
             Divider()
