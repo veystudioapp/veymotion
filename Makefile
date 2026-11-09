@@ -1,4 +1,4 @@
-.PHONY: build run bundle dmg clean
+.PHONY: build run bundle dmg release clean
 
 build:
 	swift build
@@ -11,6 +11,9 @@ bundle:
 
 dmg: bundle
 	bash scripts/dmg.sh
+
+release:
+	bash scripts/release.sh
 
 clean:
 	rm -rf .build dist

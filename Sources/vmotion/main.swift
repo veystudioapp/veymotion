@@ -12,6 +12,7 @@ EDIT A SCENE (talks to the running VeyMotion app, or edits a file with --scene)
                                                   (or set VEYMOTION_SCENE=file.json instead of --scene)
   vmotion tools                                   List commands and their arguments
   vmotion docs                                    Scene format reference
+  vmotion --version                               Print the version
 
 FILES
   vmotion sample <scene.json>                     Write the demo scene
@@ -146,6 +147,9 @@ args.removeFirst()
 switch command {
 case "help", "--help", "-h":
     print(usage)
+
+case "version", "--version", "-v":
+    print("vmotion \(AppVersion.current)")
 
 case "tools":
     print(ToolCatalog.cliUsage)

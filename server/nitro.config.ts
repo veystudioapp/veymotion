@@ -23,5 +23,8 @@ export default defineConfig({
       facebook: { clientId: "", clientSecret: "", scopes: "" },
       x: { clientId: "", clientSecret: "", scopes: "" },
     },
+    // App updates (server/utils/releases.ts). Overridden by NITRO_UPDATES_REPO ("owner/name"),
+    // NITRO_UPDATES_GITHUB_TOKEN (private repos) and NITRO_UPDATES_MINIMUM_SYSTEM_VERSION.
+    updates: { repo: "", githubToken: "", minimumSystemVersion: "14.0" },
   },
 });

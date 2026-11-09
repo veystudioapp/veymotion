@@ -25,6 +25,17 @@ struct VeyMotionApp: App {
                 .frame(minWidth: 1180, minHeight: 720)
         }
         .commands {
+            CommandGroup(replacing: .appInfo) {
+                Button("About Vey Motion") {
+                    NSApp.orderFrontStandardAboutPanel(options: [
+                        .applicationName: "Vey Motion",
+                        .applicationVersion: AppVersion.current,
+                        .version: AppVersion.build ?? "dev",
+                    ])
+                    NSApp.activate(ignoringOtherApps: true)
+                }
+                Button("Check for Updates…") { Updater.shared.check(userInitiated: true) }
+            }
             CommandGroup(replacing: .newItem) {
                 Button("Projects…") { store.showProjects = true }.keyboardShortcut("p", modifiers: [.command, .shift])
                 Button("New Project…") { store.showNewProject = true }.keyboardShortcut("n", modifiers: [.command, .shift])
@@ -124,6 +135,9 @@ struct VeyMotionApp: App {
                 Button("Purge Frame Cache") { FrameCache.shared.purge() }
             }
         }
+        Settings {
+            SettingsView()
+        }
     }
 }
 
@@ -135,6 +149,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         SceneStore.shared.startMCP()
         installSpaceToPlay()
         installClickOutsideToBlur()
+        Updater.shared.start()
     }
 
     /// AppKit only moves focus when the clicked view accepts first responder, so clicking the canvas,
@@ -175,5 +190,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         SceneStore.shared.shutdown()
+        Updater.shared.installOnQuit()
     }
 }

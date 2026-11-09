@@ -15,6 +15,23 @@ open "dist/Vey Motion.app"
 
 Requires macOS 14+. The Claude chat needs [Claude Code](https://claude.com/claude-code) installed and logged in.
 
+### Versions and updates
+
+The version is `AppVersion.marketing` in `Sources/VeyMotionCore/AppVersion.swift` (`bundle.sh` writes it into
+Info.plist, with the commit count as the build number). It shows in About, Settings (⌘,) and
+`vmotion --version`.
+
+The app checks `GET /api/app/latest` on the server (`BASE_API_URL`) shortly after launch and every 6 hours. A newer
+version is downloaded in the background, verified, and installed when the app quits (or right away with
+**Restart to Update** in the toolbar). Both can be turned off in Settings → Updates; **Check for Updates…** is in the
+app menu. Only a bundled app in a folder you can write to (e.g. `/Applications`) replaces itself; `swift run` builds and
+copies running from a disk image just offer the download.
+
+To publish a version: bump `AppVersion.marketing`, commit, then `bash scripts/release.sh [notes.md]` (needs `gh`). It
+uploads `VeyMotion-<version>-mac.zip` (what the updater installs) and a DMG to the GitHub release `v<version>`. The
+server reads releases from `NITRO_UPDATES_REPO=owner/name`; for a private repo also set `NITRO_UPDATES_GITHUB_TOKEN`
+(read access), and downloads go through `/api/app/download/:id`.
+
 ## Claude chat inside the app (no MCP needed)
 
 Open the **Claude** tab (⌘L) on the right and describe what you want. Under the hood:
@@ -159,7 +176,7 @@ While the app is open it serves MCP at `http://127.0.0.1:19790/mcp` (localhost o
 claude mcp add --transport http veymotion http://127.0.0.1:19790/mcp
 ```
 
-(The status bar has a button that copies this command.) Then ask, e.g.:
+(Help → Copy Claude Code MCP Command copies this command.) Then ask, e.g.:
 *"Make a 6-second explainer: title, three stats that pop in one by one, end card. Check frames before finishing."*
 
 Agent edits show up live and can be undone with ⌘Z (they're labelled "Agent: …" in the Edit menu).

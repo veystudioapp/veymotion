@@ -55,7 +55,7 @@ Frame annotation (`Annotations.swift`, ⇧⌘A or the pencil in the transport ba
 over the canvas (UI-only, never in the scene), and "Add to chat" renders the frame + marks to a JPEG attachment whose
 `note` tells the agent what it is. While active, the menu's Undo/Redo/Delete act on the marks and Space does not play.
 
-**UI layout.** `ContentView` is an `HSplitView` (sidebar: Layers/Assets · canvas + `TransportBar` · Inspector/Claude) over the timeline and status bar; panel visibility and tabs persist in `@AppStorage`. Shared inspector building blocks (`InspectorSection`, `NumberField`, `AnimField`, `AnimSlider`, `KeyframeButton`, `PanelTabBar`) live in `EditorChrome.swift` — reuse them for new properties.
+**UI layout.** `ContentView` is an `HSplitView` (sidebar: Layers/Assets · canvas + `TransportBar` · Inspector/Claude) over the timeline (the `StatusBar` view is not shown); panel visibility and tabs persist in `@AppStorage`. Shared inspector building blocks (`InspectorSection`, `NumberField`, `AnimField`, `AnimSlider`, `KeyframeButton`, `PanelTabBar`) live in `EditorChrome.swift` — reuse them for new properties.
 
 **One renderer.** `FrameRenderer` (CoreGraphics + CoreText) is used for the canvas preview, `render_frame`, and `VideoExporter` (AVAssetWriter; `.mp4` = H.264, `.mov` = ProRes 4444 with alpha), so preview matches export. The canvas renders on a background queue (`PreviewRenderer` in `ContentView.swift`, latest request wins) and at most 1.5 px/pt while playing. `FrameCache` (`FrameCache.swift`) is the RAM preview: frames at that playback size keyed by `sceneRevision` + pixel width + a generation (bumped on asset changes and `didAnalyze`), filled by the canvas's own renders and, after 0.5 s idle, by background workers (one `FrameRenderer` each, from the playhead; paused while exporting); budget ¼ of RAM ≤ 4 GB, purged on memory pressure, green strip on the ruler and mini scrubber. Playback advances `store.time` in whole frames; inspector and timeline values read `store.panelTime` (held while playing) so they don't re-render every frame — only the canvas, transport and playhead follow `store.time`.
 
@@ -198,4 +198,11 @@ over the canvas (UI-only, never in the scene), and "Add to chat" renders the fra
   `maxDuration: 0`. `SoundSynth` renders `SynthKind`s deterministically (seeded by kind + variant) to a 16-bit WAV
   named by a settings hash and reports exact hit times. Files are written to a `.part` and moved, never `.atomic`
   (that stages in the system temp folder, which sandboxed processes cannot use).
+- Version and updates: `AppVersion.marketing` (Core) is the only place the version is written; `bundle.sh` and
+  `release.sh` read it with sed. `Updater` (app) polls `AppRelease.latest()` (`/api/app/latest`, served from GitHub
+  Releases by `server/server/utils/releases.ts`), stages the zip under Application Support/VeyMotion/updates
+  (checks bundle id, version, `codesign --verify`, SHA-256 from the asset digest), and `installOnQuit` (called from
+  `applicationWillTerminate`, after `SceneStore.shutdown`) starts a detached `/bin/sh` that waits for the pid, swaps
+  the bundle and optionally reopens it. `installBlockedReason` covers `swift run`, App Translocation, disk images and
+  unwritable folders.
 - Layer ids are unique: `addLayer` / `duplicateLayer` auto-suffix them (`title-2`), and renaming to a taken id throws.

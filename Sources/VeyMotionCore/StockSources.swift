@@ -530,7 +530,7 @@ enum HTTP {
 
     static func request(_ url: URL, timeout: TimeInterval) -> URLRequest {
         var r = URLRequest(url: url, timeoutInterval: timeout)
-        r.setValue("VeyMotion/0.1 (macOS motion graphics editor)", forHTTPHeaderField: "User-Agent")
+        r.setValue("VeyMotion/\(AppVersion.marketing) (macOS motion graphics editor)", forHTTPHeaderField: "User-Agent")
         return r
     }
 

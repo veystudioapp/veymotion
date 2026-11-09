@@ -70,7 +70,6 @@ struct ContentView: View {
                 ResizeHandle(height: $timelineHeight, range: 140...700)
                 TimelinePanel().frame(height: timelineHeight)
             }
-            StatusBar()
         }
         .toolbar {
             ToolbarItem(placement: .navigation) {
@@ -86,6 +85,7 @@ struct ContentView: View {
                 .help("Show or hide Layers & Assets (⌃⌘S)")
             }
             ToolbarItemGroup(placement: .primaryAction) {
+                UpdateToolbarButton()
                 addMenu
                 Button {
                     let a = AnnotationStore.shared
