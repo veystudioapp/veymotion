@@ -8,8 +8,9 @@ struct VeyMotionApp: App {
     @State private var store = SceneStore.shared
     @State private var chat = ChatStore.shared
     @State private var annotations = AnnotationStore.shared
-    @AppStorage("showSidebar") private var showSidebar = true
+    @AppStorage("ui.showSidebar") private var showSidebar = false
     @AppStorage("showInspector") private var showInspector = true
+    @AppStorage("ui.rightPanelTab") private var rightTab: RightPanelTab = .claude
     @AppStorage("showTimeline") private var showTimeline = false
 
     init() {
@@ -68,8 +69,11 @@ struct VeyMotionApp: App {
             CommandGroup(after: .sidebar) {
                 Button(showSidebar ? "Hide Layers & Assets" : "Show Layers & Assets") { showSidebar.toggle() }
                     .keyboardShortcut("s", modifiers: [.control, .command])
-                Button(showInspector ? "Hide Inspector" : "Show Inspector") { showInspector.toggle() }
+                Button(showInspector ? "Hide Chat & Inspector" : "Show Chat & Inspector") { showInspector.toggle() }
                     .keyboardShortcut("i", modifiers: [.option, .command])
+                Button("Show Chat") { showInspector = true; rightTab = .claude }
+                    .keyboardShortcut("l")
+                Button("Show Inspector") { showInspector = true; rightTab = .inspector }
                 Button(showTimeline ? "Hide Timeline" : "Show Timeline") { showTimeline.toggle() }
                     .keyboardShortcut("t", modifiers: [.control, .command])
             }
@@ -97,6 +101,13 @@ struct VeyMotionApp: App {
                         .keyboardShortcut(.delete).disabled(annotations.items.isEmpty)
                 } else {
                     Button("Delete") { store.deleteSelected() }.keyboardShortcut(.delete).disabled(store.selection == nil)
+                }
+            }
+            CommandGroup(after: .help) {
+                Button("Copy Claude Code MCP Command") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(store.claudeCommand, forType: .string)
+                    store.message = "Copied: \(store.claudeCommand)"
                 }
             }
             // Shortcuts all use ⌘ so they never steal keystrokes from text fields.

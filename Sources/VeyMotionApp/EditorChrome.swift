@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import VeyMotionCore
+import VeyMotionMCP
 
 // Shared building blocks for the editor's panels: tab bars, collapsible sections and compact fields.
 
@@ -41,6 +42,24 @@ struct ClaudeLogo: View {
     }
 }
 
+/// The logo of the CLI that runs the chat (Codex gets a plain symbol: the app embeds no OpenAI artwork).
+struct AgentLogo: View {
+    var provider: AgentProvider
+    var size: CGFloat = 14
+
+    var body: some View {
+        switch provider {
+        case .claude:
+            ClaudeLogo(size: size)
+        case .codex:
+            Image(systemName: "chevron.left.forwardslash.chevron.right")
+                .font(.system(size: size * 0.75, weight: .semibold))
+                .frame(width: size, height: size)
+                .accessibilityLabel("Codex")
+        }
+    }
+}
+
 enum LeftPanelTab: String, PanelTab {
     case layers = "Layers", assets = "Assets"
     var title: String { self == .layers ? "Layers" : "Assets" }
@@ -49,7 +68,7 @@ enum LeftPanelTab: String, PanelTab {
 
 enum RightPanelTab: String, PanelTab {
     case inspector = "Inspector", claude = "Claude"
-    var title: String { self == .inspector ? "Inspector" : "Claude" }
+    var title: String { self == .inspector ? "Inspector" : ChatStore.shared.provider.displayName }
     var icon: String { self == .inspector ? "slider.horizontal.3" : "sparkles" }
     var isClaude: Bool { self == .claude }
 }
@@ -66,7 +85,7 @@ struct PanelTabBar<Tab: PanelTab>: View {
                     Label {
                         Text(tab.title)
                     } icon: {
-                        if tab.isClaude { ClaudeLogo(size: 13) } else { Image(systemName: tab.icon) }
+                        if tab.isClaude { AgentLogo(provider: ChatStore.shared.provider, size: 13) } else { Image(systemName: tab.icon) }
                     }
                         .font(.callout.weight(on ? .semibold : .regular))
                         .foregroundStyle(on ? Color.primary : Color.secondary)

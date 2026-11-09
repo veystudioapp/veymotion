@@ -24,7 +24,7 @@ struct ChatComposer: View {
             }
             ZStack(alignment: .topLeading) {
                 if chat.input.isEmpty {
-                    Text("Ask Claude to animate something…")
+                    Text("Ask \(chat.provider.displayName) to animate something…")
                         .font(.system(size: 13))
                         .foregroundStyle(.tertiary)
                         .allowsHitTesting(false)
@@ -99,7 +99,7 @@ struct ChatComposer: View {
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
         panel.allowedContentTypes = [.image]
-        panel.message = "Choose images to send to Claude"
+        panel.message = "Choose images to send to \(chat.provider.displayName)"
         guard panel.runModal() == .OK else { return }
         for url in panel.urls { chat.attachImage(file: url) }
     }
@@ -114,7 +114,7 @@ private struct ModelPickerButton: View {
     var body: some View {
         Button { open.toggle() } label: {
             HStack(spacing: 5) {
-                ClaudeLogo(size: 14)
+                AgentLogo(provider: chat.provider, size: 14)
                 Text(chat.modelEfforts.isEmpty || chat.effort.isEmpty
                      ? chat.modelLabel : "\(chat.modelLabel) · \(ModelPicker.effortName(chat.effort))")
                 Image(systemName: "chevron.down")
@@ -129,14 +129,14 @@ private struct ModelPickerButton: View {
         .buttonStyle(.plain)
         .onHover { hover = $0 }
         .disabled(chat.isBusy)
-        .help("Model and effort")
+        .help("Assistant, model and effort")
         .popover(isPresented: $open, arrowEdge: .top) {
             ModelPicker(close: { open = false })
         }
     }
 }
 
-/// Popover: the main models (with 1–9 shortcuts), then Effort ›, then More models ›.
+/// Popover: Claude or Codex, the main models (with 1–9 shortcuts), then Effort ›, then More models ›.
 private struct ModelPicker: View {
     @Environment(ChatStore.self) private var chat
     var close: () -> Void
@@ -152,12 +152,15 @@ private struct ModelPicker: View {
         }
     }
 
-    /// Aliases (`opus`, `sonnet`…) up top; `Default` and pinned versions under More models.
+    /// Claude: aliases (`opus`, `sonnet`…) up top; `Default` and pinned versions under More models.
+    /// Codex: every listed model, after `Default`.
     private var mainModels: [ClaudeCodeAgent.ModelInfo] {
-        chat.models.filter { !$0.value.isEmpty && !$0.value.hasPrefix("claude-") }
+        guard chat.provider == .claude else { return chat.models }
+        return chat.models.filter { !$0.value.isEmpty && !$0.value.hasPrefix("claude-") }
     }
     private var moreModels: [ClaudeCodeAgent.ModelInfo] {
-        chat.models.filter { $0.value.isEmpty || $0.value.hasPrefix("claude-") }
+        guard chat.provider == .claude else { return [] }
+        return chat.models.filter { $0.value.isEmpty || $0.value.hasPrefix("claude-") }
     }
 
     /// "Default" is checked on the model it resolves to as well, so the main list always shows one tick.
@@ -171,6 +174,13 @@ private struct ModelPicker: View {
         VStack(alignment: .leading, spacing: 2) {
             switch page {
             case .main:
+                header("Assistant")
+                ForEach(AgentProvider.allCases, id: \.self) { p in
+                    row(p.displayName, help: "Run the chat with \(p.cliName)", checked: chat.provider == p) {
+                        chat.provider = p // stays open so a model can be picked next
+                    }
+                }
+                Divider().padding(.vertical, 4)
                 header("Model · this session")
                 ForEach(Array(mainModels.enumerated()), id: \.element.value) { i, m in
                     row(m.displayName, help: m.description, checked: isSelected(m, inMain: true),

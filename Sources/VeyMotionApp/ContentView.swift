@@ -6,9 +6,11 @@ struct ContentView: View {
     @Environment(SceneStore.self) private var store
     @State private var showVoice = false
     @State private var showSoundEffect = false
-    @AppStorage("rightPanelTab") private var rightTab: RightPanelTab = .inspector
+    // Simple layout by default: canvas + chat. Layers/Assets, the Inspector and the timeline are one click away.
+    // (New keys, so existing installs get the simple layout once.)
+    @AppStorage("ui.rightPanelTab") private var rightTab: RightPanelTab = .claude
     @AppStorage("leftPanelTab") private var leftTab: LeftPanelTab = .layers
-    @AppStorage("showSidebar") private var showSidebar = true
+    @AppStorage("ui.showSidebar") private var showSidebar = false
     @AppStorage("showInspector") private var showInspector = true
     @AppStorage("timelineHeight") private var timelineHeight: Double = 240
     /// Hidden by default: most editing goes through Claude, so the canvas gets the space.
@@ -48,7 +50,10 @@ struct ContentView: View {
                 .frame(minWidth: 420, maxWidth: .infinity)
                 if showInspector {
                     VStack(spacing: 0) {
-                        PanelTabBar(selection: $rightTab)
+                        HStack(spacing: 0) {
+                            PanelTabBar(selection: $rightTab)
+                            if rightTab == .claude { ChatHeaderButtons().padding(.trailing, 12) }
+                        }
                         Divider()
                         // Keep both alive so switching tabs does not reset the chat's scroll position or draft.
                         ZStack {
@@ -65,7 +70,6 @@ struct ContentView: View {
                 ResizeHandle(height: $timelineHeight, range: 140...700)
                 TimelinePanel().frame(height: timelineHeight)
             }
-            Divider()
             StatusBar()
         }
         .toolbar {
@@ -86,18 +90,6 @@ struct ContentView: View {
                 }
                 .help("Pause and mark up this frame, then send it to Claude (⇧⌘A)")
                 .keyboardShortcut("a", modifiers: [.command, .shift])
-                Button {
-                    if showInspector && rightTab == .claude {
-                        rightTab = .inspector
-                    } else {
-                        withAnimation(.easeOut(duration: 0.2)) { showInspector = true }
-                        rightTab = .claude
-                    }
-                } label: {
-                    Label { Text("Claude") } icon: { ClaudeLogo(size: 16) }
-                }
-                .help("Chat with Claude (⌘L)")
-                .keyboardShortcut("l")
                 Menu {
                     Button("Export Video…") { store.exportVideo() }
                     Button("Publish…") { store.showPublish = true }
@@ -106,9 +98,9 @@ struct ContentView: View {
                 }
                 .help("Export or publish the video (⌘E)")
                 Button { withAnimation(.easeOut(duration: 0.2)) { showInspector.toggle() } } label: {
-                    Label("Inspector", systemImage: "sidebar.right")
+                    Label("Chat & Inspector", systemImage: "sidebar.right")
                 }
-                .help("Show or hide the Inspector (⌥⌘I)")
+                .help("Show or hide Chat & Inspector (⌥⌘I)")
             }
         }
         .navigationTitle(store.project?.lastPathComponent ?? store.fileURL?.deletingPathExtension().lastPathComponent ?? "Untitled")
@@ -411,29 +403,21 @@ struct TransportBar: View {
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(.secondary)
                 Spacer()
-                Text("\(s.width)×\(s.height) · \(s.fps) fps")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
                 Button { withAnimation(.easeOut(duration: 0.2)) { showTimeline.toggle() } } label: {
                     Image(systemName: showTimeline ? "chevron.down" : "chevron.up")
                 }
                 .help(showTimeline ? "Hide the Timeline (⌃⌘T)" : "Show the Timeline (⌃⌘T)")
             }
+            // Frame stepping stays on ⌘← / ⌘→ (Playback menu).
             HStack(spacing: 16) {
                 Button { store.seek(0) } label: { Image(systemName: "backward.end.fill") }
                     .help("Go to start (⇧⌘←)")
-                Button { store.step(frames: -1) } label: { Image(systemName: "backward.frame.fill") }
-                    .help("Previous frame (⌘←)")
                 Button { store.togglePlay() } label: {
                     Image(systemName: store.isPlaying ? "pause.fill" : "play.fill")
                         .font(.title3)
                         .frame(width: 22)
                 }
-                .help("Play / pause (⌘↩)")
-                Button { store.step(frames: 1) } label: { Image(systemName: "forward.frame.fill") }
-                    .help("Next frame (⌘→)")
-                Button { store.seek(s.duration) } label: { Image(systemName: "forward.end.fill") }
-                    .help("Go to end")
+                .help("Play / pause (Space)")
             }
         }
         .buttonStyle(.borderless)
@@ -553,12 +537,42 @@ struct LayerListView: View {
 
 // MARK: - Status
 
+/// Shown only when there is something to say: an export, a recent message, or an agent connection problem.
+/// Messages and agent actions fade after a few seconds.
 struct StatusBar: View {
     @Environment(SceneStore.self) private var store
 
+    private var agentsOK: Bool { store.controlStatus == "Ready" && store.mcpStatus.hasPrefix("Listening") }
+
+    private var isEmpty: Bool {
+        agentsOK && store.lastAgentAction == nil && store.exportProgress == nil && store.message == nil
+            && !(store.exportResultUnseen && store.exportResult != nil)
+    }
+
     var body: some View {
+        Group {
+            if !isEmpty {
+                VStack(spacing: 0) {
+                    Divider()
+                    bar
+                }
+            }
+        }
+        .task(id: store.message) {
+            guard let m = store.message else { return }
+            try? await Task.sleep(for: .seconds(8))
+            if store.message == m { store.message = nil }
+        }
+        .task(id: store.lastAgentAction) {
+            guard let a = store.lastAgentAction else { return }
+            try? await Task.sleep(for: .seconds(8))
+            if store.lastAgentAction == a { store.lastAgentAction = nil }
+        }
+    }
+
+    private var bar: some View {
         HStack(spacing: 10) {
-            AgentStatusButton()
+            if !agentsOK { AgentStatusButton() }
             if let action = store.lastAgentAction {
                 Text(action).foregroundStyle(.secondary).lineLimit(1)
             }

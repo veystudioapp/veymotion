@@ -15,7 +15,62 @@ public enum AgentEvent {
     case toolResult(toolUseId: String, output: String, isError: Bool, image: Data?)
     case turnFinished(isError: Bool, result: String?, costUSD: Double?, durationMs: Int?)
     case stderr(String)
+    /// The saved session could not be resumed (sent before `exited`); the chat starts a fresh one.
+    case resumeFailed
     case exited(code: Int32)
+}
+
+/// The coding-agent CLIs the chat can run.
+public enum AgentProvider: String, CaseIterable, Codable {
+    case claude, codex
+
+    public var displayName: String { self == .claude ? "Claude" : "Codex" }
+    /// The CLI's name, for setup and error messages.
+    public var cliName: String { self == .claude ? "Claude Code" : "Codex CLI" }
+}
+
+/// A chat agent backed by a CLI (`ClaudeCodeAgent`, `CodexAgent`). Events arrive on a background queue.
+public protocol ChatAgent: AnyObject {
+    var onEvent: ((AgentEvent) -> Void)? { get set }
+    /// The session the next `send` continues (nil = a new one).
+    var sessionId: String? { get }
+    var isRunning: Bool { get }
+    func send(_ text: String, images: [ClaudeCodeAgent.ImageAttachment]) throws
+    /// Interrupts the current turn. The session can be resumed.
+    func stop()
+    /// Forgets the session; the next `send` starts a fresh conversation.
+    func reset()
+}
+
+extension ClaudeCodeAgent: ChatAgent {}
+
+public enum AgentCLI {
+    /// Finds an executable: `$envVar`, `candidates`, PATH, then a login shell (`command -v`).
+    public static func locate(_ name: String, envVar: String, candidates: [String]) -> String? {
+        let fm = FileManager.default
+        let env = ProcessInfo.processInfo.environment
+        if let p = env[envVar], fm.isExecutableFile(atPath: p) { return p }
+        let all = candidates + (env["PATH"] ?? "").split(separator: ":").map { "\($0)/\(name)" }
+        if let found = all.first(where: { fm.isExecutableFile(atPath: $0) }) { return found }
+
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        p.arguments = ["-lc", "command -v \(name)"]
+        let out = Pipe()
+        p.standardOutput = out
+        p.standardError = Pipe()
+        guard (try? p.run()) != nil else { return nil }
+        p.waitUntilExit()
+        let path = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return fm.isExecutableFile(atPath: path) ? path : nil
+    }
+
+    /// PATH for a CLI child process: `first` folders, the inherited PATH, then Homebrew's.
+    static func path(first: [String]) -> String {
+        let base = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
+        return (first + [base, "/opt/homebrew/bin", "/usr/local/bin"]).joined(separator: ":")
+    }
 }
 
 /// Runs Claude Code headless (`claude -p` with stream-json in/out), restricted to the `vmotion`
@@ -463,25 +518,9 @@ public final class ClaudeCodeAgent {
 
     /// Finds the `claude` executable: $VEYMOTION_CLAUDE, common install paths, PATH, then a login shell.
     public static func locateClaude() -> String? {
-        let fm = FileManager.default
-        let env = ProcessInfo.processInfo.environment
-        if let p = env["VEYMOTION_CLAUDE"], fm.isExecutableFile(atPath: p) { return p }
         let home = NSHomeDirectory()
-        var candidates = ["\(home)/.local/bin/claude", "\(home)/.claude/local/claude",
-                          "/opt/homebrew/bin/claude", "/usr/local/bin/claude"]
-        candidates += (env["PATH"] ?? "").split(separator: ":").map { "\($0)/claude" }
-        if let found = candidates.first(where: { fm.isExecutableFile(atPath: $0) }) { return found }
-
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        p.arguments = ["-lc", "command -v claude"]
-        let out = Pipe()
-        p.standardOutput = out
-        p.standardError = Pipe()
-        guard (try? p.run()) != nil else { return nil }
-        p.waitUntilExit()
-        let path = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return fm.isExecutableFile(atPath: path) ? path : nil
+        return AgentCLI.locate("claude", envVar: "VEYMOTION_CLAUDE",
+                               candidates: ["\(home)/.local/bin/claude", "\(home)/.claude/local/claude",
+                                            "/opt/homebrew/bin/claude", "/usr/local/bin/claude"])
     }
 }

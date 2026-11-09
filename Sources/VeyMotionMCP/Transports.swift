@@ -174,3 +174,30 @@ public enum MCPStdioTransport {
         FileHandle.standardOutput.write(data)
     }
 }
+
+/// MCP over stdio for the running app: each request is forwarded to the control socket (`vmotion mcp` without a
+/// scene file). Lets MCP clients that cannot use the HTTP server, such as the embedded Codex agent, edit the open scene.
+public enum MCPSocketBridge {
+    public static func run(path: String = ControlSocket.defaultPath) {
+        while let line = readLine(strippingNewline: true) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty else { continue }
+            guard let msg = (try? JSONSerialization.jsonObject(with: Data(trimmed.utf8))) as? [String: Any] else {
+                MCPStdioTransport.write(MCPServer.error(nil, code: -32700, "Parse error"))
+                continue
+            }
+            guard let id = msg["id"] else { continue } // notifications need no answer (the server ignores them)
+            do {
+                MCPStdioTransport.write(try ControlSocketClient.send(msg, path: path))
+            } catch {
+                let text = "VeyMotion is not running (\(error.localizedDescription)). Open the app and try again."
+                if msg["method"] as? String == "tools/call" {
+                    MCPStdioTransport.write(["jsonrpc": "2.0", "id": id,
+                                             "result": ["content": [["type": "text", "text": text]], "isError": true]])
+                } else {
+                    MCPStdioTransport.write(MCPServer.error(id, code: -32000, text))
+                }
+            }
+        }
+    }
+}

@@ -575,7 +575,7 @@ struct AnnotationToolbar: View {
     @Environment(SceneStore.self) private var store
     let annotations: AnnotationStore
     let unit: Double
-    @AppStorage("rightPanelTab") private var rightTab: RightPanelTab = .inspector
+    @AppStorage("ui.rightPanelTab") private var rightTab: RightPanelTab = .claude
     @AppStorage("showInspector") private var showInspector = true
     @State private var showColors = false
     @State private var showWidths = false

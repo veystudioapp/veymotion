@@ -4,10 +4,11 @@ import Observation
 import VeyMotionCore
 import VeyMotionMCP
 
-/// State of the embedded Claude Code chat. Claude edits the scene through the `vmotion` CLI,
-/// which reaches `SceneStore` over the control socket, so every agent change is live and undoable.
+/// State of the embedded chat, run by Claude Code or the Codex CLI (`provider`). Claude edits the scene through the
+/// `vmotion` CLI, Codex through `vmotion mcp`; both reach `SceneStore` over the control socket, so every agent change
+/// is live and undoable.
 ///
-/// Each project has its own conversation (transcript and Claude session), saved in the project folder
+/// Each project has its own conversation (transcript, plus one session per provider), saved in the project folder
 /// (`ProjectStore.chatURL`). Loose scenes share one in-memory conversation.
 @Observable
 final class ChatStore {
@@ -56,9 +57,29 @@ final class ChatStore {
         .init(value: "haiku", resolvedModel: nil, displayName: "Haiku", description: "", efforts: []),
     ]
     static let efforts = ["low", "medium", "high", "xhigh", "max"]
+    /// Used until (or if) `codex debug models` has answered.
+    static let codexFallbackModels: [ClaudeCodeAgent.ModelInfo] = [
+        .init(value: "", resolvedModel: nil, displayName: "Default", description: "", efforts: codexEfforts),
+    ]
+    static let codexEfforts = ["low", "medium", "high", "xhigh"]
+
+    /// Which CLI runs the chat. Each keeps its own model, effort and session.
+    var provider: AgentProvider = ChatStore.savedProvider {
+        didSet { if provider != oldValue { providerChanged(from: oldValue) } }
+    }
+    private static var savedProvider: AgentProvider {
+        AgentProvider(rawValue: UserDefaults.standard.string(forKey: "agent.provider") ?? "") ?? .claude
+    }
+    /// UserDefaults key of a per-provider setting (Claude keeps the original keys).
+    private static func settingKey(_ name: String, _ provider: AgentProvider) -> String {
+        provider == .claude ? "agent.\(name)" : "agent.\(provider.rawValue).\(name)"
+    }
 
     /// The models the user's `claude` offers; the CLI's `default` is stored as "" (no `--model`).
-    var models: [ClaudeCodeAgent.ModelInfo] = ChatStore.fallbackModels
+    var claudeModels: [ClaudeCodeAgent.ModelInfo] = ChatStore.fallbackModels
+    /// The models the user's `codex` lists, after "Default" (no `-m`).
+    var codexModels: [ClaudeCodeAgent.ModelInfo] = ChatStore.codexFallbackModels
+    var models: [ClaudeCodeAgent.ModelInfo] { provider == .claude ? claudeModels : codexModels }
 
     var selectedModel: ClaudeCodeAgent.ModelInfo? { models.first { $0.value == model } }
 
@@ -73,7 +94,7 @@ final class ChatStore {
     }
 
     /// Effort levels the selected model accepts (all of them while the list is unknown).
-    var modelEfforts: [String] { selectedModel?.efforts ?? Self.efforts }
+    var modelEfforts: [String] { selectedModel?.efforts ?? (provider == .claude ? Self.efforts : Self.codexEfforts) }
 
     var items: [Item] = []
     var input = ""
@@ -82,23 +103,24 @@ final class ChatStore {
     var activity: String?
     var activityStart = Date()
     var scrollToken = 0
-    var model: String = UserDefaults.standard.string(forKey: "agent.model") ?? "" {
+    var model: String = UserDefaults.standard.string(forKey: ChatStore.settingKey("model", ChatStore.savedProvider)) ?? "" {
         didSet {
-            UserDefaults.standard.set(model, forKey: "agent.model")
+            UserDefaults.standard.set(model, forKey: Self.settingKey("model", provider))
             needsRestart = true // the next message restarts the process with the new model (session resumes)
         }
     }
-    var effort: String = UserDefaults.standard.string(forKey: "agent.effort") ?? "" {
+    var effort: String = UserDefaults.standard.string(forKey: ChatStore.settingKey("effort", ChatStore.savedProvider)) ?? "" {
         didSet {
-            UserDefaults.standard.set(effort, forKey: "agent.effort")
+            UserDefaults.standard.set(effort, forKey: Self.settingKey("effort", provider))
             needsRestart = true
         }
     }
     private(set) var claudePath: String?
+    private(set) var codexPath: String?
     private(set) var setupProblem: String?
 
     @ObservationIgnored private let scene: SceneStore
-    @ObservationIgnored private var agent: ClaudeCodeAgent?
+    @ObservationIgnored private var agent: ChatAgent?
     @ObservationIgnored private var stoppedByUser = false
     @ObservationIgnored private var stderrTail = ""
     @ObservationIgnored private var pendingRenderTime: Double?
@@ -108,6 +130,7 @@ final class ChatStore {
     @ObservationIgnored private var readDirectories: [String] = []
     @ObservationIgnored private var needsRestart = false
     @ObservationIgnored private var retriedFresh = false
+    @ObservationIgnored private var resumeFailed = false
 
     /// The scene as one prompt left it. `prompt` is nil for the scene before the first prompt.
     struct Version: Identifiable, Codable {
@@ -128,8 +151,8 @@ final class ChatStore {
         var items: [Item] = []
         var input = ""
         var attachments: [Attachment] = []
-        var sessionId: String?
-        var forkSession = false
+        var sessionIds: [AgentProvider: String] = [:]
+        var forkSessions: Set<AgentProvider> = []
         var versions: [Version] = []
     }
 
@@ -137,10 +160,10 @@ final class ChatStore {
     @ObservationIgnored private var project: URL?
     /// Conversations of the projects opened earlier in this run, by project path ("" = loose scene).
     @ObservationIgnored private var parked: [String: Conversation] = [:]
-    /// Session the next agent resumes (the conversation's Claude session, when no process is running).
-    @ObservationIgnored private var resumeSessionId: String?
-    /// The conversation came from a copy of another project: its first resume forks the session.
-    @ObservationIgnored private var forkNextSession = false
+    /// Sessions the next agent of each provider resumes (when no process of it is running).
+    @ObservationIgnored private var sessionIds: [AgentProvider: String] = [:]
+    /// The conversation came from a copy of another project: these providers' first resume forks the session.
+    @ObservationIgnored private var forkSessions: Set<AgentProvider> = []
 
     private init(scene: SceneStore) {
         self.scene = scene
@@ -159,7 +182,18 @@ final class ChatStore {
                 if m.value == "default" { m.value = "" }
                 return m
             }
-            DispatchQueue.main.async { self.models = mapped }
+            DispatchQueue.main.async { self.claudeModels = mapped }
+        }
+        DispatchQueue.global(qos: .utility).async {
+            let path = CodexAgent.locateCodex()
+            DispatchQueue.main.async { self.codexPath = path; self.checkSetup() }
+            guard let path, let models = CodexAgent.supportedModels(
+                codexPath: path, workingDirectory: ClaudeCodeAgent.Config.defaultWorkingDirectory) else { return }
+            let all = Array(Set(models.flatMap(\.efforts)))
+            let efforts = Self.codexEfforts + all.filter { !Self.codexEfforts.contains($0) }.sorted()
+            let def = ClaudeCodeAgent.ModelInfo(value: "", resolvedModel: nil, displayName: "Default",
+                                                description: "Codex's default model", efforts: efforts)
+            DispatchQueue.main.async { self.codexModels = [def] + models }
         }
     }
 
@@ -174,8 +208,10 @@ final class ChatStore {
     }
 
     private func checkSetup() {
-        if claudePath == nil {
+        if provider == .claude, claudePath == nil {
             setupProblem = "Claude Code (`claude`) was not found. Install it, run `claude` once in Terminal to log in, then reopen VeyMotion."
+        } else if provider == .codex, codexPath == nil {
+            setupProblem = "The Codex CLI (`codex`) was not found. Install it (`npm i -g @openai/codex` or `brew install codex`), run `codex login` in Terminal, then reopen VeyMotion."
         } else if vmotionDirectory == nil {
             setupProblem = "The `vmotion` CLI was not found next to the app. Build everything with `swift build` (or `bash scripts/bundle.sh`)."
         } else {
@@ -183,24 +219,34 @@ final class ChatStore {
         }
     }
 
-    private func makeAgent(resume: String?) -> ClaudeCodeAgent? {
+    private func makeAgent(resume: String?) -> ChatAgent? {
         checkSetup()
-        guard let claudePath, let dir = vmotionDirectory else { return nil }
+        guard let dir = vmotionDirectory else { return nil }
         let work = ClaudeCodeAgent.Config.defaultWorkingDirectory
-        let config = ClaudeCodeAgent.Config(
-            claudePath: claudePath,
-            vmotionDirectory: dir,
-            workingDirectory: work,
-            model: model,
-            extraEnvironment: [
-                "VEYMOTION_FRAMES_DIR": work.appendingPathComponent("frames").path,
-                "VEYMOTION_SOCKET": ControlSocket.defaultPath,
-            ])
-        var cfg = config
-        cfg.effort = effort
-        cfg.extraReadDirectories = readDirectories
-        cfg.forkSession = forkNextSession
-        let a = ClaudeCodeAgent(config: cfg, resumeSessionId: resume)
+        let a: ChatAgent
+        switch provider {
+        case .claude:
+            guard let claudePath else { return nil }
+            var cfg = ClaudeCodeAgent.Config(
+                claudePath: claudePath,
+                vmotionDirectory: dir,
+                workingDirectory: work,
+                model: model,
+                extraEnvironment: [
+                    "VEYMOTION_FRAMES_DIR": work.appendingPathComponent("frames").path,
+                    "VEYMOTION_SOCKET": ControlSocket.defaultPath,
+                ])
+            cfg.effort = effort
+            cfg.extraReadDirectories = readDirectories
+            cfg.forkSession = forkSessions.contains(.claude)
+            a = ClaudeCodeAgent(config: cfg, resumeSessionId: resume)
+        case .codex:
+            guard let codexPath else { return nil }
+            var cfg = CodexAgent.Config(codexPath: codexPath, vmotionPath: "\(dir)/vmotion", workingDirectory: work,
+                                        model: model, effort: effort)
+            cfg.forkSession = forkSessions.contains(.codex)
+            a = CodexAgent(config: cfg, resumeSessionId: resume)
+        }
         // Events still queued from a replaced agent (another project's) must not reach this conversation.
         a.onEvent = { [weak self, weak a] ev in
             DispatchQueue.main.async {
@@ -221,9 +267,9 @@ final class ChatStore {
         var text = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard canSend else { return }
         if needsRestart { restartAgent() }
-        if agent == nil { agent = makeAgent(resume: resumeSessionId) }
+        if agent == nil { agent = makeAgent(resume: sessionIds[provider]) }
         guard let agent else {
-            append(.notice(setupProblem ?? "Claude Code is not available.", isError: true))
+            append(.notice(setupProblem ?? "\(provider.cliName) is not available.", isError: true))
             return
         }
         let sent = attachments
@@ -237,6 +283,7 @@ final class ChatStore {
         isBusy = true
         stoppedByUser = false
         retriedFresh = false
+        resumeFailed = false
         lastSentText = agentText
         lastSentImages = images
         stderrTail = ""
@@ -248,7 +295,7 @@ final class ChatStore {
             isBusy = false
             activity = nil
             turnStart = nil
-            append(.notice("Could not start Claude Code: \(error.localizedDescription)", isError: true))
+            append(.notice("Could not start \(provider.cliName): \(error.localizedDescription)", isError: true))
         }
     }
 
@@ -349,7 +396,7 @@ final class ChatStore {
     private func restartAgent() {
         needsRestart = false
         guard let old = agent else { return }
-        let session = old.sessionId ?? resumeSessionId
+        let session = old.sessionId ?? sessionIds[provider]
         old.onEvent = nil
         old.stop()
         agent = makeAgent(resume: session)
@@ -393,8 +440,8 @@ final class ChatStore {
         stoppedByUser = true
         agent?.reset()
         agent = nil
-        resumeSessionId = nil
-        forkNextSession = false
+        sessionIds = [:]
+        forkSessions = []
         items = []
         attachments = []
         isBusy = false
@@ -439,7 +486,7 @@ final class ChatStore {
     /// Stops the agent (its `vmotion` calls would otherwise edit the next project's scene) and stores the
     /// conversation, in memory and in the project folder. The session resumes when the project is reopened.
     private func parkConversation() {
-        let session = agent?.sessionId ?? resumeSessionId
+        let sessions = currentSessions()
         if let a = agent {
             a.onEvent = nil
             a.stop()
@@ -454,10 +501,38 @@ final class ChatStore {
         activity = nil
         pendingRenderTime = nil
         needsRestart = false
-        resumeSessionId = session
+        sessionIds = sessions
         saveConversation()
         parked[Self.key(project)] = Conversation(items: items, input: input, attachments: attachments,
-                                                 sessionId: session, forkSession: forkNextSession, versions: versions)
+                                                 sessionIds: sessions, forkSessions: forkSessions, versions: versions)
+    }
+
+    /// The conversation's sessions, including the running agent's latest one.
+    private func currentSessions() -> [AgentProvider: String] {
+        var s = sessionIds
+        if let id = agent?.sessionId { s[provider] = id }
+        return s
+    }
+
+    /// Switching CLIs: the old one's session is kept for when the user switches back.
+    private func providerChanged(from old: AgentProvider) {
+        UserDefaults.standard.set(provider.rawValue, forKey: "agent.provider")
+        if let a = agent {
+            if let id = a.sessionId { sessionIds[old] = id }
+            a.onEvent = nil
+            a.stop()
+        }
+        agent = nil
+        model = UserDefaults.standard.string(forKey: Self.settingKey("model", provider)) ?? ""
+        effort = UserDefaults.standard.string(forKey: Self.settingKey("effort", provider)) ?? ""
+        needsRestart = false
+        checkSetup()
+        if items.contains(where: { if case .user = $0.kind { return true }; return false }) {
+            append(.notice("Now chatting with \(provider.displayName). \(old.displayName) and \(provider.displayName) keep "
+                           + "separate conversations: \(provider.displayName) does not see the messages above, but it sees the scene.",
+                           isError: false))
+        }
+        saveConversation()
     }
 
     /// Shows the open project's conversation: from this run if it was open before, else from its folder.
@@ -471,8 +546,8 @@ final class ChatStore {
         versions = c.versions
         input = c.input
         attachments = c.attachments
-        resumeSessionId = c.sessionId
-        forkNextSession = c.forkSession
+        sessionIds = c.sessionIds
+        forkSessions = c.forkSessions
         stderrTail = ""
         bump()
     }
@@ -482,8 +557,11 @@ final class ChatStore {
         /// Where it was saved. Read from another folder that is a project too, it is a copy (duplicated, or
         /// Save As), so that copy's conversation forks the session instead of continuing the original's.
         var project: String
+        /// Claude's session.
         var sessionId: String?
         var forkSession: Bool?
+        var codexSessionId: String?
+        var codexForkSession: Bool?
         var items: [SavedItem]
     }
 
@@ -499,8 +577,8 @@ final class ChatStore {
     private func saveConversation() {
         guard let project else { return }
         let url = ProjectStore.chatURL(project)
-        let session = agent?.sessionId ?? resumeSessionId
-        guard !items.isEmpty || session != nil else {
+        let sessions = currentSessions()
+        guard !items.isEmpty || !sessions.isEmpty else {
             try? FileManager.default.removeItem(at: url)
             return
         }
@@ -516,8 +594,10 @@ final class ChatStore {
             case let .summary(text): return SavedItem(kind: "summary", text: text)
             }
         }
-        let chat = SavedChat(project: project.path, sessionId: session,
-                             forkSession: forkNextSession ? true : nil, items: saved)
+        let chat = SavedChat(project: project.path, sessionId: sessions[.claude],
+                             forkSession: forkSessions.contains(.claude) ? true : nil,
+                             codexSessionId: sessions[.codex],
+                             codexForkSession: forkSessions.contains(.codex) ? true : nil, items: saved)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let data = try? encoder.encode(chat) else { return }
@@ -540,8 +620,13 @@ final class ChatStore {
             }
         }
         let copied = chat.project != project.path && ProjectStore.isProject(URL(fileURLWithPath: chat.project))
-        return Conversation(items: items, sessionId: chat.sessionId,
-                            forkSession: chat.sessionId != nil && (copied || chat.forkSession == true))
+        var sessions: [AgentProvider: String] = [:]
+        sessions[.claude] = chat.sessionId
+        sessions[.codex] = chat.codexSessionId
+        var forks = Set<AgentProvider>()
+        if chat.sessionId != nil && (copied || chat.forkSession == true) { forks.insert(.claude) }
+        if chat.codexSessionId != nil && (copied || chat.codexForkSession == true) { forks.insert(.codex) }
+        return Conversation(items: items, sessionIds: sessions, forkSessions: forks)
     }
 
     /// Prefixed to every message so "this"/"here"/"now" resolve against the editor state.
@@ -566,8 +651,8 @@ final class ChatStore {
         switch ev {
         case let .started(sessionId, _):
             // A copied project's conversation has forked by now: later restarts resume the new session.
-            forkNextSession = false
-            if !sessionId.isEmpty { resumeSessionId = sessionId }
+            forkSessions.remove(provider)
+            if !sessionId.isEmpty { sessionIds[provider] = sessionId }
 
         case .thinking:
             if isBusy && activity != "Thinking…" { setActivity("Thinking…") }
@@ -588,8 +673,9 @@ final class ChatStore {
             bump()
 
         case let .text(messageId, text):
-            activity = nil
             append(.assistant(text, messageId: messageId))
+            // Codex sends whole messages mid-turn and nothing while it writes the next tool call: keep the spinner.
+            if isBusy { setActivity("Working…") } else { activity = nil }
 
         case let .toolUse(id, name, input):
             let call = describe(id: id, name: name, input: input)
@@ -620,7 +706,7 @@ final class ChatStore {
             retriedFresh = false
             recordVersion()
             if isError {
-                append(.notice(result ?? "Claude Code reported an error.", isError: true))
+                append(.notice(result ?? "\(provider.cliName) reported an error.", isError: true))
             }
             var parts: [String] = []
             if let ms { parts.append(String(format: "%.1fs", Double(ms) / 1000)) }
@@ -631,16 +717,21 @@ final class ChatStore {
         case let .stderr(s):
             stderrTail = String((stderrTail + s).suffix(2000))
 
+        case .resumeFailed:
+            resumeFailed = true
+
         case let .exited(code):
             let wasBusy = isBusy
             isBusy = false
             activity = nil
             // Resume failed (session file missing/unwritable): start a fresh session and resend once.
-            if !stoppedByUser, stderrTail.contains("No conversation found"), let text = lastSentText, !retriedFresh {
+            if !stoppedByUser, resumeFailed || stderrTail.contains("No conversation found"), let text = lastSentText,
+               !retriedFresh {
                 retriedFresh = true
+                resumeFailed = false
                 agent?.reset()
-                resumeSessionId = nil
-                forkNextSession = false
+                sessionIds[provider] = nil
+                forkSessions.remove(provider)
                 append(.notice("Couldn't resume the previous conversation, so a new one was started.", isError: false))
                 isBusy = true
                 setActivity("Thinking…")
@@ -648,19 +739,31 @@ final class ChatStore {
                 do { try agent?.send(contextLine() + "\n" + text, images: lastSentImages) } catch {
                     isBusy = false
                     activity = nil
-                    append(.notice("Could not start Claude Code: \(error.localizedDescription)", isError: true))
+                    append(.notice("Could not start \(provider.cliName): \(error.localizedDescription)", isError: true))
                 }
                 return
             }
             recordVersion()
             if !stoppedByUser && (code != 0 || wasBusy) {
                 let detail = stderrTail.trimmingCharacters(in: .whitespacesAndNewlines)
-                append(.notice("Claude Code exited (code \(code)).\(detail.isEmpty ? "" : "\n" + detail)", isError: true))
+                append(.notice("\(provider.cliName) exited (code \(code)).\(detail.isEmpty ? "" : "\n" + detail)", isError: true))
             }
         }
     }
 
     private func describe(id: String, name: String, input: [String: Any]) -> ToolCall {
+        // Codex calls the tools directly through MCP.
+        let mcpPrefix = "mcp__veymotion__"
+        if name.hasPrefix(mcpPrefix) {
+            let tool = String(name.dropFirst(mcpPrefix.count))
+            if tool == "render_frame" { pendingRenderTime = (input["time"] as? NSNumber)?.doubleValue }
+            let args = (try? JSONSerialization.data(withJSONObject: input, options: [.sortedKeys, .withoutEscapingSlashes]))
+                .flatMap { String(data: $0, encoding: .utf8) } ?? ""
+            return ToolCall(id: id, title: tool.replacingOccurrences(of: "_", with: " "), detail: args == "{}" ? "" : args)
+        }
+        if name == "Shell", let cmd = input["command"] as? String {
+            return ToolCall(id: id, title: "Shell", detail: cmd)
+        }
         if name == "Bash", let cmd = input["command"] as? String {
             let trimmed = cmd.trimmingCharacters(in: .whitespaces)
             if trimmed.hasPrefix("vmotion ") {

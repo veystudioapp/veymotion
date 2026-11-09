@@ -38,6 +38,21 @@ Chat panel ──► claude -p (stream-json, your Claude Code login)
 
 Same agent in the terminal: `vmotion chat "make the title bounce in"`.
 
+### Codex instead of Claude
+
+Pick **Codex** in the chat's model menu (needs the [Codex CLI](https://github.com/openai/codex) installed and
+`codex login` done; set `VEYMOTION_CODEX` if it is not found). Each message runs one `codex exec --json` (the
+thread continues with `codex exec resume`):
+
+```
+Chat panel ──► codex exec --json (your Codex login and ~/.codex/config.toml, e.g. a proxy base_url)
+                 shell: read-only sandbox, no approvals
+                 MCP server `veymotion` = vmotion mcp ──unix socket──► running app (live, undoable)
+```
+
+`vmotion mcp` without a scene file is a stdio MCP bridge to the running app, usable by any MCP client.
+Claude and Codex keep separate sessions (and model/effort settings) in the same project conversation.
+
 ## Audio & voice-over
 
 - **Audio layers** (`type: "audio"`): music, sound effects or recorded voice. Volume is animatable;

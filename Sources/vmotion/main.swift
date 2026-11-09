@@ -22,7 +22,7 @@ AGENT
   vmotion chat [--model m] "prompt"               One Claude Code turn in the terminal (edits the app's scene)
 
 SERVERS
-  vmotion mcp    <scene.json>                     MCP over stdio, editing the file
+  vmotion mcp    [scene.json]                     MCP over stdio, editing the file (without one: the running app)
   vmotion serve  <scene.json> [port]              MCP over HTTP (default port 19790)
   vmotion daemon <scene.json>                     Control socket for a file (headless app stand-in)
 
@@ -201,7 +201,10 @@ case "render":
     print(String(format: "Wrote %@ (%d frames, %.1fs)", url.path, scene.frameCount, Date().timeIntervalSince(started)))
 
 case "mcp":
-    guard let path = args.first else { fail(usage) }
+    guard let path = args.first else {
+        MCPSocketBridge.run() // no scene file: serve the running app's scene
+        exit(0)
+    }
     do {
         let host = try FileSceneHost(url: URL(fileURLWithPath: path))
         let server = MCPServer(host: host)
@@ -277,6 +280,7 @@ case "chat":
             print(String(format: "· %@ · %.1fs · $%.4f", isError ? "error" : "done", Double(ms ?? 0) / 1000, cost ?? 0))
             agent.finish()
         case let .stderr(s): FileHandle.standardError.write(Data(s.utf8))
+        case .resumeFailed: break
         case let .exited(code): exit(code)
         }
     }

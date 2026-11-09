@@ -1,28 +1,30 @@
 import AppKit
 import SwiftUI
+import VeyMotionMCP
 
-struct ChatPanel: View {
+/// Versions and New conversation, shown in the side panel's tab bar while the chat tab is open.
+/// (Claude or Codex is picked in the composer's model picker.)
+struct ChatHeaderButtons: View {
     @Environment(ChatStore.self) private var chat
     @State private var showVersions = false
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                ClaudeLogo(size: 16)
-                Text("Claude").font(.headline)
-                Spacer()
-                Button { showVersions.toggle() } label: { Image(systemName: "clock.arrow.circlepath") }
-                    .buttonStyle(.borderless)
-                    .help("The scene after each prompt to Claude")
-                    .popover(isPresented: $showVersions, arrowEdge: .bottom) { VersionsPopover() }
-                Button { chat.newChat() } label: { Image(systemName: "square.and.pencil") }
-                    .buttonStyle(.borderless)
-                    .help("New conversation")
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            Divider()
+        HStack(spacing: 12) {
+            Button { showVersions.toggle() } label: { Image(systemName: "clock.arrow.circlepath") }
+                .help("The scene after each prompt")
+                .popover(isPresented: $showVersions, arrowEdge: .bottom) { VersionsPopover() }
+            Button { chat.newChat() } label: { Image(systemName: "square.and.pencil") }
+                .help("New conversation")
+        }
+        .buttonStyle(.borderless)
+    }
+}
 
+struct ChatPanel: View {
+    @Environment(ChatStore.self) private var chat
+
+    var body: some View {
+        VStack(spacing: 0) {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 10) {
@@ -60,6 +62,8 @@ struct ChatPanel: View {
 }
 
 private struct EmptyChatHint: View {
+    @Environment(ChatStore.self) private var chat
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Describe the animation you want.").font(.callout)
@@ -70,7 +74,9 @@ private struct EmptyChatHint: View {
             }
             .font(.caption)
             .foregroundStyle(.secondary)
-            Text("Claude uses your Claude Code login and can only run `vmotion` commands.")
+            Text(chat.provider == .claude
+                 ? "Claude uses your Claude Code login and can only run `vmotion` commands."
+                 : "Codex uses your Codex CLI login, edits only through VeyMotion's tools, and its shell is read-only.")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .padding(.top, 4)
