@@ -140,13 +140,18 @@ extension ContentView {
             Menu("Generator") {
                 ForEach(GeneratorKind.allCases, id: \.self) { k in Button(k.title) { store.addGenerator(k) } }
             }
+            Menu("3D") {
+                ForEach(ModelShape.allCases.filter { $0 != .file }, id: \.self) { s in Button(s.title) { store.addModel(s) } }
+                Divider()
+                Button("Model File (OBJ, STL, USDZ)…") { store.addModelLayer() }
+            }
             Menu("Template") {
                 ForEach(TemplateKind.allCases, id: \.self) { k in Button(k.title) { store.addTemplate(k) } }
             }
         } label: {
             Label("Add", systemImage: "plus")
         }
-        .help("Add text, shapes, media, particles, generators or templates")
+        .help("Add text, shapes, media, particles, generators, 3D objects or templates")
     }
 }
 
@@ -226,6 +231,7 @@ final class PreviewRenderer {
         busy = true
         queue.async { [renderer] in
             renderer.motionBlurSamples = job.fast ? 4 : 8
+            renderer.modelSupersampling = job.fast ? 2 : 3
             // Opening a project with music-reactive layers must not hold the canvas until the song is analyzed.
             let img = AudioAnalysisCache.withoutWaiting {
                 renderer.makeImage(job.scene, at: job.time, scale: job.scale)
@@ -354,11 +360,22 @@ struct SelectionBox: View {
     let unit: Double
 
     var body: some View {
-        let screen = scene.worldTransform(of: layer, at: time)
-        Path(box)
-            .applying(screen.concatenating(CGAffineTransform(scaleX: unit, y: unit)))
-            .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 1.5, dash: [5, 3]))
-            .allowsHitTesting(false)
+        // 3D layers: their projected box (a model's: its bounding box's edges).
+        if layer.is3D {
+            let extent = layer.type == .model ? layer.modelExtent(at: time) : (box: box, depth: 0)
+            if let outline = scene.outline3D(of: layer, box: extent.box, depth: extent.depth, at: time) {
+                Path(outline)
+                    .applying(CGAffineTransform(scaleX: unit, y: unit))
+                    .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 1.5, dash: [5, 3]))
+                    .allowsHitTesting(false)
+            }
+        } else {
+            let screen = scene.worldTransform(of: layer, at: time)
+            Path(box)
+                .applying(screen.concatenating(CGAffineTransform(scaleX: unit, y: unit)))
+                .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 1.5, dash: [5, 3]))
+                .allowsHitTesting(false)
+        }
     }
 
     private var box: CGRect {

@@ -5,6 +5,7 @@ import CoreText
 import Foundation
 import ImageIO
 import UniformTypeIdentifiers
+import simd
 
 /// Deterministic CoreGraphics renderer. Preview and export both use this, so what you see is what you export.
 /// Not thread-safe: use one instance per thread.
@@ -25,6 +26,24 @@ public final class FrameRenderer {
     public var motionBlurSamples = 8
     /// Set while rendering motion-blur samples, so samples are not blurred again.
     private var inMotionSample = false
+    /// Supersampling of model layers per axis (3 = 9 samples a pixel; lower it for a faster preview).
+    public var modelSupersampling = 3
+
+    /// Set while a 3D group draws its children in its parent's 3D space (see `drawGroup3D`).
+    private struct Space3DContext { var view: View3D; var prefix: Mat4; var lookup: MotionScene }
+    private var space3D: Space3DContext?
+    /// Where each 3D layer was last placed: its projection, the affine stand-in used as its transform (a translation
+    /// to its projected origin and a uniform scale), and its plane's homography in that stand-in's space.
+    private struct Placed3D { var t: Double; var proj: LayerProjection; var affine: CGAffineTransform; var local: [Double] }
+    private var placed3D: [String: Placed3D] = [:]
+    private var meshCache: [String: Mesh3D] = [:]
+    /// The frame's depth buffer while its 3D layers draw straight into `depthContext` (nil inside flat groups,
+    /// offscreen bitmaps and between runs of 3D layers separated by 2D ones).
+    private var depthBuffer: DepthBuffer?
+    private var depthContext: CGContext?
+    /// The layer being drawn is opaque with a normal blend, so it may hide what is behind it.
+    private var depthWrites = false
+    private var textureCache: [String: (texture: Texture3D, modified: Double?)] = [:]
 
     public init() {}
 
@@ -35,6 +54,9 @@ public final class FrameRenderer {
         glyphCache.removeAll()
         videoCache.removeAll()
         cutoutCache.removeAll()
+        meshCache.removeAll()
+        textureCache.removeAll()
+        placed3D.removeAll()
     }
 
     /// Device pixels per scene pixel for the frame being drawn (shadow and blur sizes are in device pixels).
@@ -57,7 +79,25 @@ public final class FrameRenderer {
 
         // A layer used as another's track matte is only drawn through that layer.
         let matteSources = Set(scene.layers.compactMap { l in l.matte.flatMap { $0.source == l.id ? nil : $0.source } })
-        for layer in scene.layers where layer.type.isVisual && !matteSources.contains(layer.id) {
+        let visible = scene.layers.filter { $0.type.isVisual && !matteSources.contains($0.id) }
+        let order = drawOrder(visible, scene: scene, at: t)
+        if order.contains(where: { renders3D($0) }) {
+            if depthBuffer?.width != pixelWidth || depthBuffer?.height != pixelHeight {
+                depthBuffer = DepthBuffer(width: pixelWidth, height: pixelHeight)
+            } else {
+                depthBuffer?.reset()
+            }
+            depthContext = ctx
+        }
+        defer { depthContext = nil }
+        // Like After Effects, 3D layers on either side of a 2D layer do not hide each other.
+        var fresh = true
+        for layer in order {
+            if renders3D(layer) {
+                if !fresh { depthBuffer?.reset(); fresh = true }
+            } else if depthContext != nil {
+                fresh = false
+            }
             renderLayer(layer, scene: scene, at: t, in: ctx)
         }
         ctx.restoreGState()
@@ -182,6 +222,7 @@ public final class FrameRenderer {
 
     /// Scene transform of a layer (or of one of its repeater copies, `copy` being the step in its parent's space).
     private func transform(of layer: MotionLayer, scene: MotionScene, at t: Double, copy: CGAffineTransform?) -> CGAffineTransform {
+        if renders3D(layer) { return place3D(layer, scene: scene, at: t, copy: copy).affine }
         guard let copy else { return scene.worldTransform(of: layer, at: t) }
         return layer.localTransform(at: t).concatenating(copy).concatenating(scene.parentTransform(of: layer, at: t))
     }
@@ -241,14 +282,15 @@ public final class FrameRenderer {
                                          d: -Double(h) / Double(scene.height), tx: 0, ty: Double(h))
         var union = CGRect.null
         for tk in times {
+            // The transform first: it places a 3D layer, which its bounds depend on.
+            let m = transform(of: layer, scene: scene, at: tk, copy: copy)
             guard let local = contentBounds(layer, scene: scene, at: tk) else { return nil }
-            var pad = 3 * (max(0, layer.value(.blur, at: tk)) + scene.focusBlur(for: layer, at: tk)) + 4
+            var pad = 3 * (max(0, layer.value(.blur, at: tk)) + focusBlur(layer, scene: scene, at: tk)) + 4
             if layer.value(.shadowOpacity, at: tk) > 0.001 {
                 pad += abs(layer.value(.shadowX, at: tk)) + abs(layer.value(.shadowY, at: tk)) + 2 * layer.value(.shadowBlur, at: tk)
             }
             if layer.value(.glow, at: tk) > 0.001 { pad += 3 * layer.value(.glowRadius, at: tk) }
             pad += max(0, layer.value(.outline, at: tk)) + PathOps(layer, at: tk).reach
-            let m = transform(of: layer, scene: scene, at: tk, copy: copy)
             let r = local.applying(m).insetBy(dx: -pad, dy: -pad).applying(toDevice)
             union = union.union(r)
         }
@@ -259,7 +301,14 @@ public final class FrameRenderer {
                            copy: CGAffineTransform? = nil, alphaScale: Double = 1) {
         let opacity = min(max(layer.value(.opacity, at: t), 0), 1) * alphaScale
         guard opacity > 0.001 else { return }
+        if keepsChildren3D(layer) {
+            drawGroup3D(layer, scene: scene, at: t, in: ctx, copy: copy, opacity: opacity)
+            return
+        }
+        let threeD = renders3D(layer)
+        depthWrites = threeD && opacity >= 0.999 && layer.blendMode == .normal
         var m = transform(of: layer, scene: scene, at: t, copy: copy)
+        if threeD, layer.hideBackface, layer.type != .model, placed3D[layer.id]?.proj.facesAway == true { return }
         let wipe = layer.value(.wipe, at: t)
         guard wipe < 0.9999 else { return }
         // The wipe is in the layer's own space, also for world-space particles.
@@ -273,13 +322,14 @@ public final class FrameRenderer {
             if layer.particles.usesWorldSpace { m = (copy ?? .identity).concatenating(scene.cameraTransform(for: layer, at: t)) }
         }
         guard abs(m.a * m.d - m.b * m.c) > 1e-8 else { return } // scaled to nothing
-        let blur = max(0, layer.value(.blur, at: t)) + scene.focusBlur(for: layer, at: t)
+        let blur = max(0, layer.value(.blur, at: t)) + focusBlur(layer, scene: scene, at: t)
         let fx = PixelEffects(layer, at: t, fps: scene.fps)
 
         // The wipe clips everything the layer draws: shadow, blur and glow included.
         ctx.saveGState()
         defer { ctx.restoreGState() }
-        if wipe > 0.0001 {
+        // 3D layers are wiped on their plane, before the projection (see `drawWarped`).
+        if wipe > 0.0001, !threeD {
             guard clipToWipe(layer, progress: wipe, scene: scene, transform: wipeTransform, at: t, copy: copy, in: ctx)
             else { return }
         }
@@ -367,6 +417,9 @@ public final class FrameRenderer {
             if let box = textLayout(layer, at: t)?.box {
                 return CGRect(x: -box.width / 2, y: -box.height / 2, width: box.width, height: box.height)
             }
+        case .model:
+            let w = max(layer.shapeWidth(at: t), 0), h = max(layer.shapeHeight(at: t), 0)
+            return CGRect(x: -w / 2, y: -h / 2, width: w, height: h)
         case .audio:
             break
         }
@@ -585,14 +638,32 @@ public final class FrameRenderer {
 
     /// `alpha`: opacity particles apply themselves (the context's alpha is replaced per particle).
     /// Layers with a mesh warp (2.5D rotation, corner pin, puppet pins) are drawn flat, then warped.
+    /// 3D layers are drawn flat and projected by their plane's homography; models are rasterized.
     private func drawContent(_ layer: MotionLayer, scene: MotionScene, at t: Double, in ctx: CGContext, alpha: Double = 1) {
-        if layer.type != .particles, layer.rotationXYOrPinned, let flat = flatContentBounds(layer, scene: scene, at: t),
-           let warp = MeshWarp(layer, box: meshBox(layer, scene: scene, flat: flat, at: t), at: t) {
+        if layer.type == .model {
+            drawModel(layer, scene: scene, at: t, in: ctx)
+            return
+        }
+        if let (warp, flat) = meshWarp(layer, scene: scene, at: t) {
             if warp.hideBackface && warp.facesAway { return }
             drawWarped(layer, scene: scene, warp: warp, flat: flat, at: t, in: ctx)
             return
         }
         drawFlatContent(layer, scene: scene, at: t, in: ctx, alpha: alpha)
+    }
+
+    /// The warp of a 2.5D, pinned or 3D layer with the flat box it applies to (nil = drawn as is).
+    private func meshWarp(_ layer: MotionLayer, scene: MotionScene, at t: Double) -> (MeshWarp, CGRect)? {
+        guard layer.type != .particles, layer.type != .model else { return nil }
+        let p3 = renders3D(layer) ? placed(layer, scene: scene, at: t) : nil
+        guard p3 != nil || layer.rotationXYOrPinned else { return nil }
+        // Text whose letters can go anywhere (animators on a path) gets the frame's size as its box in 3D.
+        let fallback = CGRect(x: -Double(scene.width) / 2, y: -Double(scene.height) / 2,
+                              width: Double(scene.width), height: Double(scene.height))
+        guard let flat = flatContentBounds(layer, scene: scene, at: t) ?? (p3 != nil ? fallback : nil),
+              let warp = MeshWarp(layer, box: meshBox(layer, scene: scene, flat: flat, at: t), at: t,
+                                  projective: p3?.local, facesAway: p3?.proj.facesAway ?? false) else { return nil }
+        return (warp, flat)
     }
 
     /// The box a corner pin maps from: the layer's own box (not its padded drawing bounds).
@@ -606,6 +677,8 @@ public final class FrameRenderer {
     /// affine transform onto the warped grid.
     private func drawWarped(_ layer: MotionLayer, scene: MotionScene, warp: MeshWarp, flat: CGRect, at t: Double,
                             in ctx: CGContext) {
+        // Taken now: drawing the content (a group's children) changes the renderer's per-layer state.
+        let depth = depthTarget(for: layer, in: ctx)
         let m = ctx.ctm
         let scale = max(0.05, abs(m.a * m.d - m.b * m.c).squareRoot())
         // A transparent margin of a couple of device px, so the picture's own edges (a rect or image filling its
@@ -616,16 +689,36 @@ public final class FrameRenderer {
         // up a lot; the cap keeps memory sane).
         let k = min(scale * 2, 4096 / max(flat.width, 1), 4096 / max(flat.height, 1))
         let pw = max(1, Int((flat.width * k).rounded(.up))), ph = max(1, Int((flat.height * k).rounded(.up)))
+        // Layer space (y down) → bitmap with row 0 at flat.minY.
+        func toBitmap(_ c: CGContext) {
+            c.translateBy(x: 0, y: Double(ph))
+            c.scaleBy(x: Double(pw) / flat.width, y: -Double(ph) / flat.height)
+            c.translateBy(x: -flat.minX, y: -flat.minY)
+        }
+        // A 3D layer's wipe cuts its plane before the projection, so the edge lies on the layer.
+        var wipeMask: CGImage?
+        if renders3D(layer) {
+            let wipe = layer.value(.wipe, at: t)
+            if wipe > 0.0001 {
+                let style = layer.wipeStyle ?? WipeStyle()
+                guard let region = style.visibleRegion(progress: wipe, box: wipeBox(layer, scene: scene, at: t)),
+                      let mask = Self.bitmap(pw, ph) else { return }
+                toBitmap(mask)
+                mask.addPath(region)
+                mask.setFillColor(CGColor(gray: 1, alpha: 1))
+                mask.fillPath(using: .evenOdd)
+                Self.boxBlur(mask, sigma: style.feather * Double(pw) / flat.width / 2)
+                wipeMask = Self.grayMask(mask, luma: false, invert: false)
+            }
+        }
         guard let off = Self.bitmap(pw, ph) else { return }
+        if let wipeMask { off.clip(to: CGRect(x: 0, y: 0, width: pw, height: ph), mask: wipeMask) }
         off.setShouldAntialias(true)
         off.interpolationQuality = .high
-        // Layer space (y down) → bitmap with row 0 at flat.minY.
-        off.translateBy(x: 0, y: Double(ph))
-        off.scaleBy(x: Double(pw) / flat.width, y: -Double(ph) / flat.height)
-        off.translateBy(x: -flat.minX, y: -flat.minY)
+        toBitmap(off)
         drawFlatContent(layer, scene: scene, at: t, in: off)
         if let h = warp.projectiveMap(over: flat) {
-            MeshWarp.drawProjective(off, flat: flat, homography: h, in: ctx)
+            MeshWarp.drawProjective(off, flat: flat, homography: h, in: ctx, depth: depth)
             return
         }
         guard let image = off.makeImage() else { return }
@@ -684,6 +777,7 @@ public final class FrameRenderer {
         case .particles: drawParticles(layer, alpha: alpha, in: ctx)
         case .generator: drawGenerator(layer, at: t, in: ctx)
         case .group: drawGroup(layer, scene: scene, at: t, in: ctx)
+        case .model: drawModel(layer, scene: scene, at: t, in: ctx)
         case .audio: break
         }
     }
@@ -695,8 +789,14 @@ public final class FrameRenderer {
         ctx.saveGState()
         ctx.translateBy(x: -w / 2, y: -h / 2)
         ctx.clip(to: CGRect(x: 0, y: 0, width: w, height: h))
+        // Drawn flat, the group is a world of its own: its 3D children see its default camera.
+        let saved = space3D, savedDepth = depthContext
+        space3D = nil
+        depthContext = nil
+        defer { space3D = saved; depthContext = savedDepth }
         let matteSources = Set(sub.layers.compactMap { l in l.matte.flatMap { $0.source == l.id ? nil : $0.source } })
-        for child in sub.layers where child.type.isVisual && !matteSources.contains(child.id) {
+        let visible = sub.layers.filter { $0.type.isVisual && !matteSources.contains($0.id) }
+        for child in drawOrder(visible, scene: sub, at: t) {
             renderLayer(child, scene: sub, at: t, in: ctx)
         }
         ctx.restoreGState()
@@ -848,9 +948,8 @@ public final class FrameRenderer {
     /// Layer-local bounds of what `drawContent` paints, or nil when unknown (text animators move glyphs anywhere).
     /// Layer-local bounds of what `drawContent` paints (after any mesh warp), or nil when unknown.
     private func contentBounds(_ layer: MotionLayer, scene: MotionScene, at t: Double) -> CGRect? {
-        guard layer.type != .particles, layer.rotationXYOrPinned, let flat = flatContentBounds(layer, scene: scene, at: t),
-              let warp = MeshWarp(layer, box: meshBox(layer, scene: scene, flat: flat, at: t), at: t)
-        else { return flatContentBounds(layer, scene: scene, at: t) }
+        if layer.type == .model { return modelBounds(layer, scene: scene, at: t) }
+        guard let (warp, flat) = meshWarp(layer, scene: scene, at: t) else { return flatContentBounds(layer, scene: scene, at: t) }
         // The warped outline, sampled along the edges (bends and perspective push the middle of edges out).
         var out = CGRect.null
         let steps = 8
@@ -858,7 +957,8 @@ public final class FrameRenderer {
             let f = Double(k) / Double(steps)
             for p in [CGPoint(x: flat.minX + flat.width * f, y: flat.minY), CGPoint(x: flat.minX + flat.width * f, y: flat.maxY),
                       CGPoint(x: flat.minX, y: flat.minY + flat.height * f), CGPoint(x: flat.maxX, y: flat.minY + flat.height * f)] {
-                let q = warp.map(p)
+                // Part of a 3D layer behind the camera: its projection reaches anywhere in the frame.
+                guard let q = warp.mapChecked(p) else { return nil }
                 out = out.union(CGRect(x: q.x, y: q.y, width: 0, height: 0))
             }
         }
@@ -868,7 +968,7 @@ public final class FrameRenderer {
     /// Bounds of the layer as drawn flat (before a mesh warp); text with animators gets a generous box.
     private func flatContentBounds(_ layer: MotionLayer, scene: MotionScene, at t: Double) -> CGRect? {
         if layer.type == .text, layer.textPath == nil, !layer.textAnimators.isEmpty, let box = textLayout(layer, at: t)?.box,
-           layer.rotationXYOrPinned {
+           layer.rotationXYOrPinned || renders3D(layer) {
             let pad = max(layer.fontSize, 1) * 2 + layer.textAnimators.map { abs($0.x) + abs($0.y) }.max()!
             return CGRect(x: -box.width / 2, y: -box.height / 2, width: box.width, height: box.height).insetBy(dx: -pad, dy: -pad)
         }
@@ -916,6 +1016,8 @@ public final class FrameRenderer {
             let w = layer.width.map { $0.value(at: t) } ?? Double(scene.width)
             let h = layer.height.map { $0.value(at: t) } ?? Double(scene.height)
             return CGRect(x: -w / 2, y: -h / 2, width: w, height: h)
+        case .model:
+            return modelBounds(layer, scene: scene, at: t)
         case .audio:
             return nil
         }
@@ -1956,4 +2058,270 @@ extension FrameRenderer {
         maskCache[expanded] = (mask, modified)
         return mask
     }
+}
+
+// MARK: - 3D
+
+extension FrameRenderer {
+    /// Drawn in 3D: `threeD` layers and models, and every visual layer inside a 3D group that keeps its children in 3D.
+    private func renders3D(_ layer: MotionLayer) -> Bool {
+        guard layer.type != .particles, layer.type != .audio else { return false }
+        return layer.is3D || space3D != nil
+    }
+
+    /// A 3D group with 3D children: they are drawn in the group's 3D space rather than flat in its box.
+    private func keepsChildren3D(_ layer: MotionLayer) -> Bool {
+        layer.type == .group && renders3D(layer) && layer.children.contains { $0.is3D }
+    }
+
+    /// The frame's depth buffer for a 3D layer drawn straight into the frame (nil otherwise: blurred and processed
+    /// layers go through bitmaps of their own and keep the far-to-near order only).
+    private func depthTarget(for layer: MotionLayer, in ctx: CGContext) -> DepthTarget? {
+        guard let depthBuffer, let depthContext, ctx === depthContext, renders3D(layer) else { return nil }
+        return DepthTarget(buffer: depthBuffer, writes: depthWrites)
+    }
+
+    /// Places a 3D layer (or a repeater copy of it) and remembers it for its bounds and content.
+    @discardableResult
+    private func place3D(_ layer: MotionLayer, scene: MotionScene, at t: Double, copy: CGAffineTransform?) -> Placed3D {
+        let lookup = space3D?.lookup ?? scene
+        var world = lookup.matrix3D(of: layer, at: t, copy: copy, force3D: space3D != nil)
+        if let s = space3D { world = s.prefix * world }
+        let view = space3D?.view ?? scene.view3D(fixed: layer.fixed, at: t)
+        let proj = LayerProjection(world: world, view: view)
+        let h = proj.homography
+        // The stand-in transform: the projected origin, scaled like the layer is around it (so effects measured in
+        // layer px keep about their size), not turned. Behind the camera: the frame's center.
+        var a = CGAffineTransform(translationX: Double(scene.width) / 2, y: Double(scene.height) / 2)
+        if h[8] > View3D.near {
+            let ox = h[2] / h[8], oy = h[5] / h[8]
+            let j00 = (h[0] - ox * h[6]) / h[8], j01 = (h[1] - ox * h[7]) / h[8]
+            let j10 = (h[3] - oy * h[6]) / h[8], j11 = (h[4] - oy * h[7]) / h[8]
+            let s = min(max(abs(j00 * j11 - j01 * j10).squareRoot(), 0.01), 100)
+            a = CGAffineTransform(a: s, b: 0, c: 0, d: s, tx: ox, ty: oy)
+        }
+        // Layer-local → stand-in space: A⁻¹ · H (w stays the camera depth).
+        let s = Double(a.a), ox = Double(a.tx), oy = Double(a.ty)
+        let local = [(h[0] - ox * h[6]) / s, (h[1] - ox * h[7]) / s, (h[2] - ox * h[8]) / s,
+                     (h[3] - oy * h[6]) / s, (h[4] - oy * h[7]) / s, (h[5] - oy * h[8]) / s,
+                     h[6], h[7], h[8]]
+        let placed = Placed3D(t: t, proj: proj, affine: a, local: local)
+        placed3D[layer.id] = placed
+        return placed
+    }
+
+    /// The placement made by the layer's transform at time t (or a fresh one without repeater copy).
+    private func placed(_ layer: MotionLayer, scene: MotionScene, at t: Double) -> Placed3D {
+        if let p = placed3D[layer.id], p.t == t { return p }
+        return place3D(layer, scene: scene, at: t, copy: nil)
+    }
+
+    /// Depth-of-field blur: 2D layers by their `depth`; 3D layers by their distance from the camera, in the same unit
+    /// (0 = at the camera's distance, 1 = twice as far).
+    private func focusBlur(_ layer: MotionLayer, scene: MotionScene, at t: Double) -> Double {
+        guard renders3D(layer) else { return scene.focusBlur(for: layer, at: t) }
+        guard let camera = scene.camera, !layer.fixed else { return 0 }
+        let a = camera.aperture.value(at: t)
+        guard a > 0 else { return 0 }
+        let p = placed(layer, scene: scene, at: t).proj
+        return a * abs(p.depth / max(p.view.distance, 1) - 1 - camera.focus.value(at: t))
+    }
+
+    /// Layers in draw order, each run of consecutive 3D layers sorted far to near by the depth of their origin.
+    private func drawOrder(_ layers: [MotionLayer], scene: MotionScene, at t: Double) -> [MotionLayer] {
+        guard layers.contains(where: { renders3D($0) }) else { return layers }
+        var out: [MotionLayer] = []
+        var run: [(layer: MotionLayer, depth: Double)] = []
+        func flush() {
+            out += run.enumerated().sorted { a, b in
+                a.element.depth != b.element.depth ? a.element.depth > b.element.depth : a.offset < b.offset
+            }.map(\.element.layer)
+            run = []
+        }
+        for l in layers {
+            if renders3D(l) {
+                run.append((l, place3D(l, scene: scene, at: t, copy: nil).proj.depth))
+            } else {
+                flush()
+                out.append(l)
+            }
+        }
+        flush()
+        return out
+    }
+
+    /// A 3D group whose children stay in 3D: each child is placed in the group's space and sorted by depth with its
+    /// siblings. The group's opacity and blend mode apply to them together; its other effects do not.
+    private func drawGroup3D(_ group: MotionLayer, scene: MotionScene, at t: Double, in ctx: CGContext,
+                             copy: CGAffineTransform?, opacity: Double) {
+        let lookup = space3D?.lookup ?? scene
+        var world = lookup.matrix3D(of: group, at: t, copy: copy, force3D: true)
+        if let s = space3D { world = s.prefix * world }
+        let view = space3D?.view ?? scene.view3D(fixed: group.fixed, at: t)
+        let sub = lookup.subscene(of: group, at: t)
+        let saved = space3D
+        // Children use coordinates in the group's box, whose center is the group's origin.
+        space3D = Space3DContext(view: view, prefix: world * Mat4.translation(-Double(sub.width) / 2, -Double(sub.height) / 2, 0),
+                                 lookup: sub)
+        defer { space3D = saved }
+        ctx.saveGState()
+        defer { ctx.restoreGState() }
+        let grouped = opacity < 0.999 || group.blendMode != .normal
+        if grouped {
+            ctx.setBlendMode(group.blendMode.cgBlendMode)
+            ctx.setAlpha(opacity)
+            ctx.beginTransparencyLayer(auxiliaryInfo: nil)
+        }
+        let matteSources = Set(sub.layers.compactMap { l in l.matte.flatMap { $0.source == l.id ? nil : $0.source } })
+        let visible = sub.layers.filter { $0.type.isVisual && $0.type != .particles && !matteSources.contains($0.id) }
+        for child in drawOrder(visible, scene: scene, at: t) {
+            renderLayer(child, scene: scene, at: t, in: ctx)
+        }
+        if grouped { ctx.endTransparencyLayer() }
+    }
+
+    // MARK: Models
+
+    /// A model's projected bounding box in its stand-in space, nil when part of it is behind the camera.
+    private func modelBounds(_ layer: MotionLayer, scene: MotionScene, at t: Double) -> CGRect? {
+        guard let mesh = mesh(for: layer, at: t), !mesh.isEmpty else { return .zero }
+        let p = placed(layer, scene: scene, at: t)
+        let (lo, hi) = mesh.bounds
+        let mv = p.proj.modelView
+        let inv = p.affine.inverted()
+        var out = CGRect.null
+        for i in 0..<8 {
+            let c = SIMD3(Double(i & 1 == 0 ? lo.x : hi.x), Double(i & 2 == 0 ? lo.y : hi.y), Double(i & 4 == 0 ? lo.z : hi.z))
+            guard let s = p.proj.view.project(mv.point(c)) else { return nil }
+            out = out.union(CGRect(origin: s.applying(inv), size: .zero))
+        }
+        return out.insetBy(dx: -2, dy: -2)
+    }
+
+    private func drawModel(_ layer: MotionLayer, scene: MotionScene, at t: Double, in ctx: CGContext) {
+        guard let mesh = mesh(for: layer, at: t), !mesh.isEmpty else { return }
+        let p = placed(layer, scene: scene, at: t)
+        let ctm = ctx.ctm
+        let clip = ctx.boundingBoxOfClipPath.applying(ctm)
+        var box = (modelBounds(layer, scene: scene, at: t)?.applying(ctm) ?? clip).intersection(clip).integral
+        box = box.intersection(clip.integral)
+        guard !box.isNull, box.width >= 1, box.height >= 1, box.width * box.height <= 8192 * 8192 else { return }
+        let fill = layer.color(.fill, at: t) ?? .white
+        let side = layer.model.sideColor ?? fill
+        var materials = [Material3D(color: fill.simd, texture: layer.model.shape.isTexturable ? layer.path.flatMap(texture) : nil),
+                         Material3D(color: side.simd, texture: nil)]
+        for m in mesh.fileMaterials { materials.append(Material3D(color: m.color.simd, texture: m.texture)) }
+        guard let image = Raster3D.render(mesh, modelView: p.proj.modelView, view: p.proj.view,
+                                          sceneToDevice: p.affine.inverted().concatenating(ctm), box: box,
+                                          materials: materials, lights: cameraLights(scene, view: p.proj.view, at: t),
+                                          shininess: Float(layer.model.shininessValue), metallic: Float(layer.model.metallicValue),
+                                          ss: max(1, min(modelSupersampling, 4)), depth: depthTarget(for: layer, in: ctx))
+        else { return }
+        ctx.saveGState()
+        ctx.concatenate(ctm.inverted()) // device space: the image lands on whole pixels
+        ctx.draw(image, in: box)
+        ctx.restoreGState()
+    }
+
+    /// The scene's lights (or the default ones) in the camera's space at time t.
+    private func cameraLights(_ scene: MotionScene, view: View3D, at t: Double) -> [CameraLight] {
+        let vm = view.matrix
+        return (scene.lights.isEmpty ? Light.defaults : scene.lights).map { l in
+            let k = Float(max(0, l.intensity.value(at: t)) * l.color.a)
+            let c = SIMD3<Float>(Float(l.color.r), Float(l.color.g), Float(l.color.b)) * k
+            switch l.type {
+            case .ambient:
+                return CameraLight(kind: .ambient, color: c, vector: .zero)
+            case .directional:
+                let d = SIMD3(l.x.value(at: t), l.y.value(at: t), l.z.value(at: t))
+                let len = simd_length(d)
+                let toLight = len > 0 ? -d / len : SIMD3(0, 0, -1)
+                let r = vm * SIMD4(toLight, 0)
+                return CameraLight(kind: .directional, color: c,
+                                   vector: simd_normalize(SIMD3<Float>(Float(r.x), Float(r.y), Float(r.z))))
+            case .point:
+                let q = vm * SIMD4(l.x.value(at: t), l.y.value(at: t), l.z.value(at: t), 1)
+                return CameraLight(kind: .point, color: c, vector: SIMD3<Float>(Float(q.x), Float(q.y), Float(q.z)))
+            }
+        }
+    }
+
+    /// An image file as a model texture (cached by path and modification time).
+    private func texture(_ path: String) -> Texture3D? {
+        let expanded = (path as NSString).expandingTildeInPath
+        let modified = Self.modificationTime(expanded)
+        if let c = textureCache[expanded], c.modified == modified { return c.texture }
+        guard let (img, _) = loadImage(path), let tex = Texture3D(img) else { return nil }
+        if textureCache.count > 16 { textureCache.removeAll() }
+        textureCache[expanded] = (tex, modified)
+        return tex
+    }
+
+    /// The model's mesh at time t, built once per shape (key = everything that changes it).
+    private func mesh(for layer: MotionLayer, at t: Double) -> Mesh3D? {
+        let mdl = layer.model
+        let w = max(layer.shapeWidth(at: t), 0), h = max(layer.shapeHeight(at: t), 0)
+        let sidesSlot: UInt16 = mdl.sideColor != nil ? 1 : 0
+        var key = "\(mdl.shape.rawValue)|\(mdl.segmentCount)|\(mdl.radius ?? -1)|\(mdl.depth ?? -1)|\(sidesSlot)"
+            + "|\(mdl.bevelValue)|\(mdl.bevelStepCount)"
+        switch mdl.shape {
+        case .text:
+            key += "|\(layer.text)|\(layer.fontName ?? "")|\(layer.fontWeight)|\(layer.fontSize)|\(layer.align)|\(layer.maxWidth ?? 0)"
+                + "|\(layer.value(.letterSpacing, at: t))"
+        case .path:
+            key += "|\(layer.pathShape(at: t).svg)|\(layer.fillRule)"
+        case .lathe:
+            key += "|\(layer.pathShape(at: t).svg)"
+        case .file:
+            let p = layer.path.map { ($0 as NSString).expandingTildeInPath } ?? ""
+            key += "|\(p)|\(Self.modificationTime(p) ?? 0)|\(w)"
+        default:
+            key += "|\(w)|\(h)"
+        }
+        if let m = meshCache[key] { return m }
+        let fw = Float(w), fh = Float(h)
+        let mesh: Mesh3D
+        switch mdl.shape {
+        case .box:
+            mesh = MeshBuilder.box(w: fw, h: fh, d: Float(mdl.depth ?? min(w, h)), sidesSlot: sidesSlot)
+        case .plane:
+            mesh = MeshBuilder.plane(w: fw, h: fh)
+        case .sphere:
+            mesh = MeshBuilder.sphere(rx: fw / 2, ry: fh / 2, rz: Float(mdl.depth ?? w) / 2, segments: mdl.segmentCount)
+        case .cylinder, .cone:
+            mesh = MeshBuilder.cylinder(rx: fw / 2, rz: Float(mdl.depth ?? w) / 2, h: fh,
+                                        topScale: mdl.shape == .cone ? Float(mdl.radius ?? 0) : 1,
+                                        segments: mdl.segmentCount, sidesSlot: sidesSlot)
+        case .torus:
+            mesh = MeshBuilder.torus(r: fw / 2, tube: Float(mdl.radius ?? 0.3) * fw / 2, segments: mdl.segmentCount)
+        case .text:
+            var text = layer
+            text.type = .text
+            text.textAnimators = []
+            text.textPath = nil
+            let outline = CGMutablePath()
+            for g in glyphPaths(text, at: t) { outline.addPath(g.path) }
+            mesh = MeshBuilder.extrude(outline, depth: Float(mdl.depth ?? layer.fontSize * 0.3),
+                                       bevel: Float(mdl.bevelValue), bevelSteps: mdl.bevelStepCount)
+        case .path:
+            mesh = MeshBuilder.extrude(layer.pathShape(at: t).cgPath, depth: Float(mdl.depth ?? 40), evenOdd: layer.fillRule == .evenodd,
+                                       bevel: Float(mdl.bevelValue), bevelSteps: mdl.bevelStepCount)
+        case .lathe:
+            mesh = MeshBuilder.lathe(layer.pathShape(at: t).cgPath, segments: mdl.segmentCount)
+        case .file:
+            if let p = layer.path, let m = try? MeshBuilder.load(URL(fileURLWithPath: (p as NSString).expandingTildeInPath),
+                                                                 size: Float(w > 0 ? w : 400)) {
+                mesh = m
+            } else {
+                mesh = Mesh3D() // unreadable: remembered, so it is not reloaded every frame
+            }
+        }
+        if meshCache.count > 48 { meshCache.removeAll() }
+        meshCache[key] = mesh
+        return mesh
+    }
+}
+
+private extension RGBA {
+    var simd: SIMD4<Float> { SIMD4(Float(r), Float(g), Float(b), Float(a)) }
 }

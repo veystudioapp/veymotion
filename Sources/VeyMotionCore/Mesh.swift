@@ -85,11 +85,19 @@ struct MeshWarp {
     var box = CGRect.zero
     var hideBackface = false
     private var homography: [Double]?
+    /// 3D layers: the whole projection of the layer's plane (row-major 3×3, not normalized: w = camera depth), applied
+    /// after the corner pin and puppet pins instead of the layer's own 2.5D rotation.
+    private var projective: [Double]?
+    private var facesAway3D = false
 
-    init?(_ layer: MotionLayer, box: CGRect, at t: Double) {
-        rotX = layer.value(.rotationX, at: t)
-        rotY = layer.value(.rotationY, at: t)
-        distance = max(50, layer.value(.perspective, at: t))
+    init?(_ layer: MotionLayer, box: CGRect, at t: Double, projective: [Double]? = nil, facesAway: Bool = false) {
+        self.projective = projective
+        facesAway3D = facesAway
+        if projective == nil {
+            rotX = layer.value(.rotationX, at: t)
+            rotY = layer.value(.rotationY, at: t)
+            distance = max(50, layer.value(.perspective, at: t))
+        }
         hideBackface = layer.hideBackface
         self.box = box
         if let cp = layer.cornerPin { pin = cp.value(at: t, loop: layer.loop["cornerPin"]) }
@@ -98,7 +106,7 @@ struct MeshWarp {
         }
         let rotates = abs(rotX) > 0.01 || abs(rotY) > 0.01
         let pinsMove = pins.contains { hypot($0.q.x - $0.p.x, $0.q.y - $0.p.y) > 0.01 }
-        guard rotates || pin != nil || pinsMove else { return nil }
+        guard rotates || pin != nil || pinsMove || projective != nil else { return nil }
         if !pinsMove { pins = [] }
         if let pin, box.width > 0, box.height > 0 {
             homography = Self.homography(from: [CGPoint(x: box.minX, y: box.minY), CGPoint(x: box.maxX, y: box.minY),
@@ -112,10 +120,19 @@ struct MeshWarp {
 
     /// True when the layer is turned away from the viewer.
     var facesAway: Bool {
-        cos(rotX * .pi / 180) * cos(rotY * .pi / 180) < 0
+        projective != nil ? facesAway3D : cos(rotX * .pi / 180) * cos(rotY * .pi / 180) < 0
     }
 
     func map(_ v: CGPoint) -> CGPoint {
+        mapped(v, clamp: true) ?? v
+    }
+
+    /// Like `map`, but nil for a point of a 3D layer that is behind the camera.
+    func mapChecked(_ v: CGPoint) -> CGPoint? {
+        mapped(v, clamp: false)
+    }
+
+    private func mapped(_ v: CGPoint, clamp: Bool) -> CGPoint? {
         var p = v
         if !pins.isEmpty { p = Self.mls(p, pins) }
         if let h = homography {
@@ -126,6 +143,14 @@ struct MeshWarp {
             let r = turned(p)
             let s = distance / max(distance + r.z, distance * 0.05)
             p = CGPoint(x: r.x * s, y: r.y * s)
+        }
+        if let h = projective {
+            var w = h[6] * p.x + h[7] * p.y + h[8]
+            if w <= View3D.near {
+                guard clamp else { return nil }
+                w = View3D.near
+            }
+            p = CGPoint(x: (h[0] * p.x + h[1] * p.y + h[2]) / w, y: (h[3] * p.x + h[4] * p.y + h[5]) / w)
         }
         return p
     }
@@ -156,6 +181,8 @@ struct MeshWarp {
                 pinned[i] = CGPoint(x: (h[0] * p.x + h[1] * p.y + h[2]) / w, y: (h[3] * p.x + h[4] * p.y + h[5]) / w)
             }
         }
+        // 3D: the plane's projection after the corner pin, kept unnormalized so pixels behind the camera are known.
+        if let p = projective { return homography.map { Self.mul3(p, $0) } ?? p }
         // The same clamp `map` applies: past it the projection is no longer the plane's.
         if rotates, pinned.contains(where: { distance + turned($0).z < distance * 0.05 + 1e-6 }) { return nil }
         guard let h = Self.homography(from: corners, to: corners.map(map)) else { return nil }
@@ -166,15 +193,21 @@ struct MeshWarp {
     /// Draws `src` (premultiplied RGBA bitmap of the layer flat: row 0 at flat.minY, columns across flat) into `ctx`
     /// warped by the homography `h` (layer space to warped layer space). Every device pixel is mapped back to the
     /// source and sampled bilinearly 2×2 times, so there are no seams and the edges stay antialiased.
-    static func drawProjective(_ src: CGContext, flat: CGRect, homography h: [Double], in ctx: CGContext) {
+    /// With `depth` (3D layers drawn straight into the frame), each pixel is hidden where something nearer was drawn
+    /// before and, when the layer is opaque, records its own depth.
+    static func drawProjective(_ src: CGContext, flat: CGRect, homography h: [Double], in ctx: CGContext,
+                               depth: DepthTarget? = nil) {
         guard let sp = src.data?.assumingMemoryBound(to: UInt8.self), src.bitsPerPixel == 32 else { return }
         let sw = src.width, sh = src.height, srb = src.bytesPerRow
         let m = ctx.ctm
-        // Device box of the warped layer, within what the context can show.
+        // Device box of the warped layer, within what the context can show. A 3D plane reaching behind the camera can
+        // cover anything: then the whole visible area is scanned and pixels whose source is behind are skipped.
+        let h8 = h.count == 9 ? h[8] : 1
         var box = CGRect.null
         for p in [CGPoint(x: flat.minX, y: flat.minY), CGPoint(x: flat.maxX, y: flat.minY),
                   CGPoint(x: flat.maxX, y: flat.maxY), CGPoint(x: flat.minX, y: flat.maxY)] {
-            let w = h[6] * p.x + h[7] * p.y + 1
+            let w = h[6] * p.x + h[7] * p.y + h8
+            guard w > View3D.near * 1e-3 else { box = .infinite; break }
             let q = CGPoint(x: (h[0] * p.x + h[1] * p.y + h[2]) / w, y: (h[3] * p.x + h[4] * p.y + h[5]) / w)
             box = box.union(CGRect(origin: q.applying(m), size: .zero))
         }
@@ -194,6 +227,7 @@ struct MeshWarp {
         let toSource: [Double] = [kx, 0, -flat.minX * kx - 0.5, 0, ky, -flat.minY * ky - 0.5, 0, 0, 1]
         let t = mul3(toSource, mul3(inv, toLayer))
         let offs: [Double] = [-0.25, 0.25]
+        let zb = depth?.buffer
         @inline(__always) func texel(_ x: Int, _ y: Int) -> (Float, Float, Float, Float) {
             guard x >= 0, y >= 0, x < sw, y < sh else { return (0, 0, 0, 0) }
             let q = sp + y * srb + x * 4
@@ -201,7 +235,22 @@ struct MeshWarp {
         }
         for row in 0..<dh {
             let out = dp + row * drb
+            let devY = Int(box.maxY) - 1 - row
             for col in 0..<dw {
+                // Depth at the pixel's center (1 / w of the inverse mapping).
+                var z: Float = 0
+                var zi = -1
+                if let zb, devY >= 0, devY < zb.height {
+                    let devX = Int(box.minX) + col
+                    if devX >= 0, devX < zb.width {
+                        let x = Double(devX) + 0.5, y = Double(devY) + 0.5
+                        let w = t[6] * x + t[7] * y + t[8]
+                        guard w > 1e-12 else { continue }
+                        z = Float(1 / w)
+                        zi = devY * zb.width + devX
+                        if zb.hides(z, at: zi) { continue }
+                    }
+                }
                 var r: Float = 0, g: Float = 0, b: Float = 0, a: Float = 0
                 for oy in offs {
                     // Memory row 0 is the top of the device box (device y points up).
@@ -223,6 +272,7 @@ struct MeshWarp {
                     }
                 }
                 guard a > 0 else { continue }
+                if zi >= 0, depth!.writes, a >= 2 * 255 { zb!.record(z, at: zi) }
                 let q = out + col * 4
                 q[0] = UInt8(min(255, r / 4 + 0.5)); q[1] = UInt8(min(255, g / 4 + 0.5))
                 q[2] = UInt8(min(255, b / 4 + 0.5)); q[3] = UInt8(min(255, a / 4 + 0.5))
@@ -236,7 +286,7 @@ struct MeshWarp {
     }
 
     /// Row-major 3×3 product a·b (a homography given as 8 values gets h8 = 1).
-    private static func mul3(_ a: [Double], _ b: [Double]) -> [Double] {
+    static func mul3(_ a: [Double], _ b: [Double]) -> [Double] {
         let a = a.count == 8 ? a + [1] : a, b = b.count == 8 ? b + [1] : b
         var r = [Double](repeating: 0, count: 9)
         for i in 0..<3 { for j in 0..<3 { r[i * 3 + j] = a[i * 3] * b[j] + a[i * 3 + 1] * b[3 + j] + a[i * 3 + 2] * b[6 + j] } }
@@ -305,4 +355,42 @@ struct MeshWarp {
         }
         return (0..<8).map { a[$0][8] / a[$0][$0] }
     }
+}
+
+/// Depth of what the 3D layers drawn so far show at each device pixel of the frame (camera-space z; +∞ = nothing yet).
+/// 3D layers are sorted far to near, so this only matters where that order is wrong: intersecting planes, a floor
+/// reaching under a card, a model passing through a layer.
+final class DepthBuffer {
+    let width: Int
+    let height: Int
+    private var data: [Float]
+
+    init(width: Int, height: Int) {
+        self.width = width; self.height = height
+        data = [Float](repeating: .infinity, count: width * height)
+    }
+
+    func reset() {
+        data.withUnsafeMutableBufferPointer { $0.update(repeating: .infinity) }
+    }
+
+    /// Something nearer than `z` is already at index `i` (with a little slack for layers that touch).
+    @inline(__always) func hides(_ z: Float, at i: Int) -> Bool {
+        z > data[i] * 1.002 + 0.5
+    }
+
+    /// The farthest depth still drawn at index `i` (+∞ = anything).
+    @inline(__always) func limit(at i: Int) -> Float {
+        data[i] * 1.002 + 0.5
+    }
+
+    @inline(__always) func record(_ z: Float, at i: Int) {
+        if z < data[i] { data[i] = z }
+    }
+}
+
+/// Where a 3D layer meets the frame's depth buffer: `writes` when it is opaque enough to hide what is behind it.
+struct DepthTarget {
+    var buffer: DepthBuffer
+    var writes: Bool
 }

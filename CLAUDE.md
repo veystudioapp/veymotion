@@ -62,7 +62,7 @@ over the canvas (UI-only, never in the scene), and "Add to chat" renders the fra
 ## Model details that span files
 
 - `Animated<V>` (`AnimValue` = numbers, `ColorValue` = `RGBA`) is either a constant or `{"keyframes":[...]}`. Keyframe `t` is absolute scene seconds, and `easing` applies to the segment *arriving* at that keyframe. A track is addressed as `KeyTrack` (`.number(AnimProperty)` / `.color(ColorProperty)`); timeline ops (`moveKeyframes`, `setEasing`, `deleteKeyframes`, `shiftLayers`) work on both.
-- Render code must read values through `MotionLayer.value(_:at:)` / `color(_:at:)` (they apply `loop` and `wiggle`) and position through `MotionScene.worldTransform(of:at:)` (parents, anchor, skew, motion path), not `layer.x.value(at:)`. Layers draw in list order (first is bottom-most). There is no real 3D: CoreGraphics has no perspective warp, so `rotationX/Y` and `cornerPin` are approximated by a triangle mesh (see `Mesh.swift` below), and the camera is 2D.
+- Render code must read values through `MotionLayer.value(_:at:)` / `color(_:at:)` (they apply `loop` and `wiggle`) and position through `MotionScene.worldTransform(of:at:)` (parents, anchor, skew, motion path), not `layer.x.value(at:)`. Layers draw in list order (first is bottom-most), except runs of 3D layers (see 3D below). On a 2D layer, `rotationX/Y` and `cornerPin` are a per-layer warp with its own perspective (see `Mesh.swift` below); the scene camera is 2D for 2D layers.
 - `MotionLayer` has custom Codable: decoding fills in defaults for missing fields, and encoding writes only the fields relevant to the layer's `type` (to keep JSON compact for agents). A new layer field needs `CodingKeys`, `init(from:)`, and `encode(to:)` updated, plus `Docs.instructions`.
 - To add an animatable number: add an `AnimProperty` case (+ `defaultValue`, `title`); if it isn't a stored field, add it to `AnimProperty.extras` and `CodingKeys` (it then lives in `MotionLayer.extra` and is written only when non-default). Then update `applicableProperties`, the `set_keyframes` enum in `Docs.toolsJSON`, `Docs.instructions`, and `FrameRenderer`.
 - Blur renders the layer into a bitmap covering only what it can reach once blurred (`contentBounds` + blur reach; the whole frame for text with animators) and blurs it with vImage (CPU). CoreImage returned nothing in sandboxed processes. Transparency layers (opacity < 1 or shadow) are bounded the same way: an unbounded one costs a full-frame pass per layer.
@@ -176,6 +176,22 @@ over the canvas (UI-only, never in the scene), and "Add to chat" renders the fra
   antialiasing so each pixel is drawn once (antialiased clips leave hairline seams; grown to overlap, they draw the
   seams twice and notch every glyph edge). `contentBounds` returns
   the warped bounds; `wipeBox`/`meshBox` must use `flatContentBounds` (calling `contentBounds` from them recurses).
+- 3D (`Space3D.swift`, `Model3D.swift`, `Raster3D.swift`, the `// MARK: - 3D` extension at the end of `Renderer.swift`):
+  `threeD` layers, `model` layers and every child of a 3D group with 3D children (`keepsChildren3D` → `drawGroup3D`,
+  which sets `space3D` so children get the group's matrix as a prefix) live in one 3D space: x/y scene px, z away from
+  the viewer. `localMatrix` (AE order: scale, X, Y, Z rotation around the anchor) × parents → `View3D` (camera
+  orbitX/Y, distance, lens, z; defaults show z 0 as drawn) → `LayerProjection`, whose plane homography is NOT
+  normalized (w = camera depth, so pixels behind the camera are rejected). The renderer gives a 3D layer an affine
+  stand-in transform (`place3D`: projected origin + uniform scale) so the 2D pipeline (blur, shadow, glow, effects,
+  bounds) runs unchanged, and `drawContent` projects it through `MeshWarp(projective:)` / `drawProjective`. Runs of
+  consecutive 3D layers are sorted far to near (`drawOrder`) and share a frame `DepthBuffer` (`Mesh.swift`) while
+  drawn straight into the frame (not inside offscreen bitmaps or flat groups); a 2D layer resets it. Wipes of 3D
+  layers are cut on their plane in `drawWarped`. Models: `MeshBuilder` primitives, extrusion (`CGPath.normalized`,
+  then `Earcut` with holes; a bevel insets each contour with `offsetContour`, which collapses edges that turn around
+  so the outline never crosses itself, and is capped per solid part by its measured stroke thickness), lathe (`d`
+  turned around the layer's vertical center line, x = radius) and files (OBJ/MTL and STL parsed here; usdz/usd/ply via ModelIO, which loads nothing in
+  sandboxed processes), cached in `meshCache`; `Raster3D` is a CPU z-buffer rasterizer (doubles for edge functions,
+  `modelSupersampling`² samples, Blinn-Phong + sky reflection for metals, `MotionScene.lights` or `Light.defaults`).
 - Grading (`Grading.swift`) runs in `PixelEffects.applyBeforeBlur` after the color matrix: one 256-entry tone table
   (levels + Fritsch–Carlson curve), gradient map, then a trilinear .cube LUT (`CubeLUT.load`, cached by mtime).
   Camera `focus`/`aperture` add `focusBlur` to a layer's blur (and to `motionBounds` padding).

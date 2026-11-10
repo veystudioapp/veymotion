@@ -261,12 +261,82 @@ final class SceneStore: SceneHost {
             if l.role == .music { l.duckTo = 0.3; l.fadeOut = 1.5 }
         case .particles: break
         case .generator: return addGenerator(.spectrum)
+        case .model: return addModel(.box)
         case .group: l.name = "Group"
         }
         var id = ""
         apply("Add Layer") { id = $0.addLayer(l) }
         selection = id
     }
+
+    /// Adds a 3D object at the center, turned a little so it reads as 3D.
+    func addModel(_ shape: ModelShape, path: String? = nil) {
+        let w = Double(scene.width), h = Double(scene.height)
+        let size = (min(w, h) * 0.35).rounded()
+        var l = MotionLayer(id: shape == .text ? "text3d" : shape.rawValue, name: shape.title, type: .model, x: w / 2, y: h / 2)
+        l.model = Model3D(shape: shape)
+        l.width = .constant(size)
+        l.height = .constant(size)
+        l.fill = .constant(RGBA(hex: "#6C5CE7")!)
+        l[.rotationX] = .constant(-20)
+        l[.rotationY] = .constant(30)
+        switch shape {
+        case .text:
+            l.text = "3D"
+            l.fontSize = (h * 0.3).rounded()
+            l.fontWeight = "black"
+            l.fill = .constant(RGBA(hex: "#FFD54A")!)
+            l.model.sideColor = RGBA(hex: "#B7791F")
+            l[.rotationX] = .constant(-10)
+            l[.rotationY] = .constant(-20)
+        case .sphere:
+            l.fill = .constant(RGBA(hex: "#00B894")!)
+            l.model.shininess = 0.6
+        case .cylinder, .cone:
+            l.width = .constant((size * 0.7).rounded())
+            l.height = .constant((size * 1.2).rounded())
+            l.fill = .constant(RGBA(hex: "#4FD1C5")!)
+        case .torus:
+            l.fill = .constant(RGBA(hex: "#FF6B9A")!)
+            l[.rotationX] = .constant(-55)
+        case .plane:
+            l.width = .constant((size * 1.6).rounded())
+        case .path:
+            l.d = (try? PathShape("star(5,\(Int(size / 2)),\(Int(size / 4.5)))")).map(PathValue.constant) ?? l.d
+            l.model.depth = (size * 0.2).rounded()
+            l.fill = .constant(RGBA(hex: "#FDCB6E")!)
+        case .lathe:
+            // A vase: the right half of its outline, open at the top, closed on the axis at the bottom.
+            let s = size
+            func n(_ v: Double) -> String { String(Int((v * s).rounded())) }
+            l.d = (try? PathShape("M0 \(n(0.5)) L\(n(0.2)) \(n(0.5)) C\(n(0.36)) \(n(0.42)) \(n(0.42)) \(n(0.12)) \(n(0.3)) \(n(-0.08)) "
+                                  + "C\(n(0.2)) \(n(-0.24)) \(n(0.12)) \(n(-0.32)) \(n(0.16)) \(n(-0.5))")).map(PathValue.constant) ?? l.d
+            l.model.segments = 64
+            l.model.shininess = 0.7
+            l.fill = .constant(RGBA(hex: "#E17055")!)
+            l[.rotationX] = .constant(-15)
+            l[.rotationY] = .constant(0)
+        case .file:
+            l.path = path
+            l.fill = .constant(.white)
+            if let path { l.name = (path as NSString).lastPathComponent }
+        case .box:
+            break
+        }
+        var id = ""
+        apply("Add \(shape.title)") { id = $0.addLayer(l) }
+        selection = id
+    }
+
+    /// Picks a 3D model file (OBJ, STL, USDZ, USD, PLY) and adds it as a model layer.
+    func addModelLayer() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = Self.modelExtensions.compactMap { UTType(filenameExtension: $0) }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        addFileLayer(url.path)
+    }
+
+    static let modelExtensions = ["obj", "stl", "usdz", "usd", "usda", "usdc", "ply", "abc"]
 
     func textToPath(_ id: String, letters: Bool) {
         do { try apply(letters ? "Split into Letters" : "Convert to Path") { _ = try $0.textToPath(id, letters: letters, at: time) } }
@@ -436,6 +506,22 @@ final class SceneStore: SceneHost {
             return
         }
         var path = path
+        let ext = (path as NSString).pathExtension.lowercased()
+        if Self.modelExtensions.contains(ext) {
+            // OBJ files name their materials and textures in files next to them: those stay where they are.
+            let sidecar = ext == "obj" && FileManager.default.fileExists(atPath: (path as NSString).deletingPathExtension + ".mtl")
+            if project != nil, !AssetStore.contains(path), !sidecar {
+                do {
+                    path = try AssetStore.importFile(AssetStore.expand(path)).path
+                    AssetLibrary.shared.refresh()
+                } catch {
+                    message = "Cannot copy \(name) into the project: \(error.localizedDescription)"
+                    return
+                }
+            }
+            addModel(.file, path: path)
+            return
+        }
         // A project keeps its own copy of every file it uses, so the folder stays complete.
         if project != nil, !AssetStore.contains(path), AssetStore.kind(of: URL(fileURLWithPath: path)) != .other {
             do {

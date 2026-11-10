@@ -140,8 +140,10 @@ struct LayerInspector: View {
                 if layer.type != .particles { PerspectiveRows(layer: layer) }
                 if store.scene.camera != nil {
                     HStack(spacing: 8) {
-                        NumberField("Depth", layer.depth) { v in store.updateLayer(layer.id, "Depth") { $0.depth = max(-0.9, v) } }
-                            .help("Parallax: 0 moves with the camera, 1 half as much (far), -0.5 twice as much (close)")
+                        if !layer.is3D {
+                            NumberField("Depth", layer.depth) { v in store.updateLayer(layer.id, "Depth") { $0.depth = max(-0.9, v) } }
+                                .help("Parallax: 0 moves with the camera, 1 half as much (far), -0.5 twice as much (close)")
+                        }
                         Toggle("Fixed", isOn: Binding(get: { layer.fixed }, set: { v in store.updateLayer(layer.id, "Fixed") { $0.fixed = v } }))
                             .toggleStyle(.checkbox).controlSize(.small)
                             .help("Ignore the camera (captions, logos)")
@@ -170,6 +172,7 @@ struct LayerInspector: View {
         case .video: return "Video"
         case .particles: return "Particles"
         case .generator: return "Generator"
+        case .model: return "3D Object"
         case .group: return "Group"
         default: return "Shape"
         }
@@ -388,6 +391,8 @@ struct LayerInspector: View {
             ParticlesEditor(layer: layer)
         case .generator:
             GeneratorEditor(layer: layer)
+        case .model:
+            ModelEditor(layer: layer)
         case .group:
             Text("\(layer.children.count) layers inside · \(layer.children.map(\.name).joined(separator: ", "))")
                 .font(.caption).foregroundStyle(.secondary).lineLimit(3)
@@ -600,12 +605,33 @@ struct PerspectiveRows: View {
 
     var body: some View {
         let id = layer.id
+        if layer.type != .model {
+            Toggle("3D layer", isOn: Binding(get: { layer.threeD }, set: { v in
+                store.updateLayer(id, v ? "Make 3D" : "Make 2D") { $0.threeD = v }
+            }))
+            .toggleStyle(.checkbox).controlSize(.small)
+            .help("Place the layer in the scene's 3D space: a Z depth, rotations seen through the camera (orbit, distance, lens), drawn by depth")
+        }
         Grid(horizontalSpacing: 8, verticalSpacing: 6) {
+            if layer.is3D {
+                GridRow {
+                    AnimField(layer: layer, property: .z, label: "Z")
+                    if layer.type == .model {
+                        AnimField(layer: layer, property: .scaleZ, label: "Scale Z")
+                    } else {
+                        Toggle("Hide back", isOn: Binding(get: { layer.hideBackface }, set: { v in
+                            store.updateLayer(id, "Backface") { $0.hideBackface = v }
+                        }))
+                        .toggleStyle(.checkbox).controlSize(.small)
+                        .help("Hide the layer while it is turned away (two layers = the two faces of a card)")
+                    }
+                }
+            }
             GridRow {
                 AnimField(layer: layer, property: .rotationX, label: "Rot X", unit: "°")
                 AnimField(layer: layer, property: .rotationY, label: "Rot Y", unit: "°")
             }
-            if layer.value(.rotationX, at: store.panelTime) != 0 || layer.value(.rotationY, at: store.panelTime) != 0
+            if !layer.is3D, layer.value(.rotationX, at: store.panelTime) != 0 || layer.value(.rotationY, at: store.panelTime) != 0
                 || layer[.rotationX].isAnimated || layer[.rotationY].isAnimated {
                 GridRow {
                     AnimField(layer: layer, property: .perspective, label: "Persp.")
@@ -617,7 +643,8 @@ struct PerspectiveRows: View {
                 }
             }
         }
-        .help("2.5D rotation: X tips the top back, Y turns the right side back; perspective = viewing distance in px")
+        .help(layer.is3D ? "3D: Z = depth (+ is away), X tips the top back, Y turns the right side back"
+              : "2.5D rotation: X tips the top back, Y turns the right side back; perspective = viewing distance in px")
         if layer.cornerPin != nil || !layer.pins.isEmpty {
             HStack {
                 Image(systemName: "pin").foregroundStyle(.secondary)
@@ -787,7 +814,29 @@ struct CameraSection: View {
                         NumberField("Rotate", cam.rotation.value(at: t), unit: "°", digits: 1) { v in edit("Camera Rotation") { $0.rotation = $0.rotation.setting(v, at: store.time) } }
                     }
                 }
-                let animated = [cam.x, cam.y, cam.zoom, cam.rotation].filter(\.isAnimated).count
+                Grid(horizontalSpacing: 8, verticalSpacing: 6) {
+                    GridRow {
+                        NumberField("Orbit X", cam.orbitX.value(at: t), unit: "°", digits: 1) { v in edit("Camera Orbit") { $0.orbitX = $0.orbitX.setting(v, at: store.time) } }
+                        NumberField("Orbit Y", cam.orbitY.value(at: t), unit: "°", digits: 1) { v in edit("Camera Orbit") { $0.orbitY = $0.orbitY.setting(v, at: store.time) } }
+                    }
+                    GridRow {
+                        let lens = cam.lens?.value(at: t) ?? s.defaultLens
+                        NumberField("Dist.", cam.distance?.value(at: t) ?? lens, unit: cam.distance == nil ? "auto" : "px", digits: 0) { v in
+                            edit("Camera Distance") { $0.distance = ($0.distance ?? .constant(lens)).setting(v, at: store.time) }
+                        }
+                        NumberField("Lens", lens, unit: cam.lens == nil ? "auto" : "px", digits: 0) { v in
+                            edit("Camera Lens") { $0.lens = ($0.lens ?? .constant(lens)).setting(max(1, v), at: store.time) }
+                        }
+                    }
+                    GridRow {
+                        NumberField("Z", cam.z.value(at: t), digits: 0) { v in edit("Camera Z") { $0.z = $0.z.setting(v, at: store.time) } }
+                            .help("Depth of the point the camera looks at: raise it to fly forward through 3D layers")
+                        Color.clear.frame(height: 1)
+                    }
+                }
+                .help("3D layers only: orbit turns the camera around the point it looks at (Y right, X up), distance moves it closer or farther, lens = focal length in px (longer = flatter)")
+                let tracks3D = [cam.z, cam.orbitX, cam.orbitY] + [cam.distance, cam.lens].compactMap { $0 }
+                let animated = ([cam.x, cam.y, cam.zoom, cam.rotation] + tracks3D).filter(\.isAnimated).count
                 HStack {
                     Text(animated > 0 ? "\(animated) animated track\(animated == 1 ? "" : "s")" : "Not animated")
                         .font(.caption).foregroundStyle(.secondary)
@@ -797,6 +846,10 @@ struct CameraSection: View {
                             if animated > 0 {
                                 c.x = .constant(c.x.value(at: t)); c.y = .constant(c.y.value(at: t))
                                 c.zoom = .constant(c.zoom.value(at: t)); c.rotation = .constant(c.rotation.value(at: t))
+                                c.z = .constant(c.z.value(at: t))
+                                c.orbitX = .constant(c.orbitX.value(at: t)); c.orbitY = .constant(c.orbitY.value(at: t))
+                                c.distance = c.distance.map { .constant($0.value(at: t)) }
+                                c.lens = c.lens.map { .constant($0.value(at: t)) }
                             } else {
                                 c.x = .keyframes([MotionKeyframe(t: store.time, v: c.x.value(at: t))])
                                 c.y = .keyframes([MotionKeyframe(t: store.time, v: c.y.value(at: t))])
@@ -1916,4 +1969,181 @@ extension RGBA {
         self.init(r: Double(ns.redComponent), g: Double(ns.greenComponent), b: Double(ns.blueComponent),
                   a: Double(ns.alphaComponent))
     }
+}
+
+/// Settings of a 3D object: its shape and size, how deep it is, and its material.
+struct ModelEditor: View {
+    @Environment(SceneStore.self) private var store
+    let layer: MotionLayer
+
+    var body: some View {
+        let id = layer.id
+        let m = layer.model
+        HStack(spacing: 6) {
+            RowLabel("Shape")
+            Picker("", selection: Binding(get: { m.shape }, set: { v in
+                store.updateLayer(id, "3D Shape") { l in
+                    l.model.shape = v
+                    if v == .text, l.text.isEmpty { l.text = "3D" }
+                }
+            })) {
+                ForEach(ModelShape.allCases, id: \.self) { Text($0.title).tag($0) }
+            }
+            .labelsHidden().controlSize(.small)
+        }
+        switch m.shape {
+        case .text:
+            TextField("Text", text: Binding(get: { layer.text }, set: { v in store.updateLayer(id, "Edit Text") { $0.text = v } }),
+                      axis: .vertical)
+                .textFieldStyle(.plain)
+                .lineLimit(1...4)
+                .padding(7)
+                .background(RoundedRectangle(cornerRadius: 5).fill(Color.primary.opacity(0.06)))
+            FontFamilyRow(layer: layer)
+            Grid(horizontalSpacing: 8, verticalSpacing: 6) {
+                GridRow {
+                    NumberField("Size", layer.fontSize, digits: 0) { v in store.updateLayer(id) { $0.fontSize = max(1, v) } }
+                    Picker("", selection: Binding(get: { layer.fontWeight }, set: { v in store.updateLayer(id) { $0.fontWeight = v } })) {
+                        ForEach(["thin", "light", "regular", "medium", "semibold", "bold", "heavy", "black"], id: \.self) {
+                            Text($0.capitalized).tag($0)
+                        }
+                    }
+                    .labelsHidden().controlSize(.small)
+                }
+            }
+        case .path, .lathe:
+            PathShapeField(layer: layer)
+            if m.shape == .lathe {
+                Text("The right half of the outline: x is the distance from the axis through the layer's center.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        case .file:
+            ModelFileRow(path: layer.path) { p in store.updateLayer(id, "Change Model") { $0.path = p } }
+            Grid(horizontalSpacing: 8, verticalSpacing: 6) {
+                GridRow {
+                    AnimField(layer: layer, property: .width, label: "Size")
+                    Color.clear.frame(height: 1)
+                }
+            }
+            .help("The model is scaled so its largest side is this many px")
+        default:
+            Grid(horizontalSpacing: 8, verticalSpacing: 6) {
+                GridRow {
+                    AnimField(layer: layer, property: .width, label: "W")
+                    AnimField(layer: layer, property: .height, label: "H")
+                }
+            }
+        }
+        Grid(horizontalSpacing: 8, verticalSpacing: 6) {
+            GridRow {
+                if m.shape != .plane && m.shape != .file && m.shape != .torus && m.shape != .lathe {
+                    NumberField("Depth", m.depth ?? 0, unit: m.depth == nil ? "auto" : "px", digits: 0) { v in
+                        store.updateLayer(id, "3D Depth") { $0.model.depth = v > 0 ? v : nil }
+                    }
+                    .help("Box depth, extrusion depth (text, path), or the size front to back (sphere, cylinder); 0 = automatic")
+                } else {
+                    Color.clear.frame(height: 1)
+                }
+                if [.sphere, .cylinder, .cone, .torus, .lathe].contains(m.shape) {
+                    NumberField("Segments", Double(m.segmentCount), digits: 0) { v in
+                        store.updateLayer(id, "3D Segments") { $0.model.segments = min(max(Int(v), 3), 256) }
+                    }
+                    .help("Roundness: fewer segments give a faceted, low-poly look")
+                } else {
+                    Color.clear.frame(height: 1)
+                }
+            }
+            if m.shape.isExtruded {
+                GridRow {
+                    NumberField("Bevel", m.bevelValue, unit: "px", digits: 0) { v in
+                        store.updateLayer(id, "3D Bevel") { $0.model.bevel = v > 0 ? v : nil }
+                    }
+                    .help("Rounded edges, in px (kept within half the depth and the thinnest stroke)")
+                    NumberField("Steps", Double(m.bevelStepCount), digits: 0) { v in
+                        store.updateLayer(id, "3D Bevel Steps") { $0.model.bevelSteps = min(max(Int(v), 1), 12) }
+                    }
+                    .help("Steps around the bevel: 1 = a flat chamfer, more = rounder")
+                }
+            }
+            if m.shape == .torus || m.shape == .cone {
+                GridRow {
+                    NumberField(m.shape == .torus ? "Tube" : "Top", m.radius ?? (m.shape == .torus ? 0.3 : 0)) { v in
+                        store.updateLayer(id, "3D Radius") { $0.model.radius = min(max(v, 0), 1) }
+                    }
+                    .help(m.shape == .torus ? "Tube thickness as a fraction of the radius" : "Top radius as a fraction of the bottom one")
+                    Color.clear.frame(height: 1)
+                }
+            }
+            GridRow {
+                NumberField("Gloss", m.shininessValue) { v in store.updateLayer(id, "3D Gloss") { $0.model.shininess = min(max(v, 0), 1) } }
+                    .help("0 = matte … 1 = glossy highlights")
+                NumberField("Metal", m.metallicValue) { v in store.updateLayer(id, "3D Metal") { $0.model.metallic = min(max(v, 0), 1) } }
+                    .help("0 = plastic … 1 = metal (reflects its own color)")
+            }
+        }
+        AnimColorField(layer: layer, property: .fill, label: "Color")
+        HStack(spacing: 6) {
+            Toggle("Sides", isOn: Binding(get: { m.sideColor != nil }, set: { on in
+                store.updateLayer(id, "3D Side Color") { l in
+                    l.model.sideColor = on ? (l.color(.fill, at: store.time) ?? .white).darkened : nil
+                }
+            }))
+            .toggleStyle(.checkbox).controlSize(.small)
+            .help("A color of its own for the extrusion walls, box sides and cylinder caps")
+            if let side = m.sideColor {
+                ColorField("", side) { c in store.updateLayer(id, "3D Side Color") { $0.model.sideColor = c } }
+            }
+        }
+        if m.shape.isTexturable {
+            HStack(spacing: 6) {
+                FileRow(path: layer.path, kind: .image) { p in store.updateLayer(id, "3D Texture") { $0.path = p } }
+                if layer.path != nil {
+                    Button("Remove") { store.updateLayer(id, "Remove Texture") { $0.path = nil } }.controlSize(.small)
+                }
+            }
+            .help("An image painted on the object (a planet map on a sphere, a label around a cylinder)")
+        }
+        Text("Lights: the scene's lights (update_scene \"lights\"), or a soft default rig.")
+            .font(.caption2).foregroundStyle(.tertiary)
+    }
+}
+
+/// A model file: the library's 3D files, or any file on disk.
+struct ModelFileRow: View {
+    let path: String?
+    let onPick: (String) -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "cube").foregroundStyle(.secondary)
+            Text((path as NSString?)?.lastPathComponent ?? "No file")
+                .lineLimit(1).truncationMode(.middle)
+                .foregroundStyle(path == nil ? .secondary : .primary)
+                .help(path ?? "")
+            Spacer(minLength: 4)
+            Menu("Replace") {
+                let assets = AssetLibrary.shared.assets.filter {
+                    SceneStore.modelExtensions.contains(($0.name as NSString).pathExtension.lowercased())
+                }
+                if !assets.isEmpty {
+                    Section("Assets") {
+                        ForEach(assets) { a in Button(a.name) { onPick(a.path) } }
+                    }
+                }
+                Button("Other File…") {
+                    let panel = NSOpenPanel()
+                    panel.allowedContentTypes = SceneStore.modelExtensions.compactMap { UTType(filenameExtension: $0) }
+                    if panel.runModal() == .OK, let url = panel.url { onPick(url.path) }
+                }
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+        }
+        .font(.callout)
+        .fieldBackground()
+    }
+}
+
+private extension RGBA {
+    var darkened: RGBA { RGBA(r: r * 0.6, g: g * 0.6, b: b * 0.6, a: a) }
 }

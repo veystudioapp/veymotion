@@ -1,8 +1,8 @@
 import CoreGraphics
 import Foundation
 
-// The scene camera (2D: pan, zoom, rotate, with parallax by layer depth), property links between layers, and
-// group layers' sub-scenes.
+// The scene camera (pan, zoom, rotate, with parallax by layer depth for 2D layers; orbit, distance and lens for 3D
+// layers, see `Space3D.swift`), property links between layers, and group layers' sub-scenes.
 
 // MARK: - Camera
 
@@ -19,14 +19,26 @@ public struct Camera: Codable, Equatable, Sendable {
     /// Depth of field: layers whose `depth` differs from `focus` blur by `aperture` px per unit of difference.
     public var focus: AnimValue
     public var aperture: AnimValue
+    /// 3D layers only: depth of the target point (px, + = away), the camera turning around the target (degrees:
+    /// orbitY to the right, orbitX up, looking down), its distance from the target (px, nil = the lens, so z 0 shows
+    /// as drawn) and its focal length (px, nil = `MotionScene.defaultLens`; longer = flatter).
+    public var z: AnimValue
+    public var orbitX: AnimValue
+    public var orbitY: AnimValue
+    public var distance: AnimValue?
+    public var lens: AnimValue?
 
     public init(x: Double, y: Double, zoom: Double = 1, rotation: Double = 0) {
         self.x = .constant(x); self.y = .constant(y); self.zoom = .constant(zoom); self.rotation = .constant(rotation)
         wiggle = [:]
         focus = .constant(0); aperture = .constant(0)
+        z = .constant(0); orbitX = .constant(0); orbitY = .constant(0)
+        distance = nil; lens = nil
     }
 
-    enum CodingKeys: String, CodingKey { case x, y, zoom, rotation, wiggle, focus, aperture }
+    static let wiggleKeys = ["x", "y", "zoom", "rotation", "z", "orbitX", "orbitY", "distance"]
+
+    enum CodingKeys: String, CodingKey { case x, y, zoom, rotation, wiggle, focus, aperture, z, orbitX, orbitY, distance, lens }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -38,9 +50,14 @@ public struct Camera: Codable, Equatable, Sendable {
         wiggle = try c.decodeIfPresent([String: Wiggle].self, forKey: .wiggle) ?? [:]
         focus = try c.decodeIfPresent(AnimValue.self, forKey: .focus) ?? .constant(0)
         aperture = try c.decodeIfPresent(AnimValue.self, forKey: .aperture) ?? .constant(0)
-        for k in wiggle.keys where !["x", "y", "zoom", "rotation"].contains(k) {
+        z = try c.decodeIfPresent(AnimValue.self, forKey: .z) ?? .constant(0)
+        orbitX = try c.decodeIfPresent(AnimValue.self, forKey: .orbitX) ?? .constant(0)
+        orbitY = try c.decodeIfPresent(AnimValue.self, forKey: .orbitY) ?? .constant(0)
+        distance = try c.decodeIfPresent(AnimValue.self, forKey: .distance)
+        lens = try c.decodeIfPresent(AnimValue.self, forKey: .lens)
+        for k in wiggle.keys where !Self.wiggleKeys.contains(k) {
             throw DecodingError.dataCorruptedError(forKey: .wiggle, in: c,
-                debugDescription: "Unknown camera property '\(k)' in wiggle. Use x, y, zoom or rotation.")
+                debugDescription: "Unknown camera property '\(k)' in wiggle. Use \(Self.wiggleKeys.joined(separator: ", ")).")
         }
     }
 
@@ -53,6 +70,16 @@ public struct Camera: Codable, Equatable, Sendable {
         if !wiggle.isEmpty { try c.encode(wiggle, forKey: .wiggle) }
         if focus != .constant(0) { try c.encode(focus, forKey: .focus) }
         if aperture != .constant(0) { try c.encode(aperture, forKey: .aperture) }
+        if z != .constant(0) { try c.encode(z, forKey: .z) }
+        if orbitX != .constant(0) { try c.encode(orbitX, forKey: .orbitX) }
+        if orbitY != .constant(0) { try c.encode(orbitY, forKey: .orbitY) }
+        try c.encodeIfPresent(distance, forKey: .distance)
+        try c.encodeIfPresent(lens, forKey: .lens)
+    }
+
+    /// Uses 3D settings (only 3D layers see them).
+    public var is3D: Bool {
+        z != .constant(0) || orbitX != .constant(0) || orbitY != .constant(0) || distance != nil || lens != nil
     }
 
     /// The camera with missing x/y set to the scene center.
@@ -86,6 +113,8 @@ public struct Camera: Codable, Equatable, Sendable {
     public mutating func shiftKeys(by d: Double) {
         x = x.shifted(by: d); y = y.shifted(by: d); zoom = zoom.shifted(by: d); rotation = rotation.shifted(by: d)
         focus = focus.shifted(by: d); aperture = aperture.shifted(by: d)
+        z = z.shifted(by: d); orbitX = orbitX.shifted(by: d); orbitY = orbitY.shifted(by: d)
+        distance = distance?.shifted(by: d); lens = lens?.shifted(by: d)
     }
 }
 
@@ -111,6 +140,7 @@ extension MotionScene {
         var s = MotionScene(width: max(w, 1), height: max(h, 1), fps: fps, duration: duration, background: .clear,
                             layers: group.children)
         s.camera = nil
+        s.lights = lights
         return s
     }
 }

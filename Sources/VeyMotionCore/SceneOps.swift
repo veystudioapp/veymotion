@@ -3,10 +3,12 @@ import Foundation
 public enum Preset: String, CaseIterable, Codable, Sendable {
     // Entrances
     case fadeIn, slideUp, slideDown, slideInLeft, slideInRight, popIn, zoomIn, blurIn, bounceIn, dropIn, flipIn, rotateIn, wipeIn
+    case swingIn
     // Exits
     case fadeOut, slideOutUp, slideOutDown, slideOutLeft, slideOutRight, popOut, zoomOut, blurOut, flipOut, wipeOut
+    case swingOut
     // Emphasis
-    case spin, pulse, heartbeat, shake, wobble, jello, glitchBurst
+    case spin, pulse, heartbeat, shake, wobble, jello, glitchBurst, turntable
     // Shapes
     case drawOn, writeOn
     // Text
@@ -37,6 +39,9 @@ public enum Preset: String, CaseIterable, Codable, Sendable {
         case .rotateIn: return "Rotate In"
         case .wipeIn: return "Wipe In"
         case .wipeOut: return "Wipe Out"
+        case .swingIn: return "Swing In (3D)"
+        case .swingOut: return "Swing Out (3D)"
+        case .turntable: return "Turntable (3D)"
         case .spin: return "Spin"
         case .pulse: return "Pulse"
         case .heartbeat: return "Heartbeat"
@@ -65,10 +70,10 @@ public enum Preset: String, CaseIterable, Codable, Sendable {
     public var group: Group {
         switch self {
         case .fadeIn, .slideUp, .slideDown, .slideInLeft, .slideInRight, .popIn, .zoomIn, .blurIn, .bounceIn, .dropIn,
-             .flipIn, .rotateIn, .wipeIn: return .entrance
+             .flipIn, .rotateIn, .wipeIn, .swingIn: return .entrance
         case .fadeOut, .slideOutUp, .slideOutDown, .slideOutLeft, .slideOutRight, .popOut, .zoomOut, .blurOut,
-             .flipOut, .wipeOut: return .exit
-        case .spin, .pulse, .heartbeat, .shake, .wobble, .jello, .glitchBurst: return .emphasis
+             .flipOut, .wipeOut, .swingOut: return .exit
+        case .spin, .pulse, .heartbeat, .shake, .wobble, .jello, .glitchBurst, .turntable: return .emphasis
         case .drawOn, .writeOn: return .shape
         case .typewriter, .textRise, .textPop, .textDrop, .textLines, .textOut, .decode, .textBlurIn, .textFocus: return .text
         }
@@ -428,6 +433,19 @@ extension MotionScene {
         case .flipOut:
             put(.scaleX, [kf(s, l.value(.scaleX, at: s), .linear), kf(e, 0, .curve(.back, .in))])
             fadeOut(from: 0.6)
+        case .swingIn:
+            // Turns in around its vertical axis (3D layers, models; 2.5D on others).
+            let r = l[.rotationY].value(at: e)
+            put(.rotationY, [kf(s, r + 90, .linear), kf(e, r, .curve(.back, .out))])
+            fadeIn(0.3)
+        case .swingOut:
+            let r = l[.rotationY].value(at: s)
+            put(.rotationY, [kf(s, r, .linear), kf(e, r - 90, .curve(.back, .in))])
+            fadeOut(from: 0.6)
+        case .turntable:
+            // One full turn at an even speed (loop "rotationY": "offset" keeps it going).
+            let r = l[.rotationY].value(at: s)
+            put(.rotationY, [kf(s, r, .linear), kf(e, r + 360, .linear)])
         case .rotateIn:
             let r = l.rotation.value(at: e), sc = l.scale.value(at: e)
             put(.rotation, [kf(s, r - 90, .linear), kf(e, r, .springWith(damping: 7, frequency: 9))])

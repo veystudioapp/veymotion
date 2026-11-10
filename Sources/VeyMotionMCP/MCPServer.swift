@@ -955,7 +955,7 @@ public final class MCPServer {
     private func fontNotes(_ layers: [MotionLayer]) -> [String] {
         var notes: [String] = []
         var reported = Set<String>()
-        for l in layers where l.type == .text {
+        for l in layers where l.type == .text || (l.type == .model && l.model.shape == .text) {
             guard let name = l.fontName, !name.trimmingCharacters(in: .whitespaces).isEmpty else { continue }
             guard let ps = FontLibrary.resolve(name, weight: l.fontWeight) else {
                 if reported.insert(name).inserted {

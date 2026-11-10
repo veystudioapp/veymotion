@@ -14,7 +14,7 @@ enum Docs {
       Publishing is done by the user from the app (Export → Publish); you cannot post.
 
     LAYER
-    Common: id, name, type ("rect" | "ellipse" | "path" | "text" | "image" | "video" | "audio" | "particles" | "generator" | "group"), start, end (seconds, end optional = scene end),
+    Common: id, name, type ("rect" | "ellipse" | "path" | "text" | "image" | "video" | "audio" | "particles" | "generator" | "group" | "model"), start, end (seconds, end optional = scene end),
             x, y, scale, rotation (degrees), opacity (0..1)
     rect/ellipse: width, height, cornerRadius (rect), fill "#RRGGBB[AA]", stroke, strokeWidth (see STROKES for trim)
     path: any vector shape. d = the shape in layer px around the layer's x/y (0,0 in d is at x/y and is the pivot for
@@ -50,6 +50,7 @@ enum Docs {
     particles: see PARTICLES.
     generator: see GENERATORS.
     group: children (an array of layers, see GROUPS).
+    model: a lit 3D object (box, sphere, extruded/beveled text, turned profile, an OBJ/USDZ file…), see 3D.
     Optional on every visual layer (omit when unused):
       scaleX, scaleY (multiply scale; flip effects), skewX, skewY (degrees), anchorX, anchorY (pivot for rotation/scale/
       skew as an offset from the center in layer px, e.g. anchorX = -width/2 spins around the left edge; does not move the
@@ -62,11 +63,12 @@ enum Docs {
       waveLength, waveSpeed, twirl, bulge, distortRadius, turbulence, posterize, pixelate, rgbSplit, glitch, grain,
       scanlines, vignette, directionalBlur, blurAngle, zoomBlur, posterizeTime (see AFTER EFFECTS-STYLE TOOLS),
       depth, fixed (see CAMERA), links (see LINKS), rotationX, rotationY, perspective, hideBackface, cornerPin, pins
-      (see 2.5D AND WARPS), levelsBlack, levelsWhite, levelsGamma, curves, gradientMap, gradientMapAmount, lut,
+      (see 2.5D AND WARPS), threeD, z (see 3D), levelsBlack, levelsWhite, levelsGamma, curves, gradientMap, gradientMapAmount, lut,
       lutAmount (see GRADING), removeBackground
 
     ANIMATION
-    Every number above (x, y, scale, scaleX, scaleY, rotation, skewX, skewY, anchorX, anchorY, opacity,
+    Every number above (x, y, z, scale, scaleX, scaleY, scaleZ, rotation, rotationX, rotationY, skewX, skewY, anchorX,
+    anchorY, opacity,
     width, height, cornerRadius, strokeWidth, trim, trimStart, trimOffset, reveal, letterSpacing, blur, shadowX, shadowY,
     shadowBlur, shadowOpacity, glow, glowRadius, pathProgress, volume, emission, particleSpeed, particleSize, brightness,
     contrast, saturation, hue, tint, wipe and the stylize/distort/keying numbers below), the colors
@@ -180,7 +182,8 @@ enum Docs {
       stop-motion / hand-made look), the rest of the scene stays smooth.
     - These effects work on the layer's pixels in a bitmap, so they cost more than shapes: use them on the layers
       that need them, and prefer small areas over full-frame layers when you stack several.
-    - Layers draw in list order (no 3D camera). For depth, combine scale, blur and parallax (far layers move less).
+    - 2D layers draw in list order. For real depth (z, a camera that orbits and flies through, objects that hide each
+      other, lit 3D objects), see 3D; for a cheap sense of depth, combine scale, blur and parallax.
 
     FONTS
     - fontName is a font family; fontWeight picks the closest face it has. Without fontName, text uses the system font
@@ -267,10 +270,12 @@ enum Docs {
     - World-space particles follow the camera like everything else; group children see no camera of their own.
     - Depth of field: camera focus (the depth in focus, default 0) and aperture (px of blur per unit of depth away
       from it, default 0 = off; 4–10 is cinematic). Rack focus = keyframe focus from one layer's depth to another's.
+    - 3D layers (see 3D) also follow orbitX, orbitY, distance, lens and z on the camera; 2D layers ignore those.
 
     2.5D AND WARPS (every visual layer except particles; the layer is drawn flat, then warped)
     - rotationX (degrees, + tips the top back), rotationY (+ turns the right side back), perspective (viewing distance
-      px, default 1200; smaller = stronger). Animatable: card flips, panels swinging in, a group (whole UI card)
+      px, default 1200; smaller = stronger). Each 2D layer has its own perspective: for layers that must share one
+      space (a cube of faces, cards around a carousel, a floor) or a moving camera, use 3D layers instead. Animatable: card flips, panels swinging in, a group (whole UI card)
       turning in 3D. Text: perspective makes letters lean and shrink unevenly, which reads as crooked, so do not put
       rotationX/Y on text (or on a group holding text) unless the user asks for a 3D/tilt look. Even then, make it a
       short entrance/exit that ends at 0 so text that stays on screen is flat, keep any held tilt under ~10°, and
@@ -344,10 +349,83 @@ enum Docs {
       colors = [core, ghosts]. Animate x/y (or from) to sweep it across; use blendMode add over footage.
     - seed (all kinds) gives another random pattern.
 
-    3D MODELS / RENDERS
-    3D content comes in as rendered video: render in Blender (or any 3D app) to a PNG sequence with a transparent
-    background (Film → Transparent, output PNG RGBA) or ProRes 4444 .mov with alpha, then add a video layer pointing at
-    the folder or file. It composites like any layer (position, scale, blur, shadow, presets).
+    3D (a shared 3D space with a real camera, and lit 3D objects)
+    - threeD: true puts a layer (any visual type but particles) in the scene's 3D space. z (px, + = away from the
+      viewer, - = closer; animatable) places it in depth; rotationX / rotationY / rotation turn it in 3D around its
+      anchor (+X tips the top back, +Y turns the right side back), all seen through the scene camera with ONE shared
+      perspective (`perspective` is ignored). With the default camera a 3D layer at z 0 looks exactly like its 2D
+      self, so a scene can be made 3D step by step.
+    - 3D layers are drawn far to near and hide each other per pixel (intersections, a floor under cards, walls), so
+      their order in the list does not matter. A 2D layer between them splits them into separate groups that do
+      not hide each other (it is drawn in list order, like in After Effects): keep backgrounds and HUD/captions 2D
+      at the bottom/top of the list. Layers with blur or pixel effects are sorted but do not hide others per pixel.
+    - Camera for 3D layers (with or without a "camera" object): the default camera looks at the frame's center from
+      `distance` = the lens (the longer side of the frame in px). camera fields: orbitY (degrees; the camera circles
+      to the right of the scene), orbitX (degrees; it rises and looks down), distance (px from the point it looks at:
+      smaller = a dolly in), lens (focal length px: longer = flatter, shorter = wide angle), z (depth of the point it
+      looks at: animate it to fly forward through layers spread along z), plus x, y, zoom, rotation as for 2D. All
+      animatable and wiggle-able. A slow orbitY of 15–30° is the classic "3D parallax" move; orbit + z fly-throughs
+      for title sequences. Depth of field uses real distances: focus 0 = the camera's distance, 1 = twice as far.
+    - Groups: a group with threeD: true whose children have threeD: true keeps them in 3D: x/y are in the group's box,
+      z is relative to the group, and they sort by depth with each other — build a cube, a room, a carousel, then
+      turn it as one (rotationY on the group). The group's opacity and blend mode apply; its other effects do not.
+      A 3D group without 3D children is one flat card turning in 3D. parent also chains 3D transforms (the parent
+      must be threeD too; a rect with opacity 0 makes a rig).
+      Cube of side W from rect faces in a threeD group with width = height = W, all children threeD, all W×W:
+      front {"x":W/2,"y":W/2,"z":-W/2}, back z:+W/2, left {"x":0,"y":W/2,"rotationY":90}, right {"x":W,"y":W/2,
+      "rotationY":90}, top {"x":W/2,"y":0,"rotationX":90}, bottom {"x":W/2,"y":W,"rotationX":90}.
+    - hideBackface hides a 3D layer while its back faces the camera (two-sided cards). wipe works on the layer's
+      plane; blur, shadow, glow, color correction and mattes still apply.
+    - model layers are real, lit 3D objects (always 3D: z, rotationX/Y, rotation, scale, scaleZ, parent, presets
+      and every effect work):
+      {"id":"logo3d","type":"model","model":{"shape":"text","depth":60,"sideColor":"#B7791F","shininess":0.5},
+       "text":"VEY","fontSize":220,"fontWeight":"black","fill":"#FFD54A","x":960,"y":540,"rotationY":-20}
+      model.shape: box (width × height × model.depth, default depth = the smaller side) | sphere (width × height ×
+      depth, default depth = width) | cylinder, cone (upright: width = diameter, height; cone model.radius = top
+      radius 0..1, default 0) | torus (a ring facing the viewer; width = outer diameter, model.radius = tube 0..1,
+      default 0.3) | plane | text (extruded letters: text, fontName, fontWeight, fontSize, align, maxWidth; depth
+      default 0.3 × fontSize) | path (extrudes d like a path layer, fillRule respected; depth default 40) | lathe
+      (turns the profile d around the vertical axis through the layer's center: x = distance from the axis, y =
+      height, both in px around the center; open or closed subpaths; start/end a profile at x 0 to close it; vases,
+      bottles, cups, chess pieces, lamps, rockets, bowls, columns, spinning tops) | file (path = a model file: .obj
+      with its .mtl colors/textures, or .stl; .usdz/.usd/.ply load only in the app; scaled so its largest side =
+      width, default 400; import it with import_asset first).
+      Lathe vase, 300 px tall, open at the top: "model":{"shape":"lathe","segments":64},"d":"M0 150 L60 150
+      C110 125 125 40 90 -20 C60 -70 35 -95 48 -150". A wine glass: foot + stem + bowl in one profile from x 0 at
+      the bottom to the rim at the top. A closed subpath away from the axis makes a ring (a donut, a tire).
+      model.bevel (text, path) = rounded edge size in px (logo/title look: 3–8% of fontSize; kept within half the
+      depth and the thinnest stroke); model.bevelSteps 1 = a flat chamfer, default 3 = round. The bevel takes the
+      fill color, the walls between take sideColor: gold text with bevel 8 and a dark sideColor reads as polished.
+      fill = the color (animatable); model.sideColor = extrusion walls, box sides and cylinder/cone caps (default
+      fill; a darker shade reads best); model.shininess 0..1 (default 0.3); model.metallic 0..1 (1 = metal: chrome
+      with a light gray fill, gold with #E0B94F); model.segments = roundness (default 48; 6–10 = a low-poly gem);
+      path on box/sphere/cylinder/plane/lathe = an image texture (a planet map on a sphere, a label around a can).
+    - Designing objects: build them from parts in a threeD group (each part a model layer with its own color and
+      material: a rocket = lathe body + extruded path fins + cylinder nozzle; a tree = cone + cylinder; a robot =
+      boxes + spheres), then animate the group as one and the parts on their own (propellers spinning, a lid
+      opening). For any shape these cannot make (terrain, crystals, low-poly animals, gears, stairs, twisted
+      forms), compute the mesh yourself and write it as an OBJ with write_asset, then use it as a file model:
+      write_asset {"name":"gem.obj","folder":"models","overwrite":true,"text":"mtllib gem.mtl\nv 0 1 0\n
+      v 0.5 0 0.5\n...\nusemtl blue\nf 1 2 3\n..."} and {"name":"gem.mtl","folder":"models","overwrite":true,
+      "text":"newmtl blue\nKd 0.2 0.5 1\n"}, then add_layer {"type":"model","model":{"shape":"file"},
+      "path":"<the returned path of gem.obj>","width":400}. OBJ rules: y up, z toward the viewer (it is turned to
+      the scene's axes and centered for you), any units (scaled so its largest side = width); faces are 1-based
+      vertex indices, 3 or more per face (polygons are fanned); "vn" normals are optional (without them flat faces
+      stay sharp and gentle bends under 40° shade smooth); "usemtl" switches the color for the faces after it
+      (Kd r g b 0..1, d = opacity). Keep it under ~50k triangles (CPU renderer). Write the .obj and .mtl to the same
+      folder with overwrite true so mtllib finds it; faces without a material take the fill color.
+    - lights (scene level, for models): "lights":[{"type":"ambient","intensity":0.3},
+      {"type":"directional","x":0.4,"y":0.6,"z":1,"intensity":0.8},
+      {"type":"point","x":960,"y":200,"z":-600,"color":"#FFB86B","intensity":0.6}]
+      directional x/y/z = the direction the light travels (y down, z away: 0.4, 0.6, 1 comes from the upper left, in
+      front of the scene); point x/y/z = its position in scene px. intensity is animatable (flicker, light-up
+      moments). Without lights a soft default rig is used. Set them with update_scene {"changes":{"lights":[...]}}.
+    - Presets for 3D: turntable (one full turn on rotationY; add loop {"rotationY":"offset"} to keep spinning),
+      swingIn, swingOut (90° turns with a fade).
+    - Readability: text that must be read should face the camera at rest; make big 3D moves entrances/exits or keep
+      orbits gentle. Always render_frame a few times of a 3D shot to check depth order and framing.
+    - Footage rendered in Blender (or any 3D app) still works too: a PNG sequence with alpha or a ProRes 4444 .mov
+      as a video layer.
 
     AUDIO
     audio layers: type "audio", path, start, end (optional; default = end of file), role ("voice"|"music"|"sfx"),
@@ -489,7 +567,7 @@ enum Docs {
       },
       {
         "name": "update_scene",
-        "description": "Change scene settings (width, height, fps, duration, background) without touching layers.",
+        "description": "Change scene settings (width, height, fps, duration, background, camera, lights) without touching layers.",
         "inputSchema": {
           "type": "object",
           "properties": { "changes": { "type": "object", "description": "e.g. {\"duration\": 8, \"background\": \"#000000\"}" } },
@@ -547,7 +625,7 @@ enum Docs {
           "type": "object",
           "properties": {
             "id": { "type": "string" },
-            "property": { "type": "string", "enum": ["counter", "scramble", "textOffset", "timeRemap", "rotationX", "rotationY", "perspective", "levelsBlack", "levelsWhite", "levelsGamma", "gradientMapAmount", "lutAmount", "x", "y", "scale", "scaleX", "scaleY", "rotation", "skewX", "skewY", "anchorX", "anchorY", "opacity", "width", "height", "cornerRadius", "strokeWidth", "trim", "trimStart", "trimOffset", "reveal", "letterSpacing", "blur", "shadowX", "shadowY", "shadowBlur", "shadowOpacity", "glow", "glowRadius", "pathProgress", "volume", "emission", "particleSpeed", "particleSize", "brightness", "contrast", "saturation", "hue", "tint", "wipe", "keyTolerance", "keySoftness", "waveWarp", "ripple", "waveLength", "waveSpeed", "twirl", "bulge", "distortRadius", "turbulence", "posterize", "pixelate", "rgbSplit", "glitch", "grain", "scanlines", "vignette", "directionalBlur", "blurAngle", "zoomBlur", "fill", "stroke", "color", "d"] },
+            "property": { "type": "string", "enum": ["counter", "scramble", "textOffset", "timeRemap", "rotationX", "rotationY", "perspective", "z", "scaleZ", "levelsBlack", "levelsWhite", "levelsGamma", "gradientMapAmount", "lutAmount", "x", "y", "scale", "scaleX", "scaleY", "rotation", "skewX", "skewY", "anchorX", "anchorY", "opacity", "width", "height", "cornerRadius", "strokeWidth", "trim", "trimStart", "trimOffset", "reveal", "letterSpacing", "blur", "shadowX", "shadowY", "shadowBlur", "shadowOpacity", "glow", "glowRadius", "pathProgress", "volume", "emission", "particleSpeed", "particleSize", "brightness", "contrast", "saturation", "hue", "tint", "wipe", "keyTolerance", "keySoftness", "waveWarp", "ripple", "waveLength", "waveSpeed", "twirl", "bulge", "distortRadius", "turbulence", "posterize", "pixelate", "rgbSplit", "glitch", "grain", "scanlines", "vignette", "directionalBlur", "blurAngle", "zoomBlur", "fill", "stroke", "color", "d"] },
             "keyframes": {
               "type": "array",
               "items": {
@@ -568,7 +646,7 @@ enum Docs {
           "properties": {
             "id": { "type": "string" },
             "ids": { "type": "array", "items": { "type": "string" }, "description": "Several layers, in cascade order." },
-            "preset": { "type": "string", "enum": ["fadeIn", "slideUp", "slideDown", "slideInLeft", "slideInRight", "popIn", "zoomIn", "blurIn", "bounceIn", "dropIn", "flipIn", "rotateIn", "wipeIn", "fadeOut", "slideOutUp", "slideOutDown", "slideOutLeft", "slideOutRight", "popOut", "zoomOut", "blurOut", "flipOut", "wipeOut", "spin", "pulse", "heartbeat", "shake", "wobble", "jello", "glitchBurst", "drawOn", "writeOn", "typewriter", "textRise", "textPop", "textDrop", "textLines", "textOut", "decode", "textBlurIn", "textFocus"] },
+            "preset": { "type": "string", "enum": ["fadeIn", "slideUp", "slideDown", "slideInLeft", "slideInRight", "popIn", "zoomIn", "blurIn", "bounceIn", "dropIn", "flipIn", "rotateIn", "wipeIn", "swingIn", "fadeOut", "slideOutUp", "slideOutDown", "slideOutLeft", "slideOutRight", "popOut", "zoomOut", "blurOut", "flipOut", "wipeOut", "swingOut", "spin", "pulse", "heartbeat", "shake", "wobble", "jello", "glitchBurst", "turntable", "drawOn", "writeOn", "typewriter", "textRise", "textPop", "textDrop", "textLines", "textOut", "decode", "textBlurIn", "textFocus"] },
             "start": { "type": "number" },
             "duration": { "type": "number", "default": 0.6 },
             "stagger": { "type": "number", "description": "Seconds between layers when several ids are given." }

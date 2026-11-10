@@ -2,6 +2,8 @@ import Foundation
 
 public enum LayerType: String, Codable, CaseIterable, Sendable {
     case rect, ellipse, path, text, image, video, audio, particles, generator, group
+    /// A 3D object (box, sphere, extruded text…, or a model file), lit and drawn in the scene's 3D space.
+    case model
 
     /// Drawn in the frame (audio layers are not).
     public var isVisual: Bool { self != .audio }
@@ -75,14 +77,17 @@ public enum AnimProperty: String, Codable, CaseIterable, Sendable {
     /// Video: the source second shown (keyframed: speed ramps, freeze frames, reverse). Replaces speed/trimIn.
     case timeRemap
     /// 2.5D: turn around the layer's horizontal / vertical axis (degrees), seen from `perspective` px away.
+    /// In 3D (`threeD` layers, models) they turn the layer in the scene's 3D space and `perspective` is unused.
     case rotationX, rotationY, perspective
+    /// 3D: depth of the layer (px, + = away from the viewer) and scale along it (models).
+    case z, scaleZ
     /// Grading: input levels (black/white point 0…1, gamma), and how much of `gradientMap` / `lut` applies (0…1).
     case levelsBlack, levelsWhite, levelsGamma, gradientMapAmount, lutAmount
 
     /// Value a layer has when the property is not set.
     public var defaultValue: Double {
         switch self {
-        case .scale, .scaleX, .scaleY, .opacity, .reveal, .trim, .volume, .emission, .particleSpeed, .particleSize: return 1
+        case .scale, .scaleX, .scaleY, .scaleZ, .opacity, .reveal, .trim, .volume, .emission, .particleSpeed, .particleSize: return 1
         case .x: return 960
         case .y: return 540
         case .width: return 400
@@ -119,6 +124,7 @@ public enum AnimProperty: String, Codable, CaseIterable, Sendable {
                                          .shine, .shinePosition, .shineAngle, .shineWidth, .rays, .raysLength, .outline,
                                          .innerGlow, .innerGlowRadius, .offsetPath, .zigzag, .wigglePath, .pucker,
                                          .dashOffset, .taperStart, .taperEnd, .rotationX, .rotationY, .perspective,
+                                         .z, .scaleZ,
                                          .levelsBlack, .levelsWhite, .levelsGamma, .gradientMapAmount, .lutAmount]
 
     public var title: String {
@@ -204,6 +210,8 @@ public enum AnimProperty: String, Codable, CaseIterable, Sendable {
         case .rotationX: return "Rotation X"
         case .rotationY: return "Rotation Y"
         case .perspective: return "Perspective"
+        case .z: return "Z"
+        case .scaleZ: return "Scale Z"
         case .levelsBlack: return "Levels Black"
         case .levelsWhite: return "Levels White"
         case .levelsGamma: return "Gamma"
@@ -215,7 +223,7 @@ public enum AnimProperty: String, Codable, CaseIterable, Sendable {
     /// Shown with two decimals rather than as whole pixels/degrees.
     public var isFractional: Bool {
         switch self {
-        case .scale, .scaleX, .scaleY, .opacity, .trim, .trimStart, .trimOffset, .reveal, .shadowOpacity, .glow,
+        case .scale, .scaleX, .scaleY, .scaleZ, .opacity, .trim, .trimStart, .trimOffset, .reveal, .shadowOpacity, .glow,
              .pathProgress, .volume, .emission, .particleSpeed, .particleSize,
              .brightness, .contrast, .saturation, .tint, .wipe, .keyTolerance, .keySoftness, .waveSpeed, .bulge,
              .glitch, .grain, .scanlines, .vignette, .zoomBlur, .scramble, .shine, .shinePosition, .rays, .raysLength,
@@ -328,6 +336,11 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
     public var pins: [PuppetPin]
     /// Hide the layer while it is turned away (rotationX/Y past 90°), e.g. the two faces of a card flip.
     public var hideBackface: Bool
+    /// Lives in the scene's 3D space (z, rotations in 3D, the camera's orbit/lens, sorted by depth). A 3D group keeps
+    /// its 3D children in that space too. Models always are.
+    public var threeD: Bool
+    /// Model layers: the object and its material.
+    public var model: Model3D
     /// Trim runs through the path's pieces one after another (handwriting) instead of all at once.
     public var trimSequential: Bool
     /// Master tone curve: points [x, y] in 0…1 (smooth, monotone between them).
@@ -448,6 +461,8 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         cornerPin = nil
         pins = []
         hideBackface = false
+        threeD = false
+        model = Model3D()
         trimSequential = false
         curves = []
         gradientMap = []
@@ -576,8 +591,9 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
     /// Properties that make sense for this layer type (inspector, timeline).
     public var applicableProperties: [AnimProperty] {
         if type == .audio { return [.volume] }
-        var list: [AnimProperty] = [.x, .y, .scale, .scaleX, .scaleY, .rotation, .rotationX, .rotationY, .perspective,
-                                    .skewX, .skewY, .anchorX, .anchorY, .opacity]
+        // 3D layers have a depth and see the camera's perspective; 2D ones have a perspective of their own.
+        var list: [AnimProperty] = [.x, .y] + (is3D ? [.z] : []) + [.scale, .scaleX, .scaleY, .rotation, .rotationX, .rotationY]
+            + (is3D ? [] : [.perspective]) + [.skewX, .skewY, .anchorX, .anchorY, .opacity]
         switch type {
         case .rect: list += [.width, .height, .cornerRadius, .strokeWidth, .trimStart, .trim, .trimOffset]
         case .ellipse: list += [.width, .height, .strokeWidth, .trimStart, .trim, .trimOffset]
@@ -595,6 +611,7 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
             list += [.width, .height, .cornerRadius, .strokeWidth]
             if generator.kind == .chart { list.append(.reveal) }
         case .group: list += [.width, .height]
+        case .model: list += [.width, .height, .scaleZ]
         case .audio: break
         }
         list += [.blur, .shadowX, .shadowY, .shadowBlur, .shadowOpacity, .glow, .glowRadius]
@@ -617,6 +634,7 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         switch type {
         case .rect, .ellipse, .path: return [.fill, .stroke]
         case .text: return [.color, .stroke]
+        case .model: return [.fill]
         case .generator:
             switch generator.kind {
             case .noise, .flare: return []
@@ -769,7 +787,7 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         case counter, scramble, textOffset
         case shine, shinePosition, shineAngle, shineWidth, rays, raysLength, outline, innerGlow, innerGlowRadius
         case shineColor, outlineColor, innerGlowColor, dash
-        case rotationX, rotationY, perspective, cornerPin, pins, hideBackface, trimSequential
+        case rotationX, rotationY, perspective, cornerPin, pins, hideBackface, trimSequential, z, scaleZ, threeD, model
         case levelsBlack, levelsWhite, levelsGamma, gradientMapAmount, lutAmount, curves, gradientMap, lut
         case removeBackground, frameBlend
         case offsetPath, zigzag, wigglePath, pucker, dashOffset, taperStart, taperEnd
@@ -834,6 +852,8 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         cornerPin = try c.decodeIfPresent(CornerPinValue.self, forKey: .cornerPin)
         pins = try c.decodeIfPresent([PuppetPin].self, forKey: .pins) ?? []
         hideBackface = try c.decodeIfPresent(Bool.self, forKey: .hideBackface) ?? false
+        threeD = try c.decodeIfPresent(Bool.self, forKey: .threeD) ?? false
+        model = try c.decodeIfPresent(Model3D.self, forKey: .model) ?? model
         trimSequential = try c.decodeIfPresent(Bool.self, forKey: .trimSequential) ?? false
         curves = (try c.decodeIfPresent([PathPoint].self, forKey: .curves) ?? [])
             .map { PathPoint(x: min(max($0.x, 0), 1), y: min(max($0.y, 0), 1)) }.sorted { $0.x < $1.x }
@@ -951,6 +971,7 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         try c.encodeIfPresent(cornerPin, forKey: .cornerPin)
         if !pins.isEmpty { try c.encode(pins, forKey: .pins) }
         if hideBackface { try c.encode(hideBackface, forKey: .hideBackface) }
+        if threeD && type != .model { try c.encode(threeD, forKey: .threeD) }
         if trimSequential && type.isShape { try c.encode(trimSequential, forKey: .trimSequential) }
         if !curves.isEmpty { try c.encode(curves, forKey: .curves) }
         if !gradientMap.isEmpty { try c.encode(gradientMap, forKey: .gradientMap) }
@@ -1019,6 +1040,28 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
             try c.encode(children, forKey: .children)
             try c.encodeIfPresent(width, forKey: .width)
             try c.encodeIfPresent(height, forKey: .height)
+        case .model:
+            try c.encode(model, forKey: .model)
+            try c.encode(self[.width], forKey: .width)
+            try c.encode(self[.height], forKey: .height)
+            try c.encode(fill, forKey: .fill)
+            try c.encodeIfPresent(path, forKey: .path)
+            switch model.shape {
+            case .text:
+                try c.encode(text, forKey: .text)
+                try c.encode(fontSize, forKey: .fontSize)
+                try c.encode(fontWeight, forKey: .fontWeight)
+                try c.encodeIfPresent(fontName, forKey: .fontName)
+                try c.encode(align, forKey: .align)
+                try c.encodeIfPresent(maxWidth, forKey: .maxWidth)
+            case .path:
+                try c.encode(d, forKey: .d)
+                if fillRule != .nonzero { try c.encode(fillRule, forKey: .fillRule) }
+            case .lathe:
+                try c.encode(d, forKey: .d)
+            default:
+                break
+            }
         case .generator:
             try c.encode(generator, forKey: .generator)
             try c.encode(self[.width], forKey: .width)
@@ -1046,6 +1089,8 @@ public struct MotionScene: Codable, Equatable, Sendable {
     /// Pans, zooms and turns the whole scene (nil = none). Layers with `depth` move less or more (parallax),
     /// `fixed` layers not at all.
     public var camera: Camera? { didSet { if camera != oldValue { resolveLinks() } } }
+    /// Lights for model layers (empty = `Light.defaults`: soft ambient, a key light from the upper left, a fill).
+    public var lights: [Light]
     /// Draw order: first is bottom-most.
     /// Every change re-links `audioReact` to its audio layer and `links` to their source tracks, so
     /// `MotionLayer.value` can follow them on its own.
@@ -1055,6 +1100,7 @@ public struct MotionScene: Codable, Equatable, Sendable {
                 background: RGBA = RGBA(hex: "#0E0E12")!, layers: [MotionLayer] = []) {
         self.width = width; self.height = height; self.fps = fps
         self.duration = duration; self.background = background; self.layers = layers
+        lights = []
         resolveLinks()
     }
 
@@ -1116,7 +1162,7 @@ public struct MotionScene: Codable, Equatable, Sendable {
         }
     }
 
-    enum CodingKeys: String, CodingKey { case width, height, fps, duration, background, camera, layers }
+    enum CodingKeys: String, CodingKey { case width, height, fps, duration, background, camera, lights, layers }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -1128,9 +1174,22 @@ public struct MotionScene: Codable, Equatable, Sendable {
         background = try c.decodeIfPresent(RGBA.self, forKey: .background) ?? background
         layers = try c.decodeIfPresent([MotionLayer].self, forKey: .layers) ?? []
         camera = try c.decodeIfPresent(Camera.self, forKey: .camera)?.resolved(in: self)
+        lights = try c.decodeIfPresent([Light].self, forKey: .lights) ?? []
         try validate()
         normalizeIds()
         resolveLinks()
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(width, forKey: .width)
+        try c.encode(height, forKey: .height)
+        try c.encode(fps, forKey: .fps)
+        try c.encode(duration, forKey: .duration)
+        try c.encode(background, forKey: .background)
+        try c.encodeIfPresent(camera, forKey: .camera)
+        if !lights.isEmpty { try c.encode(lights, forKey: .lights) }
+        try c.encode(layers, forKey: .layers)
     }
 
     public func validate() throws {

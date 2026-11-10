@@ -531,6 +531,7 @@ extension LayerType {
         case .particles: return "sparkles"
         case .generator: return "waveform.path.ecg"
         case .group: return "folder"
+        case .model: return "cube"
         }
     }
 }

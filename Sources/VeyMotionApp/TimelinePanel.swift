@@ -150,6 +150,7 @@ extension MotionLayer {
         case .particles: hex = 0xF59E0B       // amber
         case .generator: hex = 0x14B8A6       // teal
         case .group: hex = 0x64748B           // slate
+        case .model: hex = 0x0EA5E9           // sky
         case .audio:
             switch role {
             case .voice: hex = 0x06B6D4       // cyan
@@ -170,6 +171,10 @@ extension MotionLayer {
         case .particles: return particles.preset?.title ?? "Custom"
         case .generator: return generator.kind.title
         case .group: return "\(children.count) layers"
+        case .model:
+            if model.shape == .text { return text.split(separator: "\n").first.map(String.init) }
+            if model.shape == .file { return path.map { ($0 as NSString).lastPathComponent } }
+            return model.shape.title
         case .rect, .ellipse: return nil
         case .path: return d.isAnimated ? "Morph" : nil
         }
@@ -180,6 +185,7 @@ extension MotionLayer {
         switch type {
         case .rect, .ellipse, .path: return (gradient?.stops.first?.color ?? fill.value(at: 0)).color
         case .text: return (gradient?.stops.first?.color ?? color.value(at: 0)).color
+        case .model: return fill.value(at: 0).color
         default: return nil
         }
     }
@@ -408,6 +414,7 @@ struct TimelinePanel: View {
         case .particles: return "sparkles"
         case .generator: return "waveform.path.ecg"
         case .group: return "folder"
+        case .model: return "cube.fill"
         case .audio:
             switch l.role {
             case .voice: return "person.wave.2.fill"
