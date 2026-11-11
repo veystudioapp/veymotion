@@ -56,6 +56,10 @@ over the canvas (UI-only, never in the scene), and "Add to chat" renders the fra
 `note` tells the agent what it is. While active, the menu's Undo/Redo/Delete act on the marks and Space does not play.
 
 **UI layout.** `ContentView` is an `HSplitView` (sidebar: Layers/Assets · canvas + `TransportBar` · Inspector/Claude) over the timeline (the `StatusBar` view is not shown); panel visibility and tabs persist in `@AppStorage`. Shared inspector building blocks (`InspectorSection`, `NumberField`, `AnimField`, `AnimSlider`, `KeyframeButton`, `PanelTabBar`) live in `EditorChrome.swift` — reuse them for new properties.
+The timeline's Graph mode (`GraphEditor.swift`) plots the selected top-level layer's keyframed numbers, each fitted to
+its own value range; keys drag in time and value, and each segment's two handles are its easing as `cubicBezier`
+(`Easing.bezierControls` gives named curves their Bezier fit; `MotionScene.setKeyHandles` edits them, also behind
+Easy Ease F9 / ⇧F9 / ⌘⇧F9).
 
 **One renderer.** `FrameRenderer` (CoreGraphics + CoreText) is used for the canvas preview, `render_frame`, and `VideoExporter` (AVAssetWriter; `.mp4` = H.264, `.mov` = ProRes 4444 with alpha), so preview matches export. The canvas renders on a background queue (`PreviewRenderer` in `ContentView.swift`, latest request wins) and at most 1.5 px/pt while playing. `FrameCache` (`FrameCache.swift`) is the RAM preview: frames at that playback size keyed by `sceneRevision` + pixel width + a generation (bumped on asset changes and `didAnalyze`), filled by the canvas's own renders and, after 0.5 s idle, by background workers (one `FrameRenderer` each, from the playhead; paused while exporting); budget ¼ of RAM ≤ 4 GB, purged on memory pressure, green strip on the ruler and mini scrubber. Playback advances `store.time` in whole frames; inspector and timeline values read `store.panelTime` (held while playing) so they don't re-render every frame — only the canvas, transport and playhead follow `store.time`.
 

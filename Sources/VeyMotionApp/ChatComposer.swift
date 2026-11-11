@@ -9,6 +9,10 @@ struct ChatComposer: View {
     @Environment(ChatStore.self) private var chat
     @State private var height: CGFloat = 54
     @State private var isTargeted = false
+    /// Height set by dragging the top edge (0 = fit the text); the text still grows past it.
+    @AppStorage("chatComposerHeight") private var manualHeight: Double = 0
+    @State private var dragStart: CGFloat?
+    @State private var hoveringHandle = false
 
     var body: some View {
         @Bindable var chat = chat
@@ -33,7 +37,7 @@ struct ChatComposer: View {
                                  onSubmit: { chat.send() },
                                  onImageData: { chat.attachImage(data: $0) },
                                  onFiles: { chat.allowReading($0) })
-                    .frame(height: height)
+                    .frame(height: max(height, CGFloat(manualHeight)))
             }
             toolbar
         }
@@ -47,6 +51,7 @@ struct ChatComposer: View {
                               style: StrokeStyle(lineWidth: isTargeted ? 2 : 1, dash: isTargeted ? [5] : []))
                 .allowsHitTesting(false)
         }
+        .overlay(alignment: .top) { resizeHandle }
         .padding(10)
         // Files dropped next to the text (the text view handles drops on itself, at the caret).
         .onDrop(of: [.fileURL], isTargeted: $isTargeted) { providers in
@@ -63,6 +68,29 @@ struct ChatComposer: View {
             }
             return !providers.isEmpty
         }
+    }
+
+    /// Grabber on the top edge: drag to resize the text area, double-click to fit the text again.
+    private var resizeHandle: some View {
+        Capsule()
+            .fill(Color.secondary.opacity(hoveringHandle || dragStart != nil ? 0.6 : 0.25))
+            .frame(width: 36, height: 4)
+            .frame(maxWidth: .infinity)
+            .frame(height: 12)
+            .contentShape(Rectangle())
+            .offset(y: -6)
+            .onHover { inside in
+                hoveringHandle = inside
+                if inside { NSCursor.resizeUpDown.push() } else { NSCursor.pop() }
+            }
+            .gesture(DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                .onChanged { g in
+                    if dragStart == nil { dragStart = max(height, CGFloat(manualHeight)) }
+                    manualHeight = Double(min(max((dragStart ?? height) - g.translation.height, 40), 480))
+                }
+                .onEnded { _ in dragStart = nil })
+            .onTapGesture(count: 2) { manualHeight = 0 }
+            .help("Drag to resize · double-click to fit the text")
     }
 
     private var toolbar: some View {
@@ -409,7 +437,7 @@ struct ComposerTextView: NSViewRepresentable {
         tv.isAutomaticDashSubstitutionEnabled = false
         tv.string = text
 
-        let scroll = NSScrollView()
+        let scroll = ComposerScrollView()
         scroll.drawsBackground = false
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
@@ -478,6 +506,16 @@ struct ComposerTextView: NSViewRepresentable {
             let tail = after.first?.isWhitespace == true ? "" : " "
             tv.insertText(lead + ComposerTextView.pathText(urls) + tail, replacementRange: r)
         }
+    }
+}
+
+/// Keeps the text view at least as tall as the visible area, so a click anywhere in a resized box lands in the text.
+final class ComposerScrollView: NSScrollView {
+    override func layout() {
+        super.layout()
+        guard let tv = documentView as? NSTextView, abs(tv.minSize.height - contentSize.height) > 0.5 else { return }
+        tv.minSize = NSSize(width: 0, height: contentSize.height)
+        tv.sizeToFit()
     }
 }
 

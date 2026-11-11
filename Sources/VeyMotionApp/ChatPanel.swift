@@ -259,9 +259,17 @@ private struct ChatItemView: View {
                 }
             }
         case let .assistant(text, _):
-            Text(markdown(text))
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(Array(ChatMarkdown.blocks(text).enumerated()), id: \.offset) { _, block in
+                    switch block {
+                    case let .text(t):
+                        Text(markdown(t)).textSelection(.enabled)
+                    case let .table(header, rows):
+                        ChatTable(header: header, rows: rows, markdown: markdown)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         case let .tool(call):
             ToolCallView(call: call)
         case let .image(image, time):
@@ -292,6 +300,97 @@ private struct ChatItemView: View {
     private func markdown(_ s: String) -> AttributedString {
         (try? AttributedString(markdown: s, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
             ?? AttributedString(s)
+    }
+}
+
+/// Assistant text split into plain runs and GitHub-style tables, which inline-only Markdown prints as raw pipes.
+enum ChatMarkdown {
+    enum Block: Equatable {
+        case text(String)
+        case table(header: [String], rows: [[String]])
+    }
+
+    static func blocks(_ s: String) -> [Block] {
+        let lines = s.components(separatedBy: "\n")
+        var out: [Block] = []
+        var text: [String] = []
+        func flushText() {
+            let t = text.joined(separator: "\n").trimmingCharacters(in: .newlines)
+            if !t.isEmpty { out.append(.text(t)) }
+            text = []
+        }
+        var i = 0
+        while i < lines.count {
+            if i + 1 < lines.count, lines[i].contains("|"), isSeparator(lines[i + 1]) {
+                let header = cells(lines[i])
+                var rows: [[String]] = []
+                i += 2
+                while i < lines.count, lines[i].contains("|"), !lines[i].trimmingCharacters(in: .whitespaces).isEmpty {
+                    var r = cells(lines[i])
+                    if r.count < header.count { r += Array(repeating: "", count: header.count - r.count) }
+                    rows.append(Array(r.prefix(header.count)))
+                    i += 1
+                }
+                flushText()
+                out.append(.table(header: header, rows: rows))
+            } else {
+                text.append(lines[i])
+                i += 1
+            }
+        }
+        flushText()
+        return out
+    }
+
+    /// `|---|:--:|` (outer pipes optional).
+    static func isSeparator(_ line: String) -> Bool {
+        let parts = cells(line)
+        return !parts.isEmpty && parts.allSatisfy { p in
+            let core = p.trimmingCharacters(in: CharacterSet(charactersIn: ":"))
+            return !core.isEmpty && core.allSatisfy { $0 == "-" }
+        }
+    }
+
+    static func cells(_ line: String) -> [String] {
+        var t = line.trimmingCharacters(in: .whitespaces)
+        if t.hasPrefix("|") { t.removeFirst() }
+        if t.hasSuffix("|") { t.removeLast() }
+        return t.components(separatedBy: "|").map { $0.trimmingCharacters(in: .whitespaces) }
+    }
+}
+
+private struct ChatTable: View {
+    let header: [String]
+    let rows: [[String]]
+    let markdown: (String) -> AttributedString
+
+    var body: some View {
+        Grid(alignment: .topLeading, horizontalSpacing: 0, verticalSpacing: 0) {
+            GridRow {
+                ForEach(header.indices, id: \.self) { c in
+                    cell(header[c]).fontWeight(.semibold)
+                        .frame(maxHeight: .infinity, alignment: .topLeading)
+                        .background(Color.primary.opacity(0.06))
+                }
+            }
+            ForEach(rows.indices, id: \.self) { r in
+                Divider()
+                GridRow {
+                    ForEach(rows[r].indices, id: \.self) { c in cell(rows[r][c]) }
+                }
+            }
+        }
+        .textSelection(.enabled)
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3)))
+    }
+
+    private func cell(_ s: String) -> some View {
+        Text(markdown(s))
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

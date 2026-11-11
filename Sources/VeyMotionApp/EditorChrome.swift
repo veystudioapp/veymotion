@@ -400,15 +400,8 @@ struct BezierEditor: View {
     }
 
     init(initial: Easing, onApply: @escaping (Easing) -> Void) {
-        let start: [Double]
-        switch initial {
-        case let .cubicBezier(a, b, c, d): start = [a, b, c, d]
-        case .linear: start = [0, 0, 1, 1]
-        case .easeIn: start = [0.55, 0, 0.75, 0.2]
-        case .easeOut: start = [0.22, 1, 0.36, 1]
-        default: start = [0.65, 0, 0.35, 1]
-        }
-        _p = State(initialValue: start)
+        let c = initial.bezierControls ?? Easing.easeInOut.bezierControls!
+        _p = State(initialValue: [c.0, c.1, c.2, c.3])
         self.onApply = onApply
     }
 

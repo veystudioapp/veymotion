@@ -23,6 +23,8 @@ final class TimelineState {
     var collapsed: Set<String> = []
     var expanded: Set<String> = []
     var selectedKey: KeySelection?
+    var graphFocus: AnimProperty?
+    var graphHidden: Set<AnimProperty> = []
     @ObservationIgnored var hovering = false
     @ObservationIgnored var monitor: Any?
     @ObservationIgnored var zoomBase: Double?
@@ -55,6 +57,8 @@ final class TimelineState {
         collapsed = []
         expanded = []
         selectedKey = nil
+        graphFocus = nil
+        graphHidden = []
         dragOrigin = nil
         zoomBase = nil
     }
@@ -224,6 +228,7 @@ struct TimelinePanel: View {
     @State private var tl = TimelineState()
     @AppStorage("timelineShowKeys") private var showKeys = true
     @AppStorage("timelineSnapBeats") private var snapBeats = true
+    @AppStorage("timelineGraph") private var graphMode = false
     private let nameWidth: CGFloat = 200
 
     var body: some View {
@@ -241,20 +246,26 @@ struct TimelinePanel: View {
                         .clipped()
                 }
                 Divider()
-                ScrollView(.vertical) {
-                    LazyVStack(spacing: 0) {
-                        ForEach(rows) { row in
-                            HStack(spacing: 0) {
-                                nameCell(row)
-                                    .padding(.horizontal, 8)
-                                    .frame(width: nameWidth, height: row.height, alignment: .leading)
-                                trackCell(row, scene: scene)
-                                    .frame(width: trackW, height: row.height, alignment: .topLeading)
-                                    .clipped()
-                            }
-                            .background(rowBackground(row))
-                            .overlay(alignment: .bottom) {
-                                Rectangle().fill(Color.secondary.opacity(0.08)).frame(height: 1)
+                Group {
+                    if graphMode {
+                        graphArea(scene, trackW: trackW)
+                    } else {
+                        ScrollView(.vertical) {
+                            LazyVStack(spacing: 0) {
+                                ForEach(rows) { row in
+                                    HStack(spacing: 0) {
+                                        nameCell(row)
+                                            .padding(.horizontal, 8)
+                                            .frame(width: nameWidth, height: row.height, alignment: .leading)
+                                        trackCell(row, scene: scene)
+                                            .frame(width: trackW, height: row.height, alignment: .topLeading)
+                                            .clipped()
+                                    }
+                                    .background(rowBackground(row))
+                                    .overlay(alignment: .bottom) {
+                                        Rectangle().fill(Color.secondary.opacity(0.08)).frame(height: 1)
+                                    }
+                                }
                             }
                         }
                     }
@@ -306,7 +317,22 @@ struct TimelinePanel: View {
                 }
                 .font(.caption)
             }
-            if !tl.expanded.isEmpty {
+            Button { graphMode.toggle() } label: {
+                Label("Graph", systemImage: "chart.xyaxis.line").font(.caption)
+            }
+            .foregroundStyle(graphMode ? Color.accentColor : .primary)
+            .help(graphMode ? "Back to the layer timeline" : "Edit the selected layer's animation curves")
+            if graphMode {
+                let keys = selectedNumberKeys()
+                ForEach(GraphEase.allCases, id: \.self) { e in
+                    Button { if let k = keys { e.apply(store, layer: k.layer, properties: k.properties, at: k.t) } } label: {
+                        Image(systemName: e.icon)
+                    }
+                    .keyboardShortcut(e.shortcut)
+                    .disabled(keys == nil)
+                    .help(e.title + (e.shortcutLabel.map { " (\($0))" } ?? "") + " on the selected keyframe")
+                }
+            } else if !tl.expanded.isEmpty {
                 Button("Hide properties") { tl.expanded = [] }.font(.caption)
             }
             Button { showKeys.toggle() } label: {
@@ -331,6 +357,40 @@ struct TimelinePanel: View {
         .buttonStyle(.borderless)
         .padding(.horizontal, 10)
         .frame(height: 26)
+    }
+
+    /// Number keys the ease buttons act on: the selected key, or every number key at that time for a layer-row diamond.
+    private func selectedNumberKeys() -> (layer: String, properties: [AnimProperty], t: Double)? {
+        guard let k = tl.selectedKey, let l = store.scene.layers.first(where: { $0.id == k.layerId }) else { return nil }
+        let props: [AnimProperty]
+        switch k.property {
+        case let .number(p)?: props = [p]
+        case .color?: props = []
+        case nil: props = l.animatedProperties.filter { l[$0].hasKey(at: k.t, tolerance: MotionScene.keyTimeTolerance) }
+        }
+        return props.isEmpty ? nil : (l.id, props, k.t)
+    }
+
+    @ViewBuilder private func graphArea(_ scene: MotionScene, trackW: Double) -> some View {
+        let layer = scene.layers.first { $0.id == store.selection }
+        HStack(spacing: 0) {
+            GraphTrackList(tl: tl, layer: layer)
+                .frame(width: nameWidth)
+                .frame(maxHeight: .infinity, alignment: .top)
+            Group {
+                if let l = layer, !l.animatedProperties.isEmpty {
+                    GraphEditor(tl: tl, layer: l, snap: { snap($0) })
+                } else {
+                    Text(layer.map { "\($0.name) has no keyframed numbers" } ?? "Select a layer to edit its animation curves")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+            .frame(width: trackW)
+            .frame(maxHeight: .infinity)
+            .clipped()
+        }
+        .frame(maxHeight: .infinity)
     }
 
     private var playheadAnchor: Double {

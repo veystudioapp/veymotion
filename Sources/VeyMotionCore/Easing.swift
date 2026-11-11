@@ -146,6 +146,38 @@ public enum Easing: Equatable, Hashable, Sendable, Codable {
         }
     }
 
+    /// Control points (x1, y1, x2, y2) as a cubic Bezier: exact, or the usual close fit for the named curves.
+    /// nil for hold, steps, springs, elastic and bounce.
+    public var bezierControls: (Double, Double, Double, Double)? {
+        switch self {
+        case .linear: return (1.0 / 3, 1.0 / 3, 2.0 / 3, 2.0 / 3)
+        case .easeIn: return (0.55, 0, 0.75, 0.2)
+        case .easeOut: return (0.22, 1, 0.36, 1)
+        case .easeInOut: return (0.65, 0, 0.35, 1)
+        case let .cubicBezier(a, b, c, d): return (a, b, c, d)
+        case .hold, .spring, .springWith, .steps: return nil
+        case let .curve(c, m):
+            guard let f = Self.bezierFits[c] else { return nil }
+            switch m {
+            case .in: return f[0]
+            case .out: return f[1]
+            case .inOut: return f[2]
+            }
+        }
+    }
+
+    /// In, out and in-out fits per curve (from easings.net).
+    private static let bezierFits: [EaseCurve: [(Double, Double, Double, Double)]] = [
+        .sine: [(0.12, 0, 0.39, 0), (0.61, 1, 0.88, 1), (0.37, 0, 0.63, 1)],
+        .quad: [(0.11, 0, 0.5, 0), (0.5, 1, 0.89, 1), (0.45, 0, 0.55, 1)],
+        .cubic: [(0.32, 0, 0.67, 0), (0.33, 1, 0.68, 1), (0.65, 0, 0.35, 1)],
+        .quart: [(0.5, 0, 0.75, 0), (0.25, 1, 0.5, 1), (0.76, 0, 0.24, 1)],
+        .quint: [(0.64, 0, 0.78, 0), (0.22, 1, 0.36, 1), (0.83, 0, 0.17, 1)],
+        .expo: [(0.7, 0, 0.84, 0), (0.16, 1, 0.3, 1), (0.87, 0, 0.13, 1)],
+        .circ: [(0.55, 0, 1, 0.45), (0, 0.55, 0.45, 1), (0.85, 0, 0.15, 1)],
+        .back: [(0.36, 0, 0.66, -0.56), (0.34, 1.56, 0.64, 1), (0.68, -0.6, 0.32, 1.6)],
+    ]
+
     private static func num(_ v: Double) -> String {
         v == v.rounded() && abs(v) < 1e9 ? String(Int(v)) : String(format: "%g", v)
     }

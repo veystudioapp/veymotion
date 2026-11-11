@@ -131,51 +131,55 @@ struct StockBrowserSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var model = StockBrowserModel()
     @State private var iconColor = Color.white
-    @State private var hovered: StockItem?
     @FocusState private var searchFocused: Bool
 
     var body: some View {
         @Bindable var model = model
         VStack(spacing: 0) {
-            HStack(spacing: 10) {
+            VStack(spacing: 10) {
                 Picker("", selection: $model.kind) {
                     ForEach(StockKind.allCases, id: \.self) { Text($0.title).tag($0) }
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
-                .fixedSize()
-                HStack(spacing: 6) {
-                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                    TextField(placeholder, text: $model.query)
-                        .textFieldStyle(.plain)
-                        .focused($searchFocused)
-                        .onSubmit { model.search() }
-                    if model.isSearching { ProgressView().controlSize(.small) }
-                }
-                .padding(.horizontal, 8)
-                .frame(height: 28)
-                .background(RoundedRectangle(cornerRadius: 7).fill(Color.primary.opacity(0.07)))
-                if model.kind == .icon {
-                    ColorPicker("Color", selection: $iconColor, supportsOpacity: false)
-                        .help("Icon color used when importing")
-                }
-                if model.kind == .video {
-                    Picker("", selection: $model.orientation) {
-                        Text("Any shape").tag("any")
-                        Text("Landscape").tag("landscape")
-                        Text("Portrait").tag("portrait")
-                        Text("Square").tag("square")
+                .frame(maxWidth: .infinity)
+                HStack(spacing: 10) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                        TextField(placeholder, text: $model.query)
+                            .textFieldStyle(.plain)
+                            .focused($searchFocused)
+                            .onSubmit { model.search() }
+                        if model.isSearching { ProgressView().controlSize(.small) }
                     }
-                    .labelsHidden()
+                    .padding(.horizontal, 8)
+                    .frame(height: 28)
+                    .frame(maxWidth: .infinity)
+                    .background(RoundedRectangle(cornerRadius: 7).fill(Color.primary.opacity(0.07)))
+                    Group {
+                        if model.kind == .icon {
+                            ColorPicker("Color", selection: $iconColor, supportsOpacity: false)
+                                .help("Icon color used when importing")
+                        }
+                        if model.kind == .video {
+                            Picker("", selection: $model.orientation) {
+                                Text("Any shape").tag("any")
+                                Text("Landscape").tag("landscape")
+                                Text("Portrait").tag("portrait")
+                                Text("Square").tag("square")
+                            }
+                            .labelsHidden()
+                            .help("Frame shape (Portrait for 9:16 TikTok / Reels / Shorts)")
+                            .onChange(of: model.orientation) { _, _ in model.search() }
+                        }
+                        if model.kind == .font {
+                            Toggle("Vietnamese", isOn: $model.vietnamese)
+                                .toggleStyle(.checkbox)
+                                .help("Only fonts that have every Vietnamese letter")
+                                .onChange(of: model.vietnamese) { _, _ in model.search() }
+                        }
+                    }
                     .fixedSize()
-                    .help("Frame shape (Portrait for 9:16 TikTok / Reels / Shorts)")
-                    .onChange(of: model.orientation) { _, _ in model.search() }
-                }
-                if model.kind == .font {
-                    Toggle("Vietnamese", isOn: $model.vietnamese)
-                        .toggleStyle(.checkbox)
-                        .help("Only fonts that have every Vietnamese letter")
-                        .onChange(of: model.vietnamese) { _, _ in model.search() }
                 }
             }
             .padding(12)
@@ -188,9 +192,6 @@ struct StockBrowserSheet: View {
                     LazyVStack(spacing: 2) {
                         ForEach(model.results) { item in
                             StockAudioRow(item: item, model: model)
-                                .onHover { inside in
-                                    if inside { hovered = item } else if hovered?.ref == item.ref { hovered = nil }
-                                }
                         }
                     }
                     .padding(8)
@@ -203,9 +204,6 @@ struct StockBrowserSheet: View {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: model.kind == .icon ? 84 : model.kind == .font ? 250 : 150), spacing: 10)], spacing: 10) {
                         ForEach(model.results) { item in
                             StockCell(item: item, model: model, iconColor: hex(iconColor))
-                                .onHover { inside in
-                                    if inside { hovered = item } else if hovered?.ref == item.ref { hovered = nil }
-                                }
                         }
                     }
                     .padding(12)
@@ -223,22 +221,6 @@ struct StockBrowserSheet: View {
                 if let e = model.error {
                     Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
                     Text(e).lineLimit(2)
-                } else if let h = hovered {
-                    Text(h.credit.attribution).lineLimit(2).foregroundStyle(.secondary)
-                    if h.credit.requiresAttribution {
-                        Text("Credit required").font(.caption2.weight(.semibold))
-                            .padding(.horizontal, 6).padding(.vertical, 2)
-                            .background(Capsule().fill(Color.orange.opacity(0.2)))
-                    }
-                } else {
-                    Text(model.kind.isAudio
-                         ? "▶ previews · ⤓ adds to Assets. Music: Jamendo · Sound FX: Freesound (via Openverse, commercial use allowed)."
-                         : model.kind == .video
-                         ? "Hover to preview · click to add to Assets · ⊕ adds it to the scene. Videos: Pexels & Pixabay (free, no credit needed)."
-                         : model.kind == .font
-                         ? "Click to add to Assets · ⊕ sets the selected text's font (or adds a text). Google Fonts, free for commercial use."
-                         : "Click to add to Assets · ⊕ adds it to the scene. Photos & illustrations: Openverse (commercial use allowed). Icons: Iconify.")
-                        .foregroundStyle(.secondary)
                 }
                 Spacer()
                 Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
@@ -318,16 +300,19 @@ private struct StockCell: View {
         let done = model.imported[item.ref] != nil
         VStack(alignment: .leading, spacing: 4) {
             ZStack {
+                // The image is an overlay so a wide photo filling the cell can't widen it past its grid column.
                 RoundedRectangle(cornerRadius: 8)
                     .fill(dark ? Color(white: 0.16) : Color.primary.opacity(0.06))
-                if let img = model.thumbnail(item) {
-                    Image(nsImage: img)
-                        .resizable()
-                        .aspectRatio(contentMode: dark ? .fit : .fill)
-                        .padding(isIcon ? 18 : 0)
-                } else {
-                    ProgressView().controlSize(.small)
-                }
+                    .overlay {
+                        if let img = model.thumbnail(item) {
+                            Image(nsImage: img)
+                                .resizable()
+                                .aspectRatio(contentMode: dark ? .fit : .fill)
+                                .padding(isIcon ? 18 : 0)
+                        } else {
+                            ProgressView().controlSize(.small)
+                        }
+                    }
                 if hovering, item.kind == .video, let url = item.previewURL {
                     LoopingVideoPreview(url: url)
                 }
@@ -336,6 +321,7 @@ private struct StockCell: View {
                     ProgressView().controlSize(.small)
                 }
             }
+            .frame(maxWidth: .infinity)
             .frame(height: isIcon ? 84 : 110)
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .overlay(RoundedRectangle(cornerRadius: 8)

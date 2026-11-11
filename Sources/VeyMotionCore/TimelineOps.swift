@@ -28,6 +28,32 @@ extension MotionScene {
         }
     }
 
+    /// Sets the Bezier handles around the number keyframe at `t` (graph editor): `incoming` is (x2, y2) of the
+    /// segment arriving at it, `outgoing` is (x1, y1) of the segment leaving it, in that segment's 0…1 space.
+    /// A segment whose easing has no Bezier form starts from linear. nil leaves a side unchanged.
+    public mutating func setKeyHandles(_ id: String, property p: AnimProperty, at t: Double,
+                                       incoming: (x: Double, y: Double)?, outgoing: (x: Double, y: Double)?) throws {
+        func r(_ v: Double) -> Double { (v * 1000).rounded() / 1000 }
+        func controls(_ e: Easing) -> (Double, Double, Double, Double) {
+            e.bezierControls ?? Easing.linear.bezierControls!
+        }
+        try withLayer(id) { l in
+            var kfs = l[p].keyframeList
+            guard let k = kfs.firstIndex(where: { abs($0.t - t) < Self.keyTimeTolerance }) else {
+                throw SceneError.invalid("'\(id)' has no \(p.rawValue) keyframe at \(t)s")
+            }
+            if let h = incoming, k > 0 {
+                let c = controls(kfs[k].easing)
+                kfs[k].easing = .cubicBezier(r(c.0), r(c.1), r(min(max(h.x, 0), 1)), r(h.y))
+            }
+            if let h = outgoing, k + 1 < kfs.count {
+                let c = controls(kfs[k + 1].easing)
+                kfs[k + 1].easing = .cubicBezier(r(min(max(h.x, 0), 1)), r(h.y), r(c.2), r(c.3))
+            }
+            l[p] = .keyframes(kfs)
+        }
+    }
+
     /// Deletes the keyframe(s) at `t`. A track left without keyframes becomes constant at that value.
     public mutating func deleteKeyframes(_ id: String, track: KeyTrack?, at t: Double) throws {
         let i = try layerIndex(id)
