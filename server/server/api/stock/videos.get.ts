@@ -4,10 +4,12 @@
 import { defineHandler } from "nitro";
 import { getQuery } from "nitro/h3";
 import { badRequest, isVideoSource, searchVideos, type Orientation, type VideoSource } from "../../utils/stock.ts";
+import { requirePro } from "../../utils/license.ts";
 
 const ORIENTATIONS = ["landscape", "portrait", "square"];
 
 export default defineHandler(async (event) => {
+  await requirePro(event, "Stock video search");
   const query = getQuery<{ q?: string; page?: string; perPage?: string; orientation?: string; source?: string }>(event);
   const q = (query.q ?? "").trim();
   if (!q) throw badRequest("`q` is required.");

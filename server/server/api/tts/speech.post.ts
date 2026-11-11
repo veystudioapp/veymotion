@@ -11,6 +11,7 @@ import {
   type SpeechFormat,
   type SpeechRequest,
 } from "../../utils/vieneu.ts";
+import { requirePro } from "../../utils/license.ts";
 
 interface Body {
   text?: string;
@@ -28,6 +29,7 @@ interface Body {
 }
 
 export default defineHandler(async (event) => {
+  await requirePro(event, "Vietnamese voice-over (VieNeu)");
   const body = ((await readBody<Body>(event)) ?? {}) as Body;
   const text = (body.text ?? body.input ?? "").trim();
   if (!text) throw badRequest("`text` is required.");

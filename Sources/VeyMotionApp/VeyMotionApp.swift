@@ -35,6 +35,7 @@ struct VeyMotionApp: App {
                     NSApp.activate(ignoringOtherApps: true)
                 }
                 Button("Check for Updates…") { Updater.shared.check(userInitiated: true) }
+                SettingsLink { Text(LicenseStore.shared.isPro ? "Account…" : "Upgrade to VeyMotion Pro…") }
             }
             CommandGroup(replacing: .newItem) {
                 Button("Projects…") { store.showProjects = true }.keyboardShortcut("p", modifiers: [.command, .shift])
@@ -150,6 +151,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         installSpaceToPlay()
         installClickOutsideToBlur()
         Updater.shared.start()
+        LicenseStore.shared.start()
     }
 
     /// AppKit only moves focus when the clicked view accepts first responder, so clicking the canvas,

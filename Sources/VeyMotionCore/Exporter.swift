@@ -151,6 +151,9 @@ public enum VideoExporter {
                               isCancelled: (@Sendable () -> Bool)? = nil,
                               progress: ((Double) -> Void)? = nil) throws {
         let fmt = options.format ?? ExportFormat.infer(from: url)
+        // Free plan: no Pro content or ProRes, at most 1080p, with a watermark (License.prepareExport).
+        var options = options
+        let watermark = try License.prepareExport(scene, options: &options, format: fmt)
         let wantsVideo = !fmt.isAudioOnly
         let hasAudio = AudioMixer.hasAudio(scene)
         if !wantsVideo && !hasAudio { throw ExportError.setup("the scene has no audio layers") }
@@ -291,6 +294,7 @@ public enum VideoExporter {
                     } else {
                         renderer.draw(scene, at: t, in: ctx, pixelWidth: w, pixelHeight: h)
                     }
+                    if watermark { Watermark.draw(in: ctx, width: w, height: h) }
                     CVPixelBufferUnlockBaseAddress(buffer, [])
                     let time = CMTime(value: CMTimeValue(frame), timescale: CMTimeScale(scene.fps))
                     guard adaptor.append(buffer, withPresentationTime: time) else {

@@ -175,6 +175,7 @@ extension VideoTracking {
     /// Camera drift of each sampled frame relative to the first, in scene pixels (translation only), from
     /// frame-to-frame registration.
     public static func shake(layer: MotionLayer, in scene: MotionScene, from: Double, to: Double, step: Double) throws -> [Sample] {
+        try License.require(.stabilize)
         guard layer.type == .video, let path = layer.path, let frames = VideoFramesFactory.open((path as NSString).expandingTildeInPath)
         else { throw SceneError.invalid("'\(layer.id)' is not a video layer with a readable source") }
         var out: [Sample] = []

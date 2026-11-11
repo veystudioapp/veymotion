@@ -55,6 +55,7 @@ public enum VideoTracking {
     /// Follows the object inside `box` (scene pixels at `from`) through the video layer's frames.
     public static func track(layer: MotionLayer, in scene: MotionScene, box: CGRect, from: Double, to: Double,
                              step: Double = 0) throws -> [Sample] {
+        try License.require(.motionTracking)
         guard layer.type == .video, let path = layer.path, let frames = VideoFramesFactory.open((path as NSString).expandingTildeInPath)
         else { throw SceneError.invalid("'\(layer.id)' is not a video layer with a readable source") }
         let rect = placement(of: layer, frames: frames, at: from)
@@ -93,6 +94,7 @@ public enum VideoTracking {
 
     /// Where attention goes in each sampled frame: the most salient region's center in scene pixels.
     public static func saliency(layer: MotionLayer, in scene: MotionScene, from: Double, to: Double, step: Double) throws -> [Sample] {
+        try License.require(.autoReframe)
         guard layer.type == .video, let path = layer.path, let frames = VideoFramesFactory.open((path as NSString).expandingTildeInPath)
         else { throw SceneError.invalid("'\(layer.id)' is not a video layer with a readable source") }
         var out: [Sample] = []

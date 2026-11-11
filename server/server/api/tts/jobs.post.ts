@@ -5,10 +5,12 @@
 import { defineHandler } from "nitro";
 import { readBody } from "nitro/h3";
 import { badRequest, vieneuJSON, type TtsJobRequest } from "../../utils/vieneu.ts";
+import { requirePro } from "../../utils/license.ts";
 
 type Body = Partial<TtsJobRequest> & { voice?: string };
 
 export default defineHandler(async (event) => {
+  await requirePro(event, "Vietnamese voice-over (VieNeu)");
   const body = ((await readBody<Body>(event)) ?? {}) as Body;
   const text = (body.text ?? "").trim();
   if (!text) throw badRequest("`text` is required.");

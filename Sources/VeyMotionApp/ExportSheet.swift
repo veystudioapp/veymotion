@@ -117,12 +117,22 @@ struct ExportSheet: View {
             if format.isAudioOnly && !AudioMixer.hasAudio(scene) {
                 Text("This scene has no audio layers.").font(.caption).foregroundStyle(.red)
             }
+            if let notice = freePlanNotice {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    ProBadge()
+                    Text(notice.text).font(.caption)
+                        .foregroundStyle(notice.blocking ? Color.red : Color.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if notice.blocking { SettingsLink { Text("Upgrade…") }.controlSize(.small) }
+                }
+            }
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button("Export…") { store.startExport(options: options) }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(!rangeValid || (format.isAudioOnly && !AudioMixer.hasAudio(scene)))
+                    .disabled(!rangeValid || (format.isAudioOnly && !AudioMixer.hasAudio(scene))
+                              || freePlanNotice?.blocking == true)
             }
         }
     }
@@ -149,12 +159,32 @@ struct ExportSheet: View {
 
     private var rangeValid: Bool { !useRange || (start >= 0 && end > start) }
 
+    /// What the Free plan changes or refuses for this export (nil on Pro and for audio).
+    private var freePlanNotice: (text: String, blocking: Bool)? {
+        guard !LicenseStore.shared.isPro, !format.isAudioOnly else { return nil }
+        var o = options
+        do {
+            _ = try License.prepareExport(scene, options: &o, format: format)
+        } catch {
+            return (error.localizedDescription, true)
+        }
+        let (w, h) = o.pixelSize(for: scene), (fw, fh) = options.pixelSize(for: scene)
+        return ("Free plan: \(w != fw || h != fh ? "exported at \(w)×\(h), " : "")with a small \"Made with Vey Motion\" watermark. Pro exports up to 4K and ProRes, without it.", false)
+    }
+
+    /// The options the export will really use (the Free plan fits the size into 1080p).
+    private var effectiveOptions: ExportOptions {
+        var o = options
+        if !LicenseStore.shared.isPro, !format.isAudioOnly { _ = try? License.prepareExport(scene, options: &o, format: format) }
+        return o
+    }
+
     private var summary: String {
         let frames = options.frameRange(for: scene)
         let seconds = Double(frames.count) / Double(scene.fps)
         let length = String(format: "%.2fs", seconds)
         if format.isAudioOnly { return "\(length) of audio" }
-        let (w, h) = options.pixelSize(for: scene)
+        let (w, h) = effectiveOptions.pixelSize(for: scene)
         return "\(w)×\(h) · \(frames.count) frames · \(length) · \(scene.fps) fps"
             + (AudioMixer.hasAudio(scene) ? " · with audio" : "")
     }

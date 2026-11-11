@@ -85,6 +85,7 @@ struct ContentView: View {
                 .help("Show or hide Layers & Assets (⌃⌘S)")
             }
             ToolbarItemGroup(placement: .primaryAction) {
+                UpgradeToolbarButton()
                 UpdateToolbarButton()
                 addMenu
                 Button {

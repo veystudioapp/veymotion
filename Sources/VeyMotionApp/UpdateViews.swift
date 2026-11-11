@@ -98,6 +98,9 @@ struct UpdatePanel: View {
 struct SettingsView: View {
     var body: some View {
         TabView {
+            Form { AccountPanel() }
+                .padding(20)
+                .tabItem { Label("Account", systemImage: "person.crop.circle") }
             Form { UpdatePanel() }
                 .padding(20)
                 .tabItem { Label("Updates", systemImage: "arrow.triangle.2.circlepath") }

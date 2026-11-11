@@ -13,6 +13,14 @@ enum Docs {
       Keep text and faces out of the bottom ~20% and right edge of 9:16 videos (platform buttons and captions cover them).
       Publishing is done by the user from the app (Export → Publish); you cannot post.
 
+    PLANS
+    The user is on Free or VeyMotion Pro. Pro-only tools fail with a message saying so: VieNeu voices (generate_voice
+    engine "vieneu"), stock video (search_stock/import_stock kind "video"), track_motion, auto_reframe, stabilize and
+    add_template. 3D layers/models and removeBackground preview on Free, but such a scene exports only with Pro.
+    Free exports are fitted into 1080p, carry a small "Made with Vey Motion" watermark, and cannot be ProRes (.mov).
+    When a tool says Pro is needed, tell the user (Settings → Account) and offer a Free alternative (macOS voices,
+    stock photos, manual keyframes, building the layers yourself) instead of retrying.
+
     LAYER
     Common: id, name, type ("rect" | "ellipse" | "path" | "text" | "image" | "video" | "audio" | "particles" | "generator" | "group" | "model"), start, end (seconds, end optional = scene end),
             x, y, scale, rotation (degrees), opacity (0..1)

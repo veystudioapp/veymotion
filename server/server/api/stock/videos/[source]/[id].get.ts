@@ -2,8 +2,10 @@
 import { HTTPError, defineHandler } from "nitro";
 import { getRouterParam } from "nitro/h3";
 import { badRequest, isVideoSource, videoById } from "../../../../utils/stock.ts";
+import { requirePro } from "../../../../utils/license.ts";
 
 export default defineHandler(async (event) => {
+  await requirePro(event, "Stock video");
   const source = getRouterParam(event, "source");
   const id = getRouterParam(event, "id") ?? "";
   if (!isVideoSource(source)) throw badRequest("`source` must be pexels or pixabay.");

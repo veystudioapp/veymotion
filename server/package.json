@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "PORT=4000 nitro dev",
     "build": "nitro build",
-    "preview": "nitro preview"
+    "preview": "nitro preview",
+    "license:keygen": "node scripts/license-keygen.ts"
   },
   "dependencies": {
     "nitro": "^3.0.261103-rc"

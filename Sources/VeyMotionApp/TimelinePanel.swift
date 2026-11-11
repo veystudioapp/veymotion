@@ -378,7 +378,9 @@ struct TimelinePanel: View {
                 .frame(width: nameWidth)
                 .frame(maxHeight: .infinity, alignment: .top)
             Group {
-                if let l = layer, !l.animatedProperties.isEmpty {
+                if !LicenseStore.shared.isPro {
+                    ProLockedView(feature: .graphEditor)
+                } else if let l = layer, !l.animatedProperties.isEmpty {
                     GraphEditor(tl: tl, layer: l, snap: { snap($0) })
                 } else {
                     Text(layer.map { "\($0.name) has no keyframed numbers" } ?? "Select a layer to edit its animation curves")

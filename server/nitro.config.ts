@@ -26,5 +26,9 @@ export default defineConfig({
     // App updates (server/utils/releases.ts). Overridden by NITRO_UPDATES_REPO ("owner/name"),
     // NITRO_UPDATES_GITHUB_TOKEN (private repos) and NITRO_UPDATES_MINIMUM_SYSTEM_VERSION.
     updates: { repo: "", githubToken: "", minimumSystemVersion: "14.0" },
+    // Pro licenses (server/utils/license.ts). Overridden by NITRO_POLAR_ORGANIZATION_ID, NITRO_POLAR_API_URL,
+    // NITRO_POLAR_PRO_BENEFIT_IDS, NITRO_LICENSE_PRIVATE_KEY, NITRO_LICENSE_CHECKOUT_URL and NITRO_LICENSE_PORTAL_URL.
+    polar: { organizationId: "", apiUrl: "https://api.polar.sh", proBenefitIds: "" },
+    license: { privateKey: "", checkoutUrl: "", portalUrl: "" },
   },
 });

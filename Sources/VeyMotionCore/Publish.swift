@@ -169,6 +169,7 @@ public enum SocialServer {
     /// Registers a connection with the server and returns the consent page to open. Registering before the
     /// browser opens means `awaitTokens` never polls for a connection the server does not know yet. Blocking.
     public static func beginConnect(_ platform: SocialPlatform) throws -> Connection {
+        try License.require(.publishing)
         let state = randomToken(), secret = randomToken()
         let challenge = Data(SHA256.hash(data: Data(secret.utf8))).base64URL
         let obj = try PublishHTTP.json(call("POST", "/api/social/\(platform.rawValue)/start",
@@ -219,6 +220,7 @@ public enum SocialServer {
         guard let url = URL(string: base.absoluteString + path) else { throw PublishError("Invalid BASE_API_URL: \(base)") }
         var req = HTTP.request(url, timeout: 30)
         req.httpMethod = method
+        License.authorize(&req)
         if let json {
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             req.httpBody = try JSONSerialization.data(withJSONObject: json)
@@ -354,6 +356,7 @@ public enum SocialPublisher {
     public static func publish(_ platform: SocialPlatform, account accountKey: String, _ req: PublishRequest,
                                isCancelled: @escaping @Sendable () -> Bool = { false },
                                progress: @escaping (Double, String) -> Void) throws -> PublishResult {
+        try License.require(.publishing)
         guard platform.accepts(req.file) else {
             throw PublishError("\(platform.name) needs an MP4 file\(platform == .x ? "" : " or MOV") (export as MP4 — H.264).")
         }

@@ -70,9 +70,12 @@ enum StockVideoSearch {
         guard let url = URL(string: base.absoluteString + pathAndQuery) else {
             throw AssetError.failed("Invalid BASE_API_URL: \(base)")
         }
+        try License.require(.stockVideo)
+        var req = HTTP.request(url, timeout: 30)
+        License.authorize(&req)
         let result: (data: Data, response: HTTPURLResponse?)
         do {
-            result = try HTTP.perform(HTTP.request(url, timeout: 30))
+            result = try HTTP.perform(req)
         } catch {
             throw AssetError.failed("Stock video needs the VeyMotion server, which is not reachable at \(base.absoluteString) "
                 + "(start it with `cd server && bun run dev`, or set BASE_API_URL).")

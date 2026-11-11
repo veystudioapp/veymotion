@@ -886,6 +886,12 @@ public final class MCPServer {
             }
             let started = Date()
             try VideoExporter.export(scene, to: url, options: options)
+            if !License.isPro, !ExportFormat.infer(from: url).isAudioOnly {
+                var free = options
+                _ = try? License.prepareExport(scene, options: &free, format: ExportFormat.infer(from: url))
+                let (w, h) = free.pixelSize(for: scene)
+                note += ". Free plan: \(w)×\(h) with a \"Made with Vey Motion\" watermark (VeyMotion Pro removes it and allows 4K/ProRes)"
+            }
             return text(String(format: "Exported %@ (%d frames) in %.1fs", url.path, scene.frameCount, Date().timeIntervalSince(started)) + note)
 
         default:

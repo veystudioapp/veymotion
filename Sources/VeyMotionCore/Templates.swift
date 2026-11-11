@@ -36,6 +36,7 @@ extension MotionScene {
     /// Adds a template as a group on top and returns its id.
     @discardableResult
     public mutating func addTemplate(_ kind: TemplateKind, id: String?, options o: TemplateOptions) throws -> String {
+        try License.require(.templates)
         let w = Double(width), h = Double(height)
         let s = o.start, e = o.start + max(o.duration, 1)
         let accent = o.accent ?? RGBA(hex: "#FF4D6D")!

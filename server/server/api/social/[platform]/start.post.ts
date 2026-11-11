@@ -12,8 +12,10 @@ import {
   requireProvider,
   startPending,
 } from "../../../utils/social.ts";
+import { requirePro } from "../../../utils/license.ts";
 
 export default defineHandler(async (event) => {
+  await requirePro(event, "Publishing to social platforms");
   const platform = getRouterParam(event, "platform");
   if (!isPlatform(platform)) throw badRequest("Unknown platform.");
   const cfg = requireProvider(platform);

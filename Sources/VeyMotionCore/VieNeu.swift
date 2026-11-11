@@ -61,6 +61,7 @@ public enum VieNeu {
                                   folder: String? = nil) throws -> VoiceResult {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw AudioError.failed("text is empty") }
+        try License.require(.vietnameseVoice)
         let speed = min(max(speed, 0.5), 2)
         let voice = voice.flatMap { $0.isEmpty ? nil : $0 }
 
@@ -131,6 +132,7 @@ public enum VieNeu {
         guard let url = URL(string: base.absoluteString + path) else { throw AudioError.failed("Invalid BASE_API_URL: \(base)") }
         var req = HTTP.request(url, timeout: timeout)
         req.httpMethod = method
+        License.authorize(&req)
         for (k, v) in headers { req.setValue(v, forHTTPHeaderField: k) }
         if let json {
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")

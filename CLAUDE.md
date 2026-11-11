@@ -229,3 +229,14 @@ Easy Ease F9 / ⇧F9 / ⌘⇧F9).
   the bundle and optionally reopens it. `installBlockedReason` covers `swift run`, App Translocation, disk images and
   unwritable folders.
 - Layer ids are unique: `addLayer` / `duplicateLayer` auto-suffix them (`title-2`), and renaming to a taken id throws.
+- Plans (`License.swift`, `server/server/utils/license.ts`, `AccountViews.swift`): Free and Pro. Pro is a Polar license
+  key; `POST /api/license/activate` activates it on one Mac (Polar enforces the device limit, `conditions.device` =
+  `License.deviceId`) and returns a token `base64url(payload).base64url(Ed25519 sig)` valid 14 days, refreshed daily
+  (`refreshIfDue`, at launch and on app activation). No database: Polar holds keys/activations. The token lives in
+  Application Support/VeyMotion/license.json (not the keychain: the CLI reads it too) and is checked offline against
+  `License.publicKeyBase64` (empty = everyone is Free). Gates: `License.require(.feature)` sits in Core entry points
+  (VieNeu synthesis, stock video, publishing, tracking/saliency/shake, `addTemplate`), so UI and MCP tools share it;
+  the server checks the token on TTS/stock/social routes too (`requirePro`, Polar re-checked hourly).
+  `VideoExporter` calls `License.prepareExport`: Free refuses ProRes and Pro content (`proContent`: 3D/models,
+  removeBackground), fits into 1080p and draws `Watermark`. Debug builds only: `VEYMOTION_PRO=1` forces Pro and
+  `VEYMOTION_LICENSE_PUBLIC_KEY` overrides the key.

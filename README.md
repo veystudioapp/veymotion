@@ -32,6 +32,25 @@ uploads `VeyMotion-<version>-mac.zip` (what the updater installs) and a DMG to t
 server reads releases from `NITRO_UPDATES_REPO=owner/name`; for a private repo also set `NITRO_UPDATES_GITHUB_TOKEN`
 (read access), and downloads go through `/api/app/download/:id`.
 
+### Plans: Free and Pro
+
+Free has the whole editor; exports are fitted into 1080p with a small "Made with Vey Motion" watermark. Pro (a
+license key sold through [Polar](https://polar.sh), entered in Settings → Account) adds 4K/ProRes exports without the
+watermark, Vietnamese voices, stock video, publishing, 3D layers and models, background removal, motion tracking,
+auto reframe, stabilize, templates and the graph editor. A key works on as many Macs as its Polar activation limit
+allows (Deactivate This Mac frees one) and keeps working offline for 14 days.
+
+Setup, once:
+1. `cd server && bun run license:keygen`. Put `NITRO_LICENSE_PRIVATE_KEY` in the server's environment and the public
+   key in `License.publicKeyBase64` (`Sources/VeyMotionCore/License.swift`). Keep the private key secret; changing it
+   signs every user out of Pro until their app refreshes.
+2. In Polar, create one **one-time** Pro product with a **License Key** benefit (no expiration, activation limit 3,
+   customers may deactivate activations in the portal) and a checkout link for it. Set `NITRO_POLAR_ORGANIZATION_ID`,
+   `NITRO_POLAR_PRO_BENEFIT_IDS`, `NITRO_LICENSE_CHECKOUT_URL` and `NITRO_LICENSE_PORTAL_URL` (see
+   `server/.env.example`). Test against a Polar sandbox organization with `NITRO_POLAR_API_URL=https://sandbox-api.polar.sh`.
+
+In debug builds, `VEYMOTION_PRO=1` turns Pro on without a key (for development).
+
 ## Claude chat inside the app (no MCP needed)
 
 Open the **Claude** tab (⌘L) on the right and describe what you want. Under the hood:
