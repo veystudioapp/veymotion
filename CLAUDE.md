@@ -189,8 +189,11 @@ over the canvas (UI-only, never in the scene), and "Add to chat" renders the fra
   layers are cut on their plane in `drawWarped`. Models: `MeshBuilder` primitives, extrusion (`CGPath.normalized`,
   then `Earcut` with holes; a bevel insets each contour with `offsetContour`, which collapses edges that turn around
   so the outline never crosses itself, and is capped per solid part by its measured stroke thickness), lathe (`d`
-  turned around the layer's vertical center line, x = radius) and files (OBJ/MTL and STL parsed here; usdz/usd/ply via ModelIO, which loads nothing in
-  sandboxed processes), cached in `meshCache`; `Raster3D` is a CPU z-buffer rasterizer (doubles for edge functions,
+  turned around the layer's vertical center line, x = radius) and files (OBJ/MTL, STL and glTF/GLB parsed here; usdz/usd/ply via ModelIO, which loads nothing in
+  sandboxed processes), cached in `meshCache`. `MeshBuilder.load` returns a `ModelFile` (fit from the rest pose, cached in
+  `modelFileCache`); animated glTF (`GLTF.swift`) keeps vertices in node/skin space in a `GLTFRig` (TRS channels with
+  step/linear/cubic, ≤ 4 joints per vertex, no morph targets) and `posed` re-skins on the CPU per frame (`poseCache`,
+  last pose per layer); the clip and its time come from `model.animation*` via `MotionLayer.modelClip(at:in:)`; `Raster3D` is a CPU z-buffer rasterizer (doubles for edge functions,
   `modelSupersampling`² samples, Blinn-Phong + sky reflection for metals, `MotionScene.lights` or `Light.defaults`).
 - Grading (`Grading.swift`) runs in `PixelEffects.applyBeforeBlur` after the color matrix: one 256-entry tone table
   (levels + Fritsch–Carlson curve), gradient map, then a trilinear .cube LUT (`CubeLUT.load`, cached by mtime).

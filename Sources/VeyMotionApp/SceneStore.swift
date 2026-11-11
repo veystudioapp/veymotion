@@ -328,7 +328,7 @@ final class SceneStore: SceneHost {
         selection = id
     }
 
-    /// Picks a 3D model file (OBJ, STL, USDZ, USD, PLY) and adds it as a model layer.
+    /// Picks a 3D model file (OBJ, STL, GLB/glTF, USDZ, USD, PLY) and adds it as a model layer.
     func addModelLayer() {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = Self.modelExtensions.compactMap { UTType(filenameExtension: $0) }
@@ -336,7 +336,7 @@ final class SceneStore: SceneHost {
         addFileLayer(url.path)
     }
 
-    static let modelExtensions = ["obj", "stl", "usdz", "usd", "usda", "usdc", "ply", "abc"]
+    static let modelExtensions = ["obj", "stl", "glb", "gltf", "usdz", "usd", "usda", "usdc", "ply", "abc"]
 
     func textToPath(_ id: String, letters: Bool) {
         do { try apply(letters ? "Split into Letters" : "Convert to Path") { _ = try $0.textToPath(id, letters: letters, at: time) } }
@@ -508,8 +508,9 @@ final class SceneStore: SceneHost {
         var path = path
         let ext = (path as NSString).pathExtension.lowercased()
         if Self.modelExtensions.contains(ext) {
-            // OBJ files name their materials and textures in files next to them: those stay where they are.
-            let sidecar = ext == "obj" && FileManager.default.fileExists(atPath: (path as NSString).deletingPathExtension + ".mtl")
+            // OBJ and .gltf files name their materials, buffers and textures in files next to them: those stay where they are.
+            let sidecar = ext == "gltf"
+                || ext == "obj" && FileManager.default.fileExists(atPath: (path as NSString).deletingPathExtension + ".mtl")
             if project != nil, !AssetStore.contains(path), !sidecar {
                 do {
                     path = try AssetStore.importFile(AssetStore.expand(path)).path

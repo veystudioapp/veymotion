@@ -95,7 +95,7 @@ public final class MCPServer {
             var scene = try SceneJSON.decode(MotionScene.self, fromObject: obj)
             let problems = scene.refreshMediaInfo()
             try host.mutate("Set Scene") { $0 = scene }
-            return text("Scene set: \(scene.width)x\(scene.height) @\(scene.fps)fps, \(scene.duration)s, \(scene.layers.count) layers: \(scene.layers.map(\.id).joined(separator: ", "))" + warnings(problems + fontNotes(scene.layers)))
+            return text("Scene set: \(scene.width)x\(scene.height) @\(scene.fps)fps, \(scene.duration)s, \(scene.layers.count) layers: \(scene.layers.map(\.id).joined(separator: ", "))" + warnings(problems + fontNotes(scene.layers) + modelNotes(scene.layers)))
 
         case "update_scene":
             guard let changes = a["changes"] as? [String: Any] else { throw ToolError("`changes` must be an object") }
@@ -112,7 +112,8 @@ public final class MCPServer {
                 newId = $0.addLayer(layer, at: a["index"] as? Int)
                 problems = $0.refreshMediaInfo()
             }
-            return text("Added layer '\(newId)'" + warnings(problems + fontNotes([try host.currentScene().layer(newId)])))
+            let added = try host.currentScene().layer(newId)
+            return text("Added layer '\(newId)'" + warnings(problems + fontNotes([added]) + modelNotes([added])))
 
         case "add_layers":
             guard let list = a["layers"] as? [Any], !list.isEmpty else { throw ToolError("`layers` must be a non-empty array") }
@@ -124,7 +125,7 @@ public final class MCPServer {
                 problems = s.refreshMediaInfo()
             }
             let added = host.currentScene().layers.filter { ids.contains($0.id) }
-            return text("Added \(ids.count) layers: \(ids.joined(separator: ", ")) (scene now has \(host.currentScene().layers.count))" + warnings(problems + fontNotes(added)))
+            return text("Added \(ids.count) layers: \(ids.joined(separator: ", ")) (scene now has \(host.currentScene().layers.count))" + warnings(problems + fontNotes(added) + modelNotes(added)))
 
         case "update_layer":
             let id = try string(a, "id")
@@ -141,7 +142,8 @@ public final class MCPServer {
             let cutout = (updated.removeBackground != nil && (a["changes"] as? [String: Any])?["removeBackground"] != nil)
                 ? PictureML.probe(updated).map { ["Background removal did not work here (\($0)); the picture is drawn whole. It needs the app (not a sandboxed CLI)."] } ?? []
                 : []
-            return text(SceneJSON.string(updated) + warnings(fontNotes([updated]) + cutout))
+            let clips = changes["model"] != nil || changes["path"] != nil ? modelNotes([updated]) : []
+            return text(SceneJSON.string(updated) + warnings(fontNotes([updated]) + cutout + clips))
 
         case "list_fonts":
             return text(fontList(query: a["query"] as? String ?? "", vietnamese: a["vietnamese"] as? Bool ?? false,
@@ -973,6 +975,25 @@ public final class MCPServer {
             }
         }
         return notes
+    }
+
+    /// The animation clips of glTF models and which one plays, so agents can pick one.
+    private func modelNotes(_ layers: [MotionLayer]) -> [String] {
+        layers.compactMap { l in
+            let clips = l.modelAnimations
+            guard !clips.isEmpty else { return nil }
+            let list = clips.enumerated().map { "\($0.offset): \"\($0.element.name)\" (\(String(format: "%.2f", $0.element.duration)) s)" }
+            let state: String
+            if let i = l.model.clipIndex(in: clips.map(\.name)) {
+                state = "it plays \"\(clips[i].name)\""
+            } else if l.model.animation?.lowercased() == "none" {
+                state = "it shows the rest pose"
+            } else {
+                state = "there is no clip \"\(l.model.animation ?? "")\", so it shows the rest pose"
+            }
+            return "Model '\(l.id)' has animation clips \(list.joined(separator: ", ")); \(state). Pick one with model.animation "
+                + "(name or number; \"none\" = still), timing with model.animationSpeed, animationOffset, animationLoop."
+        }
     }
 
     /// Library fonts first, then installed families, with their weights.

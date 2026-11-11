@@ -388,8 +388,13 @@ enum Docs {
       (turns the profile d around the vertical axis through the layer's center: x = distance from the axis, y =
       height, both in px around the center; open or closed subpaths; start/end a profile at x 0 to close it; vases,
       bottles, cups, chess pieces, lamps, rockets, bowls, columns, spinning tops) | file (path = a model file: .obj
-      with its .mtl colors/textures, or .stl; .usdz/.usd/.ply load only in the app; scaled so its largest side =
-      width, default 400; import it with import_asset first).
+      with its .mtl colors/textures, .stl, or .glb/.gltf with base colors/textures (not Draco-compressed);
+      .usdz/.usd/.ply load only in the app; scaled so its largest side =
+      width, default 400; import it with import_asset first). Animated .glb/.gltf (rigged characters, skinning and
+      node animation) play a clip from the layer's start: model.animation = clip name or number (default the
+      first clip; "none" = the rest pose), model.animationSpeed (default 1, negative = backwards),
+      model.animationOffset (seconds into the clip at the layer's start), model.animationLoop (default true; false
+      holds the last pose). add_layer/update_layer list the file's clips. Size and place come from the rest pose.
       Lathe vase, 300 px tall, open at the top: "model":{"shape":"lathe","segments":64},"d":"M0 150 L60 150
       C110 125 125 40 90 -20 C60 -70 35 -95 48 -150". A wine glass: foot + stem + bowl in one profile from x 0 at
       the bottom to the rim at the top. A closed subpath away from the axis makes a ring (a donut, a tire).

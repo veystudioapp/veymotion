@@ -37,6 +37,9 @@ public final class FrameRenderer {
     private struct Placed3D { var t: Double; var proj: LayerProjection; var affine: CGAffineTransform; var local: [Double] }
     private var placed3D: [String: Placed3D] = [:]
     private var meshCache: [String: Mesh3D] = [:]
+    private var modelFileCache: [String: ModelFile?] = [:]
+    /// The last pose of each animated file model (layer id + file key).
+    private var poseCache: [String: (clip: Int, time: Double, mesh: Mesh3D)] = [:]
     /// The frame's depth buffer while its 3D layers draw straight into `depthContext` (nil inside flat groups,
     /// offscreen bitmaps and between runs of 3D layers separated by 2D ones).
     private var depthBuffer: DepthBuffer?
@@ -55,6 +58,8 @@ public final class FrameRenderer {
         videoCache.removeAll()
         cutoutCache.removeAll()
         meshCache.removeAll()
+        modelFileCache.removeAll()
+        poseCache.removeAll()
         textureCache.removeAll()
         placed3D.removeAll()
     }
@@ -2278,6 +2283,26 @@ extension FrameRenderer {
         default:
             key += "|\(w)|\(h)"
         }
+        if mdl.shape == .file {
+            let file: ModelFile?
+            if let f = modelFileCache[key] {
+                file = f
+            } else {
+                // Unreadable files are remembered too, so they are not reloaded every frame.
+                file = layer.path.flatMap { try? MeshBuilder.load(URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath),
+                                                                  size: Float(w > 0 ? w : 400)) }
+                if modelFileCache.count > 16 { modelFileCache.removeAll() }
+                modelFileCache[key] = file
+            }
+            guard let file else { return nil }
+            guard let (clip, time) = layer.modelClip(at: t, in: file.animations) else { return file.mesh }
+            let poseKey = "\(layer.id)|\(key)"
+            if let p = poseCache[poseKey], p.clip == clip, p.time == time { return p.mesh }
+            let posed = file.posed(clip, at: time)
+            if poseCache.count > 32 { poseCache.removeAll() }
+            poseCache[poseKey] = (clip, time, posed)
+            return posed
+        }
         if let m = meshCache[key] { return m }
         let fw = Float(w), fh = Float(h)
         let mesh: Mesh3D
@@ -2309,12 +2334,7 @@ extension FrameRenderer {
         case .lathe:
             mesh = MeshBuilder.lathe(layer.pathShape(at: t).cgPath, segments: mdl.segmentCount)
         case .file:
-            if let p = layer.path, let m = try? MeshBuilder.load(URL(fileURLWithPath: (p as NSString).expandingTildeInPath),
-                                                                 size: Float(w > 0 ? w : 400)) {
-                mesh = m
-            } else {
-                mesh = Mesh3D() // unreadable: remembered, so it is not reloaded every frame
-            }
+            return nil
         }
         if meshCache.count > 48 { meshCache.removeAll() }
         meshCache[key] = mesh

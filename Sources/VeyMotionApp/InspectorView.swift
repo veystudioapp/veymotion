@@ -2026,6 +2026,8 @@ struct ModelEditor: View {
                 }
             }
             .help("The model is scaled so its largest side is this many px")
+            let clips = layer.modelAnimations
+            if !clips.isEmpty { ModelAnimationRows(layer: layer, clips: clips) }
         default:
             Grid(horizontalSpacing: 8, verticalSpacing: 6) {
                 GridRow {
@@ -2105,6 +2107,61 @@ struct ModelEditor: View {
         }
         Text("Lights: the scene's lights (update_scene \"lights\"), or a soft default rig.")
             .font(.caption2).foregroundStyle(.tertiary)
+    }
+}
+
+/// The clip an animated model file plays, and its timing.
+struct ModelAnimationRows: View {
+    @Environment(SceneStore.self) private var store
+    let layer: MotionLayer
+    let clips: [ModelAnimation]
+
+    var body: some View {
+        let id = layer.id
+        let m = layer.model
+        let names = clips.map(\.name)
+        HStack(spacing: 6) {
+            RowLabel("Animation")
+            Picker("", selection: Binding<Int>(get: { m.clipIndex(in: names) ?? -1 }, set: { pick($0, names) })) {
+                Text("None (rest pose)").tag(-1)
+                ForEach(clips.indices, id: \.self) { (i: Int) in
+                    Text(label(clips[i])).tag(i)
+                }
+            }
+            .labelsHidden().controlSize(.small)
+        }
+        Grid(horizontalSpacing: 8, verticalSpacing: 6) {
+            GridRow {
+                NumberField("Speed", m.animationSpeed ?? 1) { v in
+                    store.updateLayer(id, "Animation Speed") { $0.model.animationSpeed = v == 1 ? nil : v }
+                }
+                .help("Playback rate of the clip (negative plays it backwards)")
+                NumberField("Offset", m.animationOffset ?? 0, unit: "s") { v in
+                    store.updateLayer(id, "Animation Offset") { $0.model.animationOffset = v == 0 ? nil : v }
+                }
+                .help("Seconds into the clip at the layer's start")
+            }
+        }
+        Toggle("Loop", isOn: Binding(get: { m.animationLoopValue }, set: { on in
+            store.updateLayer(id, "Animation Loop") { $0.model.animationLoop = on ? nil : false }
+        }))
+        .toggleStyle(.checkbox).controlSize(.small)
+        .help("Start the clip over when it ends; off holds its last pose")
+    }
+
+    private func label(_ clip: ModelAnimation) -> String {
+        clip.name + " · " + String(format: "%.1f s", clip.duration)
+    }
+
+    private func pick(_ i: Int, _ names: [String]) {
+        let value: String
+        if i < 0 {
+            value = "none"
+        } else {
+            // Names can repeat: those are kept by number.
+            value = names.filter { $0 == names[i] }.count == 1 ? names[i] : String(i)
+        }
+        store.updateLayer(layer.id, "Model Animation") { $0.model.animation = value }
     }
 }
 

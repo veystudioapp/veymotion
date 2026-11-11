@@ -56,12 +56,24 @@ public struct Model3D: Codable, Equatable, Sendable {
     public var bevel: Double?
     /// Text/path: steps around the bevel (1 = a flat chamfer, default 3).
     public var bevelSteps: Int?
+    /// File models with animations: the clip that plays, by name or number (0 = the first); nil = the first clip,
+    /// "none" = the rest pose.
+    public var animation: String?
+    /// Clip playback rate (default 1; negative plays backwards).
+    public var animationSpeed: Double?
+    /// Seconds into the clip at the layer's start (default 0).
+    public var animationOffset: Double?
+    /// Start the clip over when it ends (default true); false holds its last pose.
+    public var animationLoop: Bool?
 
     public init(shape: ModelShape = .box) {
         self.shape = shape
     }
 
-    enum CodingKeys: String, CodingKey { case shape, depth, segments, radius, sideColor, shininess, metallic, bevel, bevelSteps }
+    enum CodingKeys: String, CodingKey {
+        case shape, depth, segments, radius, sideColor, shininess, metallic, bevel, bevelSteps
+        case animation, animationSpeed, animationOffset, animationLoop
+    }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -74,6 +86,28 @@ public struct Model3D: Codable, Equatable, Sendable {
         metallic = try c.decodeIfPresent(Double.self, forKey: .metallic).map { min(max($0, 0), 1) }
         bevel = try c.decodeIfPresent(Double.self, forKey: .bevel).map { max(0, $0) }
         bevelSteps = try c.decodeIfPresent(Int.self, forKey: .bevelSteps).map { min(max($0, 1), 12) }
+        if let i = try? c.decodeIfPresent(Int.self, forKey: .animation) {
+            animation = String(i)
+        } else {
+            animation = try c.decodeIfPresent(String.self, forKey: .animation)
+        }
+        animationSpeed = try c.decodeIfPresent(Double.self, forKey: .animationSpeed)
+        animationOffset = try c.decodeIfPresent(Double.self, forKey: .animationOffset)
+        animationLoop = try c.decodeIfPresent(Bool.self, forKey: .animationLoop)
+    }
+
+    public var animationLoopValue: Bool { animationLoop ?? true }
+
+    /// The clip `animation` picks among `names`: nil/empty = the first, "none" = none, a name (exact, any case, or
+    /// the part after "|" as in "Armature|Walk"), or a number.
+    public func clipIndex(in names: [String]) -> Int? {
+        guard !names.isEmpty else { return nil }
+        guard let a = animation?.trimmingCharacters(in: .whitespaces), !a.isEmpty else { return 0 }
+        let low = a.lowercased()
+        if low == "none" { return nil }
+        if let i = names.firstIndex(of: a) ?? names.firstIndex(where: { $0.lowercased() == low }) { return i }
+        if let i = Int(a) { return names.indices.contains(i) ? i : nil }
+        return names.firstIndex { $0.split(separator: "|").last.map { $0.lowercased() == low } ?? false }
     }
 
     public var shininessValue: Double { shininess ?? 0.3 }
@@ -680,28 +714,20 @@ enum MeshBuilder {
     // MARK: Files
 
     /// Loads a model file, centered and scaled so its largest side is `size` px, turned from the files' y-up axes to
-    /// the scene's (y down, z away). OBJ (with its MTL colors and textures) and STL are read here, so they also load in
-    /// sandboxed processes; usdz, usd/usda/usdc, ply and abc go through ModelIO (the app only). Parts get their file
-    /// colors (slot 2 + i).
-    static func load(_ url: URL, size: Float) throws -> Mesh3D {
+    /// the scene's (y down, z away). OBJ (with its MTL colors and textures), STL and glTF (glb/gltf) are read here, so
+    /// they also load in sandboxed processes; usdz, usd/usda/usdc, ply and abc go through ModelIO (the app only). Parts
+    /// get their file colors (slot 2 + i). Animated glTF files come with their rig.
+    static func load(_ url: URL, size: Float) throws -> ModelFile {
         let m: Mesh3D
+        var rig: GLTFRig?
         switch url.pathExtension.lowercased() {
         case "obj": m = try ObjFile.load(url)
         case "stl": m = try loadSTL(url)
+        case "glb", "gltf": (m, rig) = try GLTFFile.load(url)
         default: m = try loadModelIO(url)
         }
         guard !m.isEmpty else { throw SceneError.invalid("No triangles in \(url.lastPathComponent)") }
-        // y up, z toward the viewer → y down, z away: a half turn around x (no mirroring, the winding stays).
-        for i in m.positions.indices {
-            m.positions[i].y = -m.positions[i].y; m.positions[i].z = -m.positions[i].z
-            m.normals[i].y = -m.normals[i].y; m.normals[i].z = -m.normals[i].z
-        }
-        let (lo, hi) = m.bounds
-        let center = (lo + hi) / 2
-        let extent = max(hi.x - lo.x, hi.y - lo.y, hi.z - lo.z)
-        let k = extent > 0 ? size / extent : 1
-        for i in m.positions.indices { m.positions[i] = (m.positions[i] - center) * k }
-        return m
+        return ModelFile(m, rig: rig, size: size)
     }
 
     /// STL, binary or ASCII: facets with flat normals.
@@ -744,7 +770,7 @@ enum MeshBuilder {
 
     private static func loadModelIO(_ url: URL) throws -> Mesh3D {
         guard MDLAsset.canImportFileExtension(url.pathExtension.lowercased()) else {
-            throw SceneError.invalid("Cannot read 3D files of type .\(url.pathExtension) (use obj, stl, usdz, usd or ply)")
+            throw SceneError.invalid("Cannot read 3D files of type .\(url.pathExtension) (use obj, stl, glb, gltf, usdz, usd or ply)")
         }
         let asset = MDLAsset(url: url, vertexDescriptor: nil, bufferAllocator: nil, preserveTopology: false, error: nil)
         asset.loadTextures()
@@ -840,6 +866,98 @@ enum MeshBuilder {
             break
         }
         return (.white, nil)
+    }
+}
+
+// MARK: - Model files
+
+/// An animation clip of a model file.
+public struct ModelAnimation: Equatable, Sendable {
+    public var name: String
+    public var duration: Double
+}
+
+/// A loaded model file: its mesh at rest, and for animated glTF files the rig that poses it. Every pose is turned
+/// and fitted like the rest pose, so the model keeps its place and size while it moves.
+final class ModelFile {
+    let mesh: Mesh3D
+    let rig: GLTFRig?
+    private let center: SIMD3<Float>
+    private let k: Float
+
+    var animations: [ModelAnimation] {
+        rig?.clips.map { ModelAnimation(name: $0.name, duration: Double($0.end - $0.start)) } ?? []
+    }
+
+    init(_ m: Mesh3D, rig: GLTFRig?, size: Float) {
+        // y up, z toward the viewer → y down, z away: a half turn around x (no mirroring, the winding stays).
+        for i in m.positions.indices {
+            m.positions[i] = Self.turned(m.positions[i])
+            m.normals[i] = Self.turned(m.normals[i])
+        }
+        let (lo, hi) = m.bounds
+        center = (lo + hi) / 2
+        let extent = max(hi.x - lo.x, hi.y - lo.y, hi.z - lo.z)
+        k = extent > 0 ? size / extent : 1
+        for i in m.positions.indices { m.positions[i] = (m.positions[i] - center) * k }
+        mesh = m
+        self.rig = rig
+    }
+
+    private static func turned(_ v: SIMD3<Float>) -> SIMD3<Float> { SIMD3(v.x, -v.y, -v.z) }
+
+    /// The mesh with clip `clip` at `time` seconds into it.
+    func posed(_ clip: Int, at time: Double) -> Mesh3D {
+        guard let rig else { return mesh }
+        let (positions, normals) = rig.pose(clip, at: time)
+        let m = Mesh3D()
+        m.indices = mesh.indices
+        m.slots = mesh.slots
+        m.uvs = mesh.uvs
+        m.fileMaterials = mesh.fileMaterials
+        m.positions = positions.map { (Self.turned($0) - center) * k }
+        m.normals = normals.map(Self.turned)
+        return m
+    }
+
+    private static let infoLock = NSLock()
+    nonisolated(unsafe) private static var infoCache: [String: (modified: Double, animations: [ModelAnimation])] = [:]
+
+    /// The animation clips of the model file at `path` (empty for files without any, or that cannot be read).
+    static func animations(atPath path: String) -> [ModelAnimation] {
+        let path = (path as NSString).expandingTildeInPath
+        guard ["glb", "gltf"].contains((path as NSString).pathExtension.lowercased()) else { return [] }
+        let modified = ((try? FileManager.default.attributesOfItem(atPath: path)[.modificationDate]) as? Date)?.timeIntervalSince1970 ?? 0
+        infoLock.lock()
+        if let c = infoCache[path], c.modified == modified { infoLock.unlock(); return c.animations }
+        infoLock.unlock()
+        let list = (try? GLTFFile.animations(URL(fileURLWithPath: path))) ?? []
+        infoLock.lock()
+        if infoCache.count > 32 { infoCache.removeAll() }
+        infoCache[path] = (modified, list)
+        infoLock.unlock()
+        return list
+    }
+}
+
+extension MotionLayer {
+    /// The animation clips of a file model's `path`.
+    public var modelAnimations: [ModelAnimation] {
+        guard type == .model, model.shape == .file, let path else { return [] }
+        return ModelFile.animations(atPath: path)
+    }
+
+    /// The clip of a file model shown at scene time t and the seconds into it, nil for the rest pose.
+    func modelClip(at t: Double, in animations: [ModelAnimation]) -> (index: Int, time: Double)? {
+        guard let i = model.clipIndex(in: animations.map(\.name)) else { return nil }
+        let duration = animations[i].duration
+        let s = (model.animationOffset ?? 0) + max(0, t - start) * (model.animationSpeed ?? 1)
+        guard duration > 0 else { return (i, 0) }
+        if model.animationLoopValue {
+            let r = s.truncatingRemainder(dividingBy: duration)
+            return (i, r < 0 ? r + duration : r)
+        }
+        return (i, min(max(s, 0), duration))
     }
 }
 
