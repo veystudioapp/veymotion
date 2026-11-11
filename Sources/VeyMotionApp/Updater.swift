@@ -90,7 +90,7 @@ final class Updater {
         guard autoCheck else { return }
         let due = lastChecked.map { max(5, Self.checkInterval - Date().timeIntervalSince($0)) } ?? 5
         timer = Timer.scheduledTimer(withTimeInterval: due, repeats: false) { [weak self] _ in
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 self?.check(userInitiated: false)
                 self?.scheduleChecks()
             }

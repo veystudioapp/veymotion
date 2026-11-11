@@ -512,13 +512,15 @@ public enum TextUnits {
 // MARK: - Transforms
 
 extension MotionLayer {
-    /// Center of the layer at time t (in its parent's space): from the motion path if any, else x/y.
+    /// Center of the layer at time t (in its parent's space): from the motion path if any, else x/y (as one spatial
+    /// path when `spatial` is set).
     public func position(at t: Double) -> (point: CGPoint, pathAngle: Double) {
         if let mp = motionPath, !mp.points.isEmpty {
             let s = mp.sample(value(.pathProgress, at: t))
             return (CGPoint(x: s.point.x + proceduralOffset(.x, at: t), y: s.point.y + proceduralOffset(.y, at: t)),
                     mp.orient ? s.angle : 0)
         }
+        if let s = spatialPosition(at: t) { return s }
         return (CGPoint(x: value(.x, at: t), y: value(.y, at: t)), 0)
     }
 

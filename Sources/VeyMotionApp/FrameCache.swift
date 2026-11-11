@@ -246,6 +246,7 @@ final class FrameCache {
         lock.lock(); defer { lock.unlock() }
         let r = renderers.popLast() ?? FrameRenderer()
         r.motionBlurSamples = 8
+        r.motionBlurMaxSamples = 32
         r.modelSupersampling = 2 // frames at playback size
         return (r, rendererGeneration)
     }

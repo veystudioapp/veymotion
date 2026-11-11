@@ -527,7 +527,11 @@ struct EffectsSection: View {
                         store.updateLayer(layer.id, "Motion Blur") { $0.motionBlur = min(max(v, 0), 720) }
                     }
                     .help("Shutter angle: 180° = natural film blur on fast moves, 0 = off")
-                    Color.clear.frame(height: 1)
+                    NumberField("Phase", layer.motionBlurPhase ?? -layer.motionBlur / 2, unit: "°", digits: 0) { v in
+                        store.updateLayer(layer.id, "Shutter Phase") { $0.motionBlurPhase = min(max(v, -360), 360) }
+                    }
+                    .help("When the shutter opens, relative to the frame (−angle/2 = centered, 0 = smear runs ahead, −angle = trails behind)")
+                    .disabled(layer.motionBlur <= 0)
                 }
             }
             MatteRow(layer: layer)
@@ -1557,6 +1561,34 @@ struct MotionSection: View {
                 .toggleStyle(.checkbox)
                 .controlSize(.small)
             } else {
+                if layer.x.isAnimated || layer.y.isAnimated {
+                    HStack(spacing: 6) {
+                        RowLabel("Position")
+                        Picker("", selection: Binding(get: { layer.spatial.map { $0.smooth ? 1 : 2 } ?? 0 }, set: { v in
+                            store.updateLayer(id, "Position Path") { l in
+                                if v == 0 { l.spatial = nil; return }
+                                var sp = l.spatial ?? SpatialPath()
+                                sp.smooth = v == 1
+                                l.spatial = sp
+                            }
+                        })) {
+                            Text("Separate X/Y").tag(0)
+                            Text("Curved path").tag(1)
+                            Text("Straight path").tag(2)
+                        }
+                        .labelsHidden()
+                        .controlSize(.small)
+                        .help("Curved/Straight: the x/y keys form one path traveled at even speed, like After Effects")
+                        if layer.spatial != nil {
+                            Toggle("Orient", isOn: Binding(get: { layer.spatial?.orient ?? false }, set: { v in
+                                store.updateLayer(id, "Auto-Orient") { $0.spatial?.orient = v }
+                            }))
+                            .toggleStyle(.checkbox)
+                            .controlSize(.small)
+                            .help("Turn the layer to face the direction of travel")
+                        }
+                    }
+                }
                 Button("Add Motion Path") { addPath() }
                     .controlSize(.small)
                     .help("Make the layer travel along a curve (edit the points via JSON or ask Claude)")

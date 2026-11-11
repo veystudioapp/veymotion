@@ -94,6 +94,7 @@ final class LicenseStore {
 }
 
 /// Settings → Account.
+@MainActor
 struct AccountPanel: View {
     @Bindable var store = LicenseStore.shared
     @State private var key = ""
@@ -203,6 +204,7 @@ struct AccountPanel: View {
 
 /// Toolbar button that opens the Account panel in a popover: "Upgrade to Pro" on the Free plan (enter a key or buy
 /// Pro), a PRO tag once activated (the panel then shows the license, so a successful activation is visible in place).
+@MainActor
 struct UpgradeToolbarButton: View {
     @Bindable var store = LicenseStore.shared
     @State private var showPanel = false
@@ -241,7 +243,6 @@ struct ProBadge: View {
 /// Shown instead of a Pro-only panel on the Free plan.
 struct ProLockedView: View {
     let feature: ProFeature
-    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         VStack(spacing: 8) {
@@ -251,7 +252,7 @@ struct ProLockedView: View {
                 ProBadge()
             }
             Text("Available with VeyMotion Pro.").font(.callout).foregroundStyle(.secondary)
-            Button("Upgrade…") { openSettings() }
+            SettingsLink { Text("Upgrade…") }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

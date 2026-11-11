@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 import VeyMotionCore
 
+@MainActor
 struct ContentView: View {
     @Environment(SceneStore.self) private var store
     @State private var showVoice = false
@@ -235,6 +236,7 @@ final class PreviewRenderer {
         busy = true
         queue.async { [renderer] in
             renderer.motionBlurSamples = job.fast ? 4 : 8
+            renderer.motionBlurMaxSamples = job.fast ? 8 : 32
             renderer.modelSupersampling = job.fast ? 2 : 3
             // Opening a project with music-reactive layers must not hold the canvas until the song is analyzed.
             let img = AudioAnalysisCache.withoutWaiting {

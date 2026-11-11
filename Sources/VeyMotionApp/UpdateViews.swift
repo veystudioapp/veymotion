@@ -2,6 +2,7 @@ import SwiftUI
 import VeyMotionCore
 
 /// Version, update status and update settings (Settings window and the toolbar's update popover).
+@MainActor
 struct UpdatePanel: View {
     @Bindable var updater = Updater.shared
     var showsSettings = true
@@ -95,6 +96,7 @@ struct UpdatePanel: View {
 }
 
 /// Settings window (⌘,).
+@MainActor
 struct SettingsView: View {
     var body: some View {
         TabView {
@@ -110,6 +112,7 @@ struct SettingsView: View {
 }
 
 /// Toolbar button that only shows up while there is an update to get or install.
+@MainActor
 struct UpdateToolbarButton: View {
     @Bindable var updater = Updater.shared
     @State private var showDetails = false

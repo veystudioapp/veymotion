@@ -667,8 +667,9 @@ enum MeshBuilder {
                 let n = steps(hypot(c.x - last.x, c.y - last.y) + hypot(p.x - c.x, p.y - c.y))
                 for i in 1...n {
                     let t = Double(i) / Double(n), u = 1 - t
-                    add(CGPoint(x: u * u * last.x + 2 * u * t * c.x + t * t * p.x,
-                                y: u * u * last.y + 2 * u * t * c.y + t * t * p.y))
+                    let qx: Double = u * u * last.x + 2 * u * t * c.x + t * t * p.x
+                    let qy: Double = u * u * last.y + 2 * u * t * c.y + t * t * p.y
+                    add(CGPoint(x: qx, y: qy))
                 }
                 last = p
             case .addCurveToPoint:
@@ -677,7 +678,9 @@ enum MeshBuilder {
                 for i in 1...n {
                     let t = Double(i) / Double(n), u = 1 - t
                     let a = u * u * u, b = 3 * u * u * t, cc = 3 * u * t * t, d = t * t * t
-                    add(CGPoint(x: a * last.x + b * c1.x + cc * c2.x + d * p.x, y: a * last.y + b * c1.y + cc * c2.y + d * p.y))
+                    let px: Double = a * last.x + b * c1.x + cc * c2.x + d * p.x
+                    let py: Double = a * last.y + b * c1.y + cc * c2.y + d * p.y
+                    add(CGPoint(x: px, y: py))
                 }
                 last = p
             case .closeSubpath:

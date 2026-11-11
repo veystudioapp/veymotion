@@ -314,6 +314,8 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
     public var parent: String?
     /// When set, the layer's center follows this path (x/y are ignored), driven by `pathProgress`.
     public var motionPath: MotionPath?
+    /// When set, the x/y keys form one curved path traveled at even speed (After Effects' spatial interpolation).
+    public var spatial: SpatialPath?
     /// Per-track behavior after the last keyframe, keyed by property name ("rotation", "fill"…).
     public var loop: [String: LoopMode]
     /// Procedural noise added to numeric properties, keyed by property name.
@@ -330,6 +332,8 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
     public var repeater: Repeater?
     /// Shutter angle in degrees (180 = film look, 0 = off): fast motion smears over the frame's exposure.
     public var motionBlur: Double
+    /// When the shutter opens, in degrees of a frame relative to the frame time (nil = centered: -motionBlur/2).
+    public var motionBlurPhase: Double?
     /// Linear or radial fill (shapes, paths, text); replaces the solid fill/color.
     public var gradient: Gradient?
     /// Color the `tint` property maps white to (nil = white, i.e. black and white).
@@ -471,6 +475,7 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         extra = [:]
         parent = nil
         motionPath = nil
+        spatial = nil
         loop = [:]
         wiggle = [:]
         audioReact = [:]
@@ -480,6 +485,7 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         matte = nil
         repeater = nil
         motionBlur = 0
+        motionBlurPhase = nil
         gradient = nil
         tintColor = nil
         wipeStyle = nil
@@ -808,7 +814,9 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
 
     public mutating func moveKey(_ k: KeyTrack, at t: Double, to newT: Double, tolerance: Double) {
         switch k {
-        case let .number(p): self[p] = self[p].movingKey(at: t, to: newT, tolerance: tolerance)
+        case let .number(p):
+            self[p] = self[p].movingKey(at: t, to: newT, tolerance: tolerance)
+            if p == .x || p == .y { spatial?.moveHandle(at: t, to: newT) }
         case let .color(c): self[c] = self[c].movingKey(at: t, to: newT, tolerance: tolerance)
         }
     }
@@ -822,7 +830,11 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
 
     public mutating func deleteKey(_ k: KeyTrack, at t: Double, tolerance: Double) {
         switch k {
-        case let .number(p): self[p] = self[p].deletingKey(at: t, tolerance: tolerance)
+        case let .number(p):
+            self[p] = self[p].deletingKey(at: t, tolerance: tolerance)
+            if (p == .x || p == .y) && !x.hasKey(at: t, tolerance: tolerance) && !y.hasKey(at: t, tolerance: tolerance) {
+                spatial?.handles.removeAll { abs($0.t - t) < tolerance }
+            }
         case let .color(c):
             if c == .stroke && stroke == nil { return }
             self[c] = self[c].deletingKey(at: t, tolerance: tolerance)
@@ -841,6 +853,7 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         cornerPin = cornerPin?.shifted(by: d)
         pins = pins.map { $0.shifted(by: d) }
         timeRemap = timeRemap?.shifted(by: d)
+        if spatial != nil { for i in spatial!.handles.indices { spatial!.handles[i].t += d } }
     }
 
     /// Earliest keyframe, text-animator or particle-burst time, if any.
@@ -867,7 +880,7 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
     enum CodingKeys: String, CodingKey {
         case id, name, type, start, end, x, y, scale, rotation, opacity, reveal
         case scaleX, scaleY, skewX, skewY, anchorX, anchorY, trim, letterSpacing
-        case trimStart, trimOffset, glow, glowRadius, glowColor, matte, repeater, motionBlur, gradient
+        case trimStart, trimOffset, glow, glowRadius, glowColor, matte, repeater, motionBlur, motionBlurPhase, gradient
         case blur, shadowX, shadowY, shadowBlur, shadowOpacity, shadowColor, pathProgress, blendMode
         case emission, particleSpeed, particleSize, particles, generator
         case brightness, contrast, saturation, hue, tint, tintColor, wipe, wipeStyle
@@ -884,7 +897,7 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         case levelsBlack, levelsWhite, levelsGamma, gradientMapAmount, lutAmount, curves, gradientMap, lut
         case removeBackground, frameBlend
         case offsetPath, zigzag, wigglePath, pucker, dashOffset, taperStart, taperEnd
-        case parent, motionPath, loop, wiggle, audioReact, textAnimators
+        case parent, motionPath, spatial, loop, wiggle, audioReact, textAnimators
         case width, height, cornerRadius, fill, stroke, strokeWidth, lineCap, lineJoin, d, fillRule
         case text, fontSize, fontWeight, fontName, color, align, maxWidth
         case path, speed, playback, fps, timeRemap
@@ -911,6 +924,7 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         }
         parent = try c.decodeIfPresent(String.self, forKey: .parent).flatMap { $0.isEmpty ? nil : $0 }
         motionPath = try c.decodeIfPresent(MotionPath.self, forKey: .motionPath)
+        spatial = try c.decodeIfPresent(SpatialPath.self, forKey: .spatial)
         loop = try c.decodeIfPresent([String: LoopMode].self, forKey: .loop) ?? [:]
         for k in loop.keys where KeyTrack(name: k) == nil && k != "d" {
             throw DecodingError.dataCorruptedError(forKey: .loop, in: c,
@@ -935,6 +949,7 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         matte = try c.decodeIfPresent(Matte.self, forKey: .matte).flatMap { $0.source.isEmpty ? nil : $0 }
         repeater = try c.decodeIfPresent(Repeater.self, forKey: .repeater)
         motionBlur = min(max(try c.decodeIfPresent(Double.self, forKey: .motionBlur) ?? 0, 0), 720)
+        motionBlurPhase = try c.decodeIfPresent(Double.self, forKey: .motionBlurPhase).map { min(max($0, -360), 360) }
         gradient = try c.decodeIfPresent(Gradient.self, forKey: .gradient)
         tintColor = try c.decodeIfPresent(RGBA.self, forKey: .tintColor)
         wipeStyle = try c.decodeIfPresent(WipeStyle.self, forKey: .wipeStyle)
@@ -1059,6 +1074,7 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         try c.encodeIfPresent(matte, forKey: .matte)
         try c.encodeIfPresent(repeater, forKey: .repeater)
         if motionBlur > 0 { try c.encode(motionBlur, forKey: .motionBlur) }
+        try c.encodeIfPresent(motionBlurPhase, forKey: .motionBlurPhase)
         // Written even before tint/wipe are set, so a patch that only sets the style survives the next round trip.
         try c.encodeIfPresent(tintColor, forKey: .tintColor)
         try c.encodeIfPresent(wipeStyle, forKey: .wipeStyle)
@@ -1088,6 +1104,7 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         try c.encodeIfPresent(parent, forKey: .parent)
         try c.encodeIfPresent(bone, forKey: .bone)
         try c.encodeIfPresent(motionPath, forKey: .motionPath)
+        try c.encodeIfPresent(spatial, forKey: .spatial)
         if !loop.isEmpty { try c.encode(loop, forKey: .loop) }
         if !wiggle.isEmpty { try c.encode(wiggle, forKey: .wiggle) }
         if !audioReact.isEmpty { try c.encode(audioReact, forKey: .audioReact) }

@@ -4,6 +4,7 @@ import VeyMotionCore
 
 /// Export options (format, platform size, resolution, quality, range), then live progress with Cancel,
 /// then an optional Publish step.
+@MainActor
 struct ExportSheet: View {
     @Environment(SceneStore.self) private var store
     @Environment(\.dismiss) private var dismiss

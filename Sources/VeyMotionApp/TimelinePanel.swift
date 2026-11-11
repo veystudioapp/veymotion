@@ -225,6 +225,7 @@ extension MotionLayer {
 
 // MARK: - Panel
 
+@MainActor
 struct TimelinePanel: View {
     @Environment(SceneStore.self) private var store
     @State private var tl = TimelineState()

@@ -23,8 +23,11 @@ public final class FrameRenderer {
     /// Pictures with their background removed, by mode + source + frame.
     private var cutoutCache: [String: CGImage] = [:]
     public static let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
-    /// Sub-frame renders averaged for a layer with motion blur (lower it for a faster preview).
+    /// Fewest sub-frame renders averaged for a layer with motion blur (lower it for a faster preview).
     public var motionBlurSamples = 8
+    /// Most sub-frame renders: fast moves get more samples (about one per 1.5 device px of travel), so they smear
+    /// instead of showing separate copies.
+    public var motionBlurMaxSamples = 64
     /// Set while rendering motion-blur samples, so samples are not blurred again.
     private var inMotionSample = false
     /// Supersampling of model layers per axis (3 = 9 samples a pixel; lower it for a faster preview).
@@ -77,6 +80,7 @@ public final class FrameRenderer {
         ctx.clear(CGRect(x: 0, y: 0, width: pixelWidth, height: pixelHeight))
         ctx.setShouldAntialias(true)
         ctx.interpolationQuality = .high
+        Self.unquantizeText(ctx)
         // Switch to scene coordinates: origin top-left, y down, 1 unit = 1 scene pixel.
         Self.applySceneSpace(ctx, scene: scene, pixelWidth: pixelWidth, pixelHeight: pixelHeight)
 
@@ -123,8 +127,19 @@ public final class FrameRenderer {
     }
 
     private static func bitmap(_ w: Int, _ h: Int) -> CGContext? {
-        CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0, space: colorSpace,
-                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0, space: colorSpace,
+                            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        if let ctx { unquantizeText(ctx) }
+        return ctx
+    }
+
+    /// Glyphs at their exact positions: CoreText otherwise snaps them to the pixel grid, so slowly moving or zooming
+    /// text steps a pixel at a time and its letters wobble against each other.
+    private static func unquantizeText(_ ctx: CGContext) {
+        ctx.setAllowsFontSubpixelPositioning(true)
+        ctx.setShouldSubpixelPositionFonts(true)
+        ctx.setAllowsFontSubpixelQuantization(false)
+        ctx.setShouldSubpixelQuantizeFonts(false)
     }
 
     public func pngData(_ scene: MotionScene, at t: Double, scale: Double = 1) -> Data? {
@@ -241,17 +256,16 @@ public final class FrameRenderer {
     /// One copy of a layer, averaged over the shutter time when it has motion blur.
     private func drawCopy(_ layer: MotionLayer, scene: MotionScene, at t: Double, in ctx: CGContext,
                           copy: CGAffineTransform?, alphaScale: Double) {
-        let shutter = layer.motionBlur / 360 / Double(max(scene.fps, 1))
-        let n = motionBlurSamples
-        guard shutter > 0, n > 1, !inMotionSample else {
+        let frameTime = 1 / Double(max(scene.fps, 1))
+        let shutter = layer.motionBlur / 360 * frameTime
+        guard shutter > 0, motionBlurSamples > 1, !inMotionSample else {
             drawLayer(layer, scene: scene, at: t, in: ctx, copy: copy, alphaScale: alphaScale)
             return
         }
+        let open = t + (layer.motionBlurPhase ?? -layer.motionBlur / 2) / 360 * frameTime
+        let n = motionBlurSampleCount(layer, scene: scene, from: open, to: open + shutter, copy: copy)
         let nd = Double(n)
-        let times: [Double] = (0..<n).map { i -> Double in
-            let frac: Double = (Double(i) + 0.5) / nd - 0.5
-            return t + shutter * frac
-        }
+        let times: [Double] = (0..<n).map { i in open + shutter * (Double(i) + 0.5) / nd }
         let (w, h) = pixelSize
         let frame = CGRect(x: 0, y: 0, width: w, height: h)
         let area = (motionBounds(layer, scene: scene, times: times, copy: copy) ?? frame).integral.intersection(frame)
@@ -283,6 +297,32 @@ public final class FrameRenderer {
         ctx.setBlendMode(layer.blendMode.cgBlendMode)
         drawDeviceImage(image, rect: area, scene: scene, in: ctx)
         ctx.restoreGState()
+    }
+
+    /// Samples for a shutter interval: enough that the layer's corners move at most ~1.5 device px between two.
+    private func motionBlurSampleCount(_ layer: MotionLayer, scene: MotionScene, from t0: Double, to t1: Double,
+                                       copy: CGAffineTransform?) -> Int {
+        let lo = motionBlurSamples, hi = max(motionBlurMaxSamples, lo)
+        guard hi > lo, layer.type != .particles,
+              let local = contentBounds(layer, scene: scene, at: (t0 + t1) / 2), !local.isNull, !local.isInfinite
+        else { return lo }
+        let (w, h) = pixelSize
+        let sx = Double(w) / Double(scene.width), sy = Double(h) / Double(scene.height)
+        let corners = [CGPoint(x: local.minX, y: local.minY), CGPoint(x: local.maxX, y: local.minY),
+                       CGPoint(x: local.minX, y: local.maxY), CGPoint(x: local.maxX, y: local.maxY)]
+        let steps = 8
+        var travel = 0.0
+        var prev: [CGPoint] = []
+        for k in 0...steps {
+            let m = transform(of: layer, scene: scene, at: t0 + (t1 - t0) * Double(k) / Double(steps), copy: copy)
+            let pts = corners.map { $0.applying(m) }
+            if !prev.isEmpty {
+                travel += zip(pts, prev).map { hypot(($0.x - $1.x) * sx, ($0.y - $1.y) * sy) }.max() ?? 0
+            }
+            prev = pts
+        }
+        guard travel.isFinite else { return hi }
+        return min(max(Int((travel / 1.5).rounded(.up)), lo), hi)
     }
 
     /// Device-pixel area a layer covers over several times (with blur, shadow and glow), or nil when unknown.

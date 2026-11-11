@@ -100,10 +100,10 @@ enum Docs {
       scaleX, scaleY (multiply scale; flip effects), skewX, skewY (degrees), anchorX, anchorY (pivot for rotation/scale/
       skew as an offset from the center in layer px, e.g. anchorX = -width/2 spins around the left edge; does not move the
       layer), blur (px), shadowOpacity (0..1, shadow off when 0), shadowX, shadowY (px, default 0/8), shadowBlur (default 16),
-      shadowColor ("#000000"), parent, motionPath, pathProgress, loop, wiggle, audioReact (see below),
+      shadowColor ("#000000"), parent, motionPath, spatial, pathProgress, loop, wiggle, audioReact (see below),
       blendMode ("normal" | "add" | "screen" | "multiply" | "overlay" | "lighten" | "darken"; "add"/"screen" make dark
       areas see-through, e.g. fire or smoke footage on black),
-      gradient (rect/ellipse/path/text), matte, repeater, motionBlur, glow, glowRadius, glowColor, brightness, contrast,
+      gradient (rect/ellipse/path/text), matte, repeater, motionBlur, motionBlurPhase, glow, glowRadius, glowColor, brightness, contrast,
       saturation, hue, tint, tintColor, wipe, wipeStyle, keyColor, keyTolerance, keySoftness, waveWarp, ripple,
       waveLength, waveSpeed, twirl, bulge, distortRadius, turbulence, posterize, pixelate, rgbSplit, glitch, grain,
       scanlines, vignette, directionalBlur, blurAngle, zoomBlur, posterizeTime (see AFTER EFFECTS-STYLE TOOLS),
@@ -143,6 +143,12 @@ enum Docs {
     - motionPath: {"points":[[200,800],[960,300],[1700,800]],"smooth":true,"closed":false,"orient":false} — the layer's
       center follows the path (x/y are then ignored); animate pathProgress 0→1 to move along it at even speed;
       orient = true turns the layer to face the direction of travel.
+    - spatial: {"smooth":true,"orient":false} (or just true) — the x/y keys become ONE path, like After Effects position
+      keys: an auto-Bezier curve through the key positions (smooth false = straight lines), traveled by distance with
+      each key's easing, so arcs and multi-point moves flow without kinks or speed wobble. Put x and y keys at the same
+      times (the easing comes from the x key). Bend a segment with custom tangents (scene px, relative to the key):
+      "handles":[{"t":1,"out":[200,0]},{"t":2,"in":[0,-150]}]. orient = auto-orient along the path. Recommended for
+      any layer that moves through 3+ positions or should travel in an arc.
 
     STROKES (rect, ellipse, path)
     - Trim paths: trimStart and trim (= end), 0..1 along the outline, draw only part of the stroke; trimOffset slides
@@ -178,7 +184,9 @@ enum Docs {
       randomX/randomY (px), randomRotation (± degrees), randomScale (± fraction) scatter each copy a little, fixed by
       seed (change it for another arrangement): confetti rings, hand-placed dot patterns, uneven rays.
     - motionBlur: shutter angle (180 = natural film blur, 360 = strong, 0 = off); fast moves, spins and zooms smear like
-      a real camera. It renders the layer several times per frame, so use it on the few fast-moving layers.
+      a real camera. It renders the layer several times per frame (more the faster it moves), so use it on the few
+      fast-moving layers. motionBlurPhase (degrees, default -motionBlur/2 = centered on the frame; 0 = the exposure starts at
+      the frame, so the smear runs ahead; -motionBlur = it trails behind).
     - glow (strength 0..4, animatable), glowRadius (px, default 24), glowColor (optional tint): light around the layer —
       neon lines and logos, glowing text, light streaks. Best on bright layers over dark backgrounds.
     - Light (every visual layer): shine (strength 0..2) is a soft bright band across the layer, placed by

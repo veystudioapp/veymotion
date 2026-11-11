@@ -162,7 +162,8 @@ Easy Ease F9 / ⇧F9 / ⌘⇧F9).
   `links` copy their source track into `PropertyLink.track` during `resolveLinks` (one hop, like `AudioReact.link`).
 - Text extras: `FrameRenderer.displayText` swaps "{n}" for `counter` and applies `scramble` before layout; text
   outlines are stroked at twice the width *behind* the fill (stroking on top shows the inner contours of SF/variable
-  glyphs), hollow text cuts the fill out; `textPath` lays glyphs along a `MotionPath` (`drawTextOnPath`); animator
+  glyphs), hollow text cuts the fill out; every context the renderer draws in turns off CoreText's subpixel
+  quantization (`unquantizeText`), else slowly moving/zooming 2D text steps whole pixels and its letters wobble; `textPath` lays glyphs along a `MotionPath` (`drawTextOnPath`); animator
   blur goes through a small per-glyph bitmap.
 - `PathOps.swift`: offset/zigzag/wiggle/pucker work on flattened polylines and give back a `PathShape` (trim and
   gradients still apply); tapered strokes are filled polygons. Light effects: shine is a gradient drawn `sourceAtop` in
@@ -247,6 +248,12 @@ Easy Ease F9 / ⇧F9 / ⌘⇧F9).
   `FrameRenderer.cutoutCache`), `frameBlend` in-betweens (cross-fade or Vision optical flow) and `stabilize`
   (translational registration). Like saliency, the neural requests fail in sandboxed processes; they fall back to
   the untouched picture, and `update_layer` reports why (`PictureML.probe`). Registration works in the sandbox.
+- Spatial position (`Spatial.swift`): with `spatial` set, `MotionLayer.position` builds one cubic Bezier per pair of
+  x/y key times (auto tangents: neighbor chord direction, ⅓ of each side's length; end keys aim at the neighbor's
+  handle; `handles` override per key time and move with the keys in `moveKey`/`shiftKeys`) and maps the arriving key's
+  easing onto arc length (overshoot continues along the end tangent). Falls back to per-axis when x/y are linked.
+- Motion blur: `drawCopy` samples [open, open + angle] (`motionBlurPhase`, nil = centered); the sample count goes from
+  `motionBlurSamples` up to `motionBlurMaxSamples` by how far the layer's bounds corners travel (~1.5 device px each).
 - Particle `trail` re-evaluates each particle at earlier times (closed form, so it stays frame-independent).
 - `blendMode` applies to every visual layer (set on the context before drawing; particles skip the opacity
   transparency layer and take opacity per particle, so they keep adding up).
