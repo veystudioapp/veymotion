@@ -262,6 +262,9 @@ final class SceneStore: SceneHost {
         case .particles: break
         case .generator: return addGenerator(.spectrum)
         case .model: return addModel(.box)
+        case .drawing:
+            l.name = "Drawing"
+            l.drawing = Drawing(fps: 12, frames: [DrawingFrame(strokes: [DrawingStroke(d: "M-80 40 Q 0 -80 80 40", stroke: .white, strokeWidth: 8)])])
         case .group: l.name = "Group"
         }
         var id = ""
@@ -707,7 +710,7 @@ final class SceneStore: SceneHost {
 
     func deleteSelected() {
         guard let id = selection else { return }
-        try? apply("Delete Layer") { try $0.removeLayer(id) }
+        try? apply("Delete Layer") { try $0.removeLayerAnywhere(id) }
     }
 
     /// Wraps the selected layer in a group (add more layers to it with Claude, or ungroup).

@@ -155,6 +155,7 @@ extension MotionLayer {
         case .generator: hex = 0x14B8A6       // teal
         case .group: hex = 0x64748B           // slate
         case .model: hex = 0x0EA5E9           // sky
+        case .drawing: hex = 0xF97316         // orange
         case .audio:
             switch role {
             case .voice: hex = 0x06B6D4       // cyan
@@ -181,6 +182,7 @@ extension MotionLayer {
             return model.shape.title
         case .rect, .ellipse: return nil
         case .path: return d.isAnimated ? "Morph" : nil
+        case .drawing: return "\(drawing.frames.count) frames · \(Int(drawing.fps)) fps"
         }
     }
 
@@ -477,6 +479,7 @@ struct TimelinePanel: View {
         case .generator: return "waveform.path.ecg"
         case .group: return "folder"
         case .model: return "cube.fill"
+        case .drawing: return "scribble"
         case .audio:
             switch l.role {
             case .voice: return "person.wave.2.fill"

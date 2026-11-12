@@ -14,6 +14,7 @@ public final class FrameRenderer {
     /// Alpha of image sprites as grayscale masks (for tinted particles), keyed like `imageCache`.
     private var maskCache: [String: (mask: CGImage, modified: Double?)] = [:]
     /// Text outlines particles are emitted from, keyed by everything that changes the outline.
+    private var drawingPathCache: [String: PathShape] = [:]
     private var glyphCache: [String: GlyphOutline] = [:]
     /// Particles of the layer being drawn (simulated once per layer and frame).
     private var currentParticles: [Particle] = []
@@ -163,7 +164,12 @@ public final class FrameRenderer {
             let ti = t - Double(i) * delay
             if let rep {
                 let c = rep.copy(i, at: t, position: layer.position(at: ti).point)
-                drawCopy(layer, scene: scene, at: ti, in: ctx, copy: c.transform, alphaScale: c.opacity)
+                var li = layer
+                if !rep.colors.isEmpty {
+                    let col = rep.colors[i % rep.colors.count]
+                    if layer.type == .text { li.color = .constant(col) } else { li.fill = .constant(col) }
+                }
+                drawCopy(li, scene: scene, at: ti, in: ctx, copy: c.transform, alphaScale: c.opacity)
             } else {
                 drawCopy(layer, scene: scene, at: ti, in: ctx, copy: nil, alphaScale: 1)
             }
@@ -296,6 +302,7 @@ public final class FrameRenderer {
             }
             if layer.value(.glow, at: tk) > 0.001 { pad += 3 * layer.value(.glowRadius, at: tk) }
             pad += max(0, layer.value(.outline, at: tk)) + PathOps(layer, at: tk).reach
+            pad += 3 * max(0, layer.value(.goo, at: tk)) + max(0, layer.value(.longShadow, at: tk))
             let r = local.applying(m).insetBy(dx: -pad, dy: -pad).applying(toDevice)
             union = union.union(r)
         }
@@ -327,7 +334,8 @@ public final class FrameRenderer {
             if layer.particles.usesWorldSpace { m = (copy ?? .identity).concatenating(scene.cameraTransform(for: layer, at: t)) }
         }
         guard abs(m.a * m.d - m.b * m.c) > 1e-8 else { return } // scaled to nothing
-        let blur = max(0, layer.value(.blur, at: t)) + focusBlur(layer, scene: scene, at: t)
+        // Goo blurs the layer before its alpha is re-sharpened (see PixelEffects), so it adds to the blur radius.
+        let blur = max(max(0, layer.value(.blur, at: t)) + focusBlur(layer, scene: scene, at: t), max(0, layer.value(.goo, at: t)))
         let fx = PixelEffects(layer, at: t, fps: scene.fps)
 
         // The wipe clips everything the layer draws: shadow, blur and glow included.
@@ -339,6 +347,9 @@ public final class FrameRenderer {
             else { return }
         }
 
+        if layer.value(.longShadow, at: t) >= 1, !threeD, layer.type != .particles {
+            drawLongShadow(layer, scene: scene, transform: m, opacity: opacity, at: t, in: ctx)
+        }
         ctx.saveGState()
         ctx.setBlendMode(layer.blendMode.cgBlendMode)
         let shadowReach = applyShadow(layer, at: t, in: ctx)
@@ -367,6 +378,97 @@ public final class FrameRenderer {
         }
         ctx.restoreGState()
         drawGlow(layer, scene: scene, transform: m, opacity: opacity, fx: fx.isActive ? fx : nil, at: t, in: ctx)
+    }
+
+    /// A long, hard-edged shadow cast from the layer along `longShadowAngle` (the flat-design look): the layer's
+    /// alpha swept over `longShadow` px in `longShadowColor`, drawn under the layer.
+    private func drawLongShadow(_ layer: MotionLayer, scene: MotionScene, transform m: CGAffineTransform, opacity: Double,
+                                at t: Double, in ctx: CGContext) {
+        let length = layer.value(.longShadow, at: t)
+        guard length >= 1, let local = contentBounds(layer, scene: scene, at: t) else { return }
+        let angle = layer.value(.longShadowAngle, at: t) * .pi / 180
+        let dir = CGPoint(x: cos(angle), y: sin(angle))
+        let (w, h) = pixelSize
+        let frame = CGRect(x: 0, y: 0, width: w, height: h)
+        let toDevice = CGAffineTransform(a: Double(w) / Double(scene.width), b: 0, c: 0,
+                                         d: -Double(h) / Double(scene.height), tx: 0, ty: Double(h))
+        let sceneBox = local.applying(m)
+        let reach = sceneBox.union(sceneBox.offsetBy(dx: dir.x * length, dy: dir.y * length)).insetBy(dx: -2, dy: -2)
+        let area = reach.applying(toDevice).integral.intersection(frame)
+        guard !area.isNull, area.width >= 1, area.height >= 1, let off = offscreen(area, scene: scene) else { return }
+        off.saveGState()
+        off.concatenate(m)
+        drawContent(layer, scene: scene, at: t, in: off, alpha: 1)
+        off.restoreGState()
+        guard let buf = PixelBuffer(off) else { return }
+        // Bitmap rows run top to bottom like scene y, so the scene direction is the memory direction.
+        buf.smear(dx: dir.x, dy: dir.y, length: length * pixelScale,
+                  color: layer.longShadowColor ?? RGBA(r: 0, g: 0, b: 0, a: 0.35))
+        guard let img = off.makeImage() else { return }
+        ctx.saveGState()
+        ctx.setAlpha(opacity)
+        ctx.setBlendMode(layer.blendMode.cgBlendMode)
+        drawDeviceImage(img, rect: area, scene: scene, in: ctx)
+        ctx.restoreGState()
+    }
+
+    /// Marker bands behind words (`textHighlights`), swept in from the left over their duration.
+    private func drawTextHighlights(_ layer: MotionLayer, _ layout: (setter: CTFramesetter, box: CGSize, shownUTF16: Int),
+                                    at t: Double, in ctx: CGContext) {
+        let (bw, bh) = (layout.box.width, layout.box.height)
+        ctx.saveGState()
+        ctx.translateBy(x: -bw / 2, y: bh / 2)
+        ctx.scaleBy(x: 1, y: -1)
+        let path = CGPath(rect: CGRect(x: 0, y: 0, width: bw, height: bh), transform: nil)
+        let frame = CTFramesetterCreateFrame(layout.setter, CFRange(location: 0, length: 0), path, nil)
+        let lines = CTFrameGetLines(frame) as? [CTLine] ?? []
+        var origins = [CGPoint](repeating: .zero, count: lines.count)
+        CTFrameGetLineOrigins(frame, CFRange(location: 0, length: 0), &origins)
+        let text = Self.displayText(layer, at: t) as NSString
+        for hl in layer.textHighlights where !hl.word.isEmpty {
+            var progress = 1.0
+            if let s = hl.start {
+                let p = min(max((t - s) / max(hl.duration, 0.001), 0), 1)
+                progress = 1 - pow(1 - p, 3)
+            }
+            guard progress > 0.001 else { continue }
+            var ranges: [NSRange] = []
+            var search = NSRange(location: 0, length: text.length)
+            while search.length > 0 {
+                let r = text.range(of: hl.word, options: [.caseInsensitive], range: search)
+                guard r.location != NSNotFound else { break }
+                ranges.append(r)
+                if !hl.all { break }
+                let next = r.location + r.length
+                search = NSRange(location: next, length: text.length - next)
+            }
+            for r in ranges {
+                for (li, line) in lines.enumerated() {
+                    let lr = CTLineGetStringRange(line)
+                    let lo = max(r.location, lr.location), hi = min(r.location + r.length, lr.location + lr.length)
+                    guard hi > lo else { continue }
+                    var ascent: CGFloat = 0, descent: CGFloat = 0, leading: CGFloat = 0
+                    _ = CTLineGetTypographicBounds(line, &ascent, &descent, &leading)
+                    let x0 = CTLineGetOffsetForStringIndex(line, lo, nil), x1 = CTLineGetOffsetForStringIndex(line, hi, nil)
+                    let o = origins[li]
+                    let rect = CGRect(x: o.x + x0 - hl.padding, y: o.y - descent - hl.padding,
+                                      width: (x1 - x0) * progress + 2 * hl.padding, height: ascent + descent + 2 * hl.padding)
+                    guard rect.width > 0 else { continue }
+                    ctx.saveGState()
+                    if hl.skew != 0 {
+                        ctx.translateBy(x: rect.midX, y: rect.midY)
+                        ctx.concatenate(CGAffineTransform(a: 1, b: 0, c: tan(hl.skew * .pi / 180), d: 1, tx: 0, ty: 0))
+                        ctx.translateBy(x: -rect.midX, y: -rect.midY)
+                    }
+                    let rad = min(hl.radius, rect.width / 2, rect.height / 2)
+                    ctx.addPath(CGPath(roundedRect: rect, cornerWidth: rad, cornerHeight: rad, transform: nil))
+                    ctx.setFillColor(hl.color.cgColor)
+                    ctx.fillPath()
+                    ctx.restoreGState()
+                }
+            }
+        }
+        ctx.restoreGState()
     }
 
     /// Clips `ctx` (in scene space) to what the layer's wipe leaves visible. Returns false when nothing is.
@@ -425,6 +527,8 @@ public final class FrameRenderer {
         case .model:
             let w = max(layer.shapeWidth(at: t), 0), h = max(layer.shapeHeight(at: t), 0)
             return CGRect(x: -w / 2, y: -h / 2, width: w, height: h)
+        case .drawing:
+            return drawingBounds(layer)
         case .audio:
             break
         }
@@ -783,12 +887,58 @@ public final class FrameRenderer {
         case .generator: drawGenerator(layer, at: t, in: ctx)
         case .group: drawGroup(layer, scene: scene, at: t, in: ctx)
         case .model: drawModel(layer, scene: scene, at: t, in: ctx)
+        case .drawing: drawDrawing(layer, at: t, in: ctx)
         case .audio: break
         }
     }
 
+    /// A drawing layer: the strokes of the frame showing at t (layer px, like a path layer's d).
+    private func drawDrawing(_ layer: MotionLayer, at t: Double, in ctx: CGContext) {
+        guard let i = layer.drawing.frameIndex(at: t - layer.start), i < layer.drawing.frames.count else { return }
+        for s in layer.drawing.frames[i].strokes {
+            guard let shape = drawingPath(s.d) else { continue }
+            let path = shape.cgPath
+            if let f = s.fill, f.a > 0 {
+                ctx.addPath(path)
+                ctx.setFillColor(f.cgColor)
+                ctx.fillPath()
+            }
+            if let c = s.stroke, c.a > 0, s.strokeWidth > 0 {
+                ctx.addPath(path)
+                ctx.setStrokeColor(c.cgColor)
+                ctx.setLineWidth(s.strokeWidth)
+                ctx.setLineCap(.round)
+                ctx.setLineJoin(.round)
+                ctx.strokePath()
+            }
+        }
+    }
+
+    private func drawingPath(_ d: String) -> PathShape? {
+        if let p = drawingPathCache[d] { return p }
+        guard let p = try? PathShape(d) else { return nil }
+        if drawingPathCache.count > 2048 { drawingPathCache.removeAll() }
+        drawingPathCache[d] = p
+        return p
+    }
+
+    /// Bounds of every frame of a drawing (so the box does not jump between frames), with the stroke width.
+    private func drawingBounds(_ layer: MotionLayer) -> CGRect {
+        var box = CGRect.null
+        var pad = 0.0
+        for f in layer.drawing.frames {
+            for s in f.strokes {
+                if let p = drawingPath(s.d) { box = box.union(p.cgPath.boundingBoxOfPath) }
+                pad = max(pad, s.strokeWidth)
+            }
+        }
+        return box.isNull ? .zero : box.insetBy(dx: -pad, dy: -pad)
+    }
+
     /// A group's children, drawn in its box (a scene of its own: origin at the box's top-left, no camera).
     private func drawGroup(_ layer: MotionLayer, scene: MotionScene, at t: Double, in ctx: CGContext) {
+        // Local time: the children's clock starts when the group does.
+        let t = layer.localTime ? t - layer.start : t
         let sub = scene.subscene(of: layer, at: t)
         let w = Double(sub.width), h = Double(sub.height)
         ctx.saveGState()
@@ -1023,6 +1173,8 @@ public final class FrameRenderer {
             return CGRect(x: -w / 2, y: -h / 2, width: w, height: h)
         case .model:
             return modelBounds(layer, scene: scene, at: t)
+        case .drawing:
+            return drawingBounds(layer)
         case .audio:
             return nil
         }
@@ -1212,6 +1364,25 @@ public final class FrameRenderer {
             let r = max(0.5, g.radius.value(at: t) * hypot(box.width, box.height) / 2)
             let out = max(0, shift) * r
             ctx.drawRadialGradient(gradient, startCenter: c, startRadius: out, endCenter: c, endRadius: r + out, options: options)
+        case .conic:
+            // Wedges around the center, colors from the stops; `angle` is where the first stop starts, `shift` turns them.
+            let c = CGPoint(x: box.minX + g.cx * box.width, y: box.minY + g.cy * box.height)
+            let r = hypot(box.width, box.height) + 2
+            let n = 256
+            let start = (g.angle.value(at: t) / 360 + shift) * 2 * .pi
+            ctx.saveGState()
+            ctx.setShouldAntialias(false)
+            for i in 0..<n {
+                let f0 = Double(i) / Double(n), f1 = Double(i + 1) / Double(n)
+                let a0 = start + f0 * 2 * .pi, a1 = start + f1 * 2 * .pi + 0.004
+                ctx.move(to: c)
+                ctx.addLine(to: CGPoint(x: c.x + r * cos(a0), y: c.y + r * sin(a0)))
+                ctx.addLine(to: CGPoint(x: c.x + r * cos(a1), y: c.y + r * sin(a1)))
+                ctx.closePath()
+                ctx.setFillColor(g.color(at: (f0 + f1) / 2).cgColor)
+                ctx.fillPath()
+            }
+            ctx.restoreGState()
         }
     }
 
@@ -1222,6 +1393,7 @@ public final class FrameRenderer {
         }
         guard let layout = textLayout(layer, at: t) else { return }
         let (bw, bh) = (layout.box.width, layout.box.height)
+        if !layer.textHighlights.isEmpty { drawTextHighlights(layer, layout, at: t, in: ctx) }
         if let g = layer.gradient {
             // Draw the letters, then paint the gradient only where they are.
             let box = CGRect(x: -bw / 2, y: -bh / 2, width: bw, height: bh)
@@ -1323,7 +1495,7 @@ public final class FrameRenderer {
     private func textLayout(_ layer: MotionLayer, at t: Double) -> (setter: CTFramesetter, box: CGSize, shownUTF16: Int)? {
         let full = Self.displayText(layer, at: t)
         guard !full.isEmpty else { return nil }
-        let font = Self.font(for: layer)
+        let font = Self.font(for: layer, at: t)
 
         var alignment: CTTextAlignment
         switch layer.align {
@@ -1433,7 +1605,9 @@ public final class FrameRenderer {
                     ctx.scaleBy(x: st.scale, y: st.scale)
                     ctx.translateBy(x: -pivotX, y: -midY)
                     let pos = CGPoint(x: origin.x + positions[g].x, y: origin.y + positions[g].y)
-                    drawGlyph(glyphs[g], font: runFont, at: pos, fill: fill, stroke: strokeColor, strokeWidth: strokeW,
+                    let glyphFont = st.weightAxis != nil || st.widthAxis != nil
+                        ? Self.variant(runFont, wght: st.weightAxis, wdth: st.widthAxis) : runFont
+                    drawGlyph(glyphs[g], font: glyphFont, at: pos, fill: fill, stroke: strokeColor, strokeWidth: strokeW,
                               blur: st.blur, in: ctx)
                     ctx.restoreGState()
                 }
@@ -1449,6 +1623,8 @@ public final class FrameRenderer {
         a.rotation += b.rotation
         a.blur += b.blur
         if let t = b.tint { a.tint = a.tint.map { RGBA.lerp($0, t, 0.5) } ?? t }
+        if let w = b.weightAxis { a.weightAxis = w }
+        if let w = b.widthAxis { a.widthAxis = w }
     }
 
     /// One glyph (y-up text space), filled and optionally outlined, blurred through a small bitmap when asked.
@@ -1696,12 +1872,35 @@ public final class FrameRenderer {
         return (loaded.image, loaded.size)
     }
 
-    static func font(for layer: MotionLayer) -> CTFont {
+    static func font(for layer: MotionLayer) -> CTFont { font(for: layer, at: layer.start) }
+
+    /// The layer's font at time t: its face, plus variable-font axes (fontWeightAxis, fontWidth, fontVariations).
+    static func font(for layer: MotionLayer, at t: Double) -> CTFont {
         let size = CGFloat(max(layer.fontSize, 1))
+        var base: CTFont
         if let name = layer.fontName, let ps = FontLibrary.resolve(name, weight: layer.fontWeight) {
-            return CTFontCreateWithName(ps as CFString, size, nil)
+            base = CTFontCreateWithName(ps as CFString, size, nil)
+        } else {
+            base = FontLibrary.systemFont(layer.fontWeight, size: size)
         }
-        return FontLibrary.systemFont(layer.fontWeight, size: size)
+        let wght = layer.value(.fontWeightAxis, at: t), wdth = layer.value(.fontWidth, at: t)
+        return variant(base, wght: wght > 0 ? wght : nil, wdth: wdth > 0 ? wdth : nil, extra: layer.fontVariations)
+    }
+
+    /// A copy of a font with variation axes set (no effect on static fonts). Tags are four letters ("wght").
+    static func variant(_ font: CTFont, wght: Double?, wdth: Double?, extra: [String: Double] = [:]) -> CTFont {
+        var vars: [NSNumber: NSNumber] = [:]
+        func tag(_ s: String) -> NSNumber {
+            var v: UInt32 = 0
+            for c in s.utf8.prefix(4) { v = v << 8 | UInt32(c) }
+            return NSNumber(value: v)
+        }
+        for (k, v) in extra where k.count == 4 { vars[tag(k)] = NSNumber(value: v) }
+        if let w = wght { vars[tag("wght")] = NSNumber(value: w) }
+        if let w = wdth { vars[tag("wdth")] = NSNumber(value: w) }
+        guard !vars.isEmpty else { return font }
+        let desc = CTFontDescriptorCreateWithAttributes([kCTFontVariationAttribute: vars] as CFDictionary)
+        return CTFontCreateCopyWithAttributes(font, 0, nil, desc)
     }
 }
 
@@ -1973,7 +2172,8 @@ extension FrameRenderer {
     private func glyphOutline(_ layer: MotionLayer, at t: Double) -> GlyphOutline? {
         let spacing = layer.value(.letterSpacing, at: t)
         let key = [Self.displayText(layer, at: t), "\(layer.fontSize)", layer.fontWeight, layer.fontName ?? "", "\(layer.maxWidth ?? -1)",
-                   layer.align.rawValue, String(format: "%.2f", spacing)].joined(separator: "|")
+                   layer.align.rawValue, String(format: "%.2f", spacing),
+                   String(format: "%.1f/%.1f", layer.value(.fontWeightAxis, at: t), layer.value(.fontWidth, at: t))].joined(separator: "|")
         if let cached = glyphCache[key] { return cached }
         guard let layout = textLayout(layer, at: t) else { return nil }
         let (bw, bh) = (layout.box.width, layout.box.height)
@@ -2164,6 +2364,7 @@ extension FrameRenderer {
         if let s = space3D { world = s.prefix * world }
         let view = space3D?.view ?? scene.view3D(fixed: group.fixed, at: t)
         let sub = lookup.subscene(of: group, at: t)
+        let t = group.localTime ? t - group.start : t
         let saved = space3D
         // Children use coordinates in the group's box, whose center is the group's origin.
         space3D = Space3DContext(view: view, prefix: world * Mat4.translation(-Double(sub.width) / 2, -Double(sub.height) / 2, 0),

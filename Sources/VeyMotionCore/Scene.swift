@@ -4,6 +4,8 @@ public enum LayerType: String, Codable, CaseIterable, Sendable {
     case rect, ellipse, path, text, image, video, audio, particles, generator, group
     /// A 3D object (box, sphere, extruded text…, or a model file), lit and drawn in the scene's 3D space.
     case model
+    /// Frame-by-frame drawing: `drawing.frames`, each a list of strokes held for some frames at `drawing.fps`.
+    case drawing
 
     /// Drawn in the frame (audio layers are not).
     public var isVisual: Bool { self != .audio }
@@ -83,6 +85,14 @@ public enum AnimProperty: String, Codable, CaseIterable, Sendable {
     case z, scaleZ
     /// Grading: input levels (black/white point 0…1, gamma), and how much of `gradientMap` / `lut` applies (0…1).
     case levelsBlack, levelsWhite, levelsGamma, gradientMapAmount, lutAmount
+    /// Variable fonts (text): the wght / wdth axis value, 0 = the face's own.
+    case fontWeightAxis, fontWidth
+    /// Long shadow: length (px) cast along longShadowAngle (degrees, 45 = down-right) in `longShadowColor`.
+    case longShadow, longShadowAngle
+    /// Gooey merge (px: blurred then re-sharpened alpha, so overlapping shapes fuse like liquid) and halftone (dot cell px).
+    case goo, halftone
+    /// Secondary motion: inertia (0…1, overshoot after a move stops) and squash (0…1, stretch along the velocity).
+    case inertia, squash
 
     /// Value a layer has when the property is not set.
     public var defaultValue: Double {
@@ -107,6 +117,7 @@ public enum AnimProperty: String, Codable, CaseIterable, Sendable {
         case .shinePosition: return 0.5
         case .raysLength: return 0.6
         case .innerGlowRadius: return 20
+        case .longShadowAngle: return 45
         default: return 0
         }
     }
@@ -125,7 +136,9 @@ public enum AnimProperty: String, Codable, CaseIterable, Sendable {
                                          .innerGlow, .innerGlowRadius, .offsetPath, .zigzag, .wigglePath, .pucker,
                                          .dashOffset, .taperStart, .taperEnd, .rotationX, .rotationY, .perspective,
                                          .z, .scaleZ,
-                                         .levelsBlack, .levelsWhite, .levelsGamma, .gradientMapAmount, .lutAmount]
+                                         .levelsBlack, .levelsWhite, .levelsGamma, .gradientMapAmount, .lutAmount,
+                                         .fontWeightAxis, .fontWidth, .longShadow, .longShadowAngle, .goo, .halftone,
+                                         .inertia, .squash]
 
     public var title: String {
         switch self {
@@ -212,6 +225,14 @@ public enum AnimProperty: String, Codable, CaseIterable, Sendable {
         case .perspective: return "Perspective"
         case .z: return "Z"
         case .scaleZ: return "Scale Z"
+        case .fontWeightAxis: return "Font Weight Axis"
+        case .fontWidth: return "Font Width"
+        case .longShadow: return "Long Shadow"
+        case .longShadowAngle: return "Long Shadow Angle"
+        case .goo: return "Goo"
+        case .halftone: return "Halftone"
+        case .inertia: return "Inertia"
+        case .squash: return "Squash"
         case .levelsBlack: return "Levels Black"
         case .levelsWhite: return "Levels White"
         case .levelsGamma: return "Gamma"
@@ -327,6 +348,12 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
     /// Colors of the shine band, the outline and the inner glow (nil = white).
     public var shineColor: RGBA?
     public var outlineColor: RGBA?
+    /// Color of the long shadow (default black at 35%).
+    public var longShadowColor: RGBA?
+    /// Marker-style bands behind words of a text layer.
+    public var textHighlights: [TextHighlight]
+    /// Other variable-font axes by tag ("slnt": -10, "opsz": 24); wght/wdth are the animatable fontWeightAxis/fontWidth.
+    public var fontVariations: [String: Double]
     public var innerGlowColor: RGBA?
     /// Stroke dash pattern in px (on, off, …); empty = solid.
     public var dash: [Double]
@@ -341,6 +368,12 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
     public var threeD: Bool
     /// Model layers: the object and its material.
     public var model: Model3D
+    /// Rig: the bone this layer hangs on (x/y/rotation are then relative to the bone's start and direction).
+    public var bone: String?
+    /// Groups: children's times (start/end, keyframes) count from the group's start instead of the scene's.
+    public var localTime: Bool
+    /// Drawing layers: the frames.
+    public var drawing: Drawing
     /// Trim runs through the path's pieces one after another (handwriting) instead of all at once.
     public var trimSequential: Bool
     /// Master tone curve: points [x, y] in 0…1 (smooth, monotone between them).
@@ -456,12 +489,18 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         children = []
         shineColor = nil
         outlineColor = nil
+        longShadowColor = nil
+        textHighlights = []
+        fontVariations = [:]
         innerGlowColor = nil
         dash = []
         cornerPin = nil
         pins = []
         hideBackface = false
         threeD = false
+        bone = nil
+        localTime = false
+        drawing = Drawing()
         model = Model3D()
         trimSequential = false
         curves = []
@@ -566,10 +605,59 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
 
     /// Value of a property at time t, including loops, wiggle, audio react and links to other layers.
     public func value(_ p: AnimProperty, at t: Double) -> Double {
+        var v: Double
         if let link = links[p.rawValue], let track = link.track {
-            return track.value(at: t - link.delay) * link.multiply + link.add + proceduralOffset(p, at: t)
+            v = track.value(at: t - link.delay) * link.multiply + link.add + proceduralOffset(p, at: t)
+        } else {
+            v = self[p].value(at: t, loop: loop[p.rawValue]) + proceduralOffset(p, at: t)
         }
-        return self[p].value(at: t, loop: loop[p.rawValue]) + proceduralOffset(p, at: t)
+        guard !extra.isEmpty else { return v }
+        switch p {
+        case .x, .y, .rotation, .scale, .scaleX, .scaleY:
+            let inertia = self[.inertia].value(at: t)
+            if inertia > 0.001 { v += inertiaOffset(p, amount: inertia, at: t) }
+            if p == .scaleX || p == .scaleY {
+                let squash = self[.squash].value(at: t)
+                if squash > 0.001 { v *= squashFactor(p, amount: squash, at: t) }
+            }
+        default: break
+        }
+        return v
+    }
+
+    /// Damped wobble added after a keyframed move stops (or changes speed abruptly): `amount` × the lost velocity,
+    /// ringing at 2.5 Hz and dying out within about a second. Deterministic: any frame renders alone.
+    func inertiaOffset(_ p: AnimProperty, amount: Double, at t: Double) -> Double {
+        let keys = self[p].keyframeList
+        guard keys.count >= 2 else { return 0 }
+        let omega = 2 * Double.pi * 2.5, damping = 3.5, h = 1.0 / 120
+        let lp = loop[p.rawValue]
+        func raw(_ x: Double) -> Double { self[p].value(at: x, loop: lp) }
+        var off = 0.0
+        for k in keys.dropFirst() {
+            let dt = t - k.t
+            guard dt > 0 else { break }
+            guard dt < 2.5 else { continue }
+            let before = (raw(k.t) - raw(k.t - h)) / h
+            let after = (raw(k.t + h) - raw(k.t)) / h
+            let dv = before - after
+            guard abs(dv) > 1e-6 else { continue }
+            off += amount * dv / omega * exp(-damping * dt) * sin(omega * dt)
+        }
+        return off
+    }
+
+    /// Stretch along the direction the layer moves (and squeeze across it): 1 + amount × speed / 2000 px/s, at most 1.7×.
+    func squashFactor(_ p: AnimProperty, amount: Double, at t: Double) -> Double {
+        let h = 1.0 / 120
+        let vx = (self[.x].value(at: t + h, loop: loop["x"]) - self[.x].value(at: t - h, loop: loop["x"])) / (2 * h)
+        let vy = (self[.y].value(at: t + h, loop: loop["y"]) - self[.y].value(at: t - h, loop: loop["y"])) / (2 * h)
+        let speed = (vx * vx + vy * vy).squareRoot()
+        guard speed > 1 else { return 1 }
+        let k = min(amount * speed / 2000, 0.7)
+        let alongX = abs(vx) >= abs(vy)
+        if p == .scaleX { return alongX ? 1 + k : 1 / (1 + k) }
+        return alongX ? 1 / (1 + k) : 1 + k
     }
 
     /// What wiggle and audio react add to a property at time t.
@@ -599,7 +687,7 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         case .ellipse: list += [.width, .height, .strokeWidth, .trimStart, .trim, .trimOffset]
         case .path: list += [.strokeWidth, .trimStart, .trim, .trimOffset]
         case .text:
-            list += [.reveal, .letterSpacing, .strokeWidth, .scramble]
+            list += [.reveal, .letterSpacing, .strokeWidth, .scramble, .fontWeightAxis, .fontWidth]
             if text.contains("{n}") { list.append(.counter) }
             if textPath != nil { list.append(.textOffset) }
         case .image: list += [.width, .height]
@@ -612,9 +700,11 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
             if generator.kind == .chart { list.append(.reveal) }
         case .group: list += [.width, .height]
         case .model: list += [.width, .height, .scaleZ]
+        case .drawing: break
         case .audio: break
         }
-        list += [.blur, .shadowX, .shadowY, .shadowBlur, .shadowOpacity, .glow, .glowRadius]
+        list += [.blur, .shadowX, .shadowY, .shadowBlur, .shadowOpacity, .glow, .glowRadius, .longShadow, .longShadowAngle]
+        list += [.goo, .halftone, .inertia, .squash]
         list += [.brightness, .contrast, .saturation, .hue, .tint, .wipe, .levelsBlack, .levelsWhite, .levelsGamma]
         if !gradientMap.isEmpty { list.append(.gradientMapAmount) }
         if lut != nil { list.append(.lutAmount) }
@@ -787,6 +877,9 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         case counter, scramble, textOffset
         case shine, shinePosition, shineAngle, shineWidth, rays, raysLength, outline, innerGlow, innerGlowRadius
         case shineColor, outlineColor, innerGlowColor, dash
+        case fontWeightAxis, fontWidth, longShadow, longShadowAngle, longShadowColor, goo, halftone, inertia, squash
+        case textHighlights, fontVariations
+        case bone, localTime, drawing
         case rotationX, rotationY, perspective, cornerPin, pins, hideBackface, trimSequential, z, scaleZ, threeD, model
         case levelsBlack, levelsWhite, levelsGamma, gradientMapAmount, lutAmount, curves, gradientMap, lut
         case removeBackground, frameBlend
@@ -848,11 +941,17 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         keyColor = try c.decodeIfPresent(RGBA.self, forKey: .keyColor)
         shineColor = try c.decodeIfPresent(RGBA.self, forKey: .shineColor)
         outlineColor = try c.decodeIfPresent(RGBA.self, forKey: .outlineColor)
+        longShadowColor = try c.decodeIfPresent(RGBA.self, forKey: .longShadowColor)
+        textHighlights = try c.decodeIfPresent([TextHighlight].self, forKey: .textHighlights) ?? []
+        fontVariations = try c.decodeIfPresent([String: Double].self, forKey: .fontVariations) ?? [:]
         innerGlowColor = try c.decodeIfPresent(RGBA.self, forKey: .innerGlowColor)
         cornerPin = try c.decodeIfPresent(CornerPinValue.self, forKey: .cornerPin)
         pins = try c.decodeIfPresent([PuppetPin].self, forKey: .pins) ?? []
         hideBackface = try c.decodeIfPresent(Bool.self, forKey: .hideBackface) ?? false
         threeD = try c.decodeIfPresent(Bool.self, forKey: .threeD) ?? false
+        bone = try c.decodeIfPresent(String.self, forKey: .bone).flatMap { $0.isEmpty ? nil : $0 }
+        localTime = try c.decodeIfPresent(Bool.self, forKey: .localTime) ?? false
+        drawing = try c.decodeIfPresent(Drawing.self, forKey: .drawing) ?? Drawing()
         model = try c.decodeIfPresent(Model3D.self, forKey: .model) ?? model
         trimSequential = try c.decodeIfPresent(Bool.self, forKey: .trimSequential) ?? false
         curves = (try c.decodeIfPresent([PathPoint].self, forKey: .curves) ?? [])
@@ -966,6 +1065,9 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         try c.encodeIfPresent(keyColor, forKey: .keyColor)
         try c.encodeIfPresent(shineColor, forKey: .shineColor)
         try c.encodeIfPresent(outlineColor, forKey: .outlineColor)
+        try c.encodeIfPresent(longShadowColor, forKey: .longShadowColor)
+        if !textHighlights.isEmpty && type == .text { try c.encode(textHighlights, forKey: .textHighlights) }
+        if !fontVariations.isEmpty && type == .text { try c.encode(fontVariations, forKey: .fontVariations) }
         try c.encodeIfPresent(innerGlowColor, forKey: .innerGlowColor)
         if !dash.isEmpty && type.isShape { try c.encode(dash, forKey: .dash) }
         try c.encodeIfPresent(cornerPin, forKey: .cornerPin)
@@ -984,6 +1086,7 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         try c.encodeIfPresent(posterizeTime, forKey: .posterizeTime)
         if type.isShape || type == .text || type == .generator { try c.encodeIfPresent(gradient, forKey: .gradient) }
         try c.encodeIfPresent(parent, forKey: .parent)
+        try c.encodeIfPresent(bone, forKey: .bone)
         try c.encodeIfPresent(motionPath, forKey: .motionPath)
         if !loop.isEmpty { try c.encode(loop, forKey: .loop) }
         if !wiggle.isEmpty { try c.encode(wiggle, forKey: .wiggle) }
@@ -1040,6 +1143,9 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
             try c.encode(children, forKey: .children)
             try c.encodeIfPresent(width, forKey: .width)
             try c.encodeIfPresent(height, forKey: .height)
+            if localTime { try c.encode(localTime, forKey: .localTime) }
+        case .drawing:
+            try c.encode(drawing, forKey: .drawing)
         case .model:
             try c.encode(model, forKey: .model)
             try c.encode(self[.width], forKey: .width)
@@ -1091,6 +1197,8 @@ public struct MotionScene: Codable, Equatable, Sendable {
     public var camera: Camera? { didSet { if camera != oldValue { resolveLinks() } } }
     /// Lights for model layers (empty = `Light.defaults`: soft ambient, a key light from the upper left, a fill).
     public var lights: [Light]
+    /// Cut-out rig (see `Rig.swift`): bones layers can hang on, posed by angle keyframes or `solveIK`.
+    public var bones: [Bone]
     /// Draw order: first is bottom-most.
     /// Every change re-links `audioReact` to its audio layer and `links` to their source tracks, so
     /// `MotionLayer.value` can follow them on its own.
@@ -1101,6 +1209,7 @@ public struct MotionScene: Codable, Equatable, Sendable {
         self.width = width; self.height = height; self.fps = fps
         self.duration = duration; self.background = background; self.layers = layers
         lights = []
+        bones = []
         resolveLinks()
     }
 
@@ -1162,7 +1271,7 @@ public struct MotionScene: Codable, Equatable, Sendable {
         }
     }
 
-    enum CodingKeys: String, CodingKey { case width, height, fps, duration, background, camera, lights, layers }
+    enum CodingKeys: String, CodingKey { case width, height, fps, duration, background, camera, lights, layers, bones }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -1175,6 +1284,7 @@ public struct MotionScene: Codable, Equatable, Sendable {
         layers = try c.decodeIfPresent([MotionLayer].self, forKey: .layers) ?? []
         camera = try c.decodeIfPresent(Camera.self, forKey: .camera)?.resolved(in: self)
         lights = try c.decodeIfPresent([Light].self, forKey: .lights) ?? []
+        bones = try c.decodeIfPresent([Bone].self, forKey: .bones) ?? []
         try validate()
         normalizeIds()
         resolveLinks()
@@ -1189,6 +1299,7 @@ public struct MotionScene: Codable, Equatable, Sendable {
         try c.encode(background, forKey: .background)
         try c.encodeIfPresent(camera, forKey: .camera)
         if !lights.isEmpty { try c.encode(lights, forKey: .lights) }
+        if !bones.isEmpty { try c.encode(bones, forKey: .bones) }
         try c.encode(layers, forKey: .layers)
     }
 

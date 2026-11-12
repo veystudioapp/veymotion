@@ -127,8 +127,10 @@ public final class MCPServer {
             let layer = try SceneJSON.decode(MotionLayer.self, fromObject: obj)
             var newId = ""
             var problems: [String] = []
+            let into = a["group"] as? String
             try host.mutate("Add Layer") {
-                newId = $0.addLayer(layer, at: a["index"] as? Int)
+                if let into { newId = try $0.addLayer(layer, into: into, at: a["index"] as? Int) }
+                else { newId = $0.addLayer(layer, at: a["index"] as? Int) }
                 problems = $0.refreshMediaInfo()
             }
             let added = try host.currentScene().layer(newId)
@@ -170,14 +172,133 @@ public final class MCPServer {
 
         case "remove_layer":
             let id = try string(a, "id")
-            try host.mutate("Remove Layer") { try $0.removeLayer(id) }
+            try host.mutate("Remove Layer") { try $0.removeLayerAnywhere(id) }
             return text("Removed '\(id)'")
 
         case "reorder_layer":
             let id = try string(a, "id")
             guard let index = a["index"] as? Int else { throw ToolError("`index` must be an integer") }
-            try host.mutate("Reorder Layer") { try $0.moveLayer(id, to: index) }
-            return text("Order (bottom→top): \(host.currentScene().layers.map(\.id).joined(separator: ", "))")
+            try host.mutate("Reorder Layer") { try $0.moveLayerAnywhere(id, to: index) }
+            let s = host.currentScene()
+            if let g = s.parentGroup(of: id), let group = s.findLayer(g) {
+                return text("Order in '\(g)' (bottom→top): \(group.children.map(\.id).joined(separator: ", "))")
+            }
+            return text("Order (bottom→top): \(s.layers.map(\.id).joined(separator: ", "))")
+
+        case "duplicate_layer":
+            let id = try string(a, "id")
+            let count = max(1, min(a["count"] as? Int ?? 1, 200))
+            let ids = (a["ids"] as? [Any])?.compactMap { $0 as? String } ?? []
+            var made: [String] = []
+            try host.mutate("Duplicate Layer") {
+                made = try $0.duplicateLayer(id, count: count, dx: number(a["offsetX"]) ?? 0, dy: number(a["offsetY"]) ?? 0,
+                                             dt: number(a["timeOffset"]) ?? 0, ids: ids)
+            }
+            return text("Made \(made.count) cop\(made.count == 1 ? "y" : "ies") of '\(id)': \(made.joined(separator: ", ")) (each one placed right above the previous in the layer order).")
+
+        case "shift_time":
+            guard let from = number(a["from"]), let by = number(a["by"]) else { throw ToolError("`from` and `by` are seconds") }
+            var touched: [String] = []
+            try host.mutate("Shift Time") { touched = try $0.shiftTime(from: from, by: by, extendDuration: a["extendDuration"] as? Bool ?? true) }
+            let s = host.currentScene()
+            return text(String(format: "Shifted everything from %.2fs by %+.2fs: %d layer(s) (%@). Scene is now %.2fs.", from, by, touched.count,
+                               touched.prefix(12).joined(separator: ", ") + (touched.count > 12 ? ", …" : ""), s.duration))
+
+        case "import_vector":
+            let source = try string(a, "source")
+            let url: URL
+            if source.hasPrefix("/") || source.hasPrefix("~") { url = URL(fileURLWithPath: (source as NSString).expandingTildeInPath) }
+            else { url = try AssetStore.url(for: source) }
+            guard FileManager.default.fileExists(atPath: url.path) else { throw ToolError("No file at \(url.path)") }
+            let scene0 = host.currentScene()
+            var o = SVGImportOptions(x: number(a["x"]) ?? Double(scene0.width) / 2, y: number(a["y"]) ?? Double(scene0.height) / 2)
+            if let id = a["id"] as? String, !id.isEmpty { o.id = id }
+            else { o.id = url.deletingPathExtension().lastPathComponent.lowercased().replacingOccurrences(of: " ", with: "-") }
+            o.width = number(a["width"]); o.height = number(a["height"])
+            o.flatten = a["flatten"] as? Bool ?? false
+            var summary: SVGImport.Summary?
+            try host.mutate("Import Vector") { summary = try $0.importVector(at: url, options: o) }
+            guard let sum = summary else { throw ToolError("import failed") }
+            func tree(_ l: MotionLayer, depth: Int) -> [String] {
+                let pad = String(repeating: "  ", count: depth)
+                let line = pad + l.id + (l.type == .group ? "/" : "") + (l.type == .path ? " (\(l.fill.value(at: 0).hex)\(l.stroke != nil ? ", stroke" : ""))" : "")
+                return [line] + (depth < 3 ? l.children.flatMap { tree($0, depth: depth + 1) } : l.children.isEmpty ? [] : [pad + "  …"])
+            }
+            var lines = tree(sum.group, depth: 0)
+            if lines.count > 60 { lines = Array(lines.prefix(60)) + ["  … (\(sum.shapes) shapes in all)"] }
+            let skipped = Set(sum.skipped)
+            return text("Imported '\(sum.group.id)': \(sum.shapes) path layer\(sum.shapes == 1 ? "" : "s") in \(sum.groups + 1) group\(sum.groups == 0 ? "" : "s"), centered on \(Int(o.x)),\(Int(o.y)). "
+                + "Every part is a normal layer: animate, recolor or re-parent it by id (children use scene coordinates).\n"
+                + lines.joined(separator: "\n")
+                + (skipped.isEmpty ? "" : "\nSkipped elements: \(skipped.sorted().joined(separator: ", ")) (text, images, clip paths and CSS are not imported)."))
+
+        case "set_bones":
+            guard let raw = a["bones"] as? [[String: Any]] else { throw ToolError("`bones` must be an array of bone objects") }
+            let list = try raw.map { try SceneJSON.decode(Bone.self, fromObject: $0) }
+            try host.mutate("Set Bones") { try $0.setBones(list, replace: a["replace"] as? Bool ?? false) }
+            let s = host.currentScene()
+            let desc = s.bones.map { b in
+                let tip = s.boneTip(b.id, at: 0).map { String(format: "%.0f,%.0f", $0.x, $0.y) } ?? "?"
+                return "\(b.id)\(b.parent.map { " ← \($0)" } ?? "") length \(Int(b.length)) angle \(Int(b.angle.value(at: 0)))° (tip at \(tip))"
+            }
+            return text("Rig has \(s.bones.count) bone\(s.bones.count == 1 ? "" : "s"):\n" + desc.joined(separator: "\n")
+                + "\nNext: bind_bone hangs layers on them; pose_bones / solve_ik move them.")
+
+        case "bind_bone":
+            let id = try string(a, "id")
+            let bone = (a["bone"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            let t = number(a["time"]) ?? 0
+            try host.mutate(bone == nil ? "Detach from Bone" : "Bind to Bone") { try $0.bind(id, toBone: bone, at: t) }
+            return text(bone.map { "'\(id)' now follows bone '\($0)' (its x/y/rotation are relative to the bone; it did not move at \(t)s)." }
+                ?? "'\(id)' detached from its bone (kept where it was).")
+
+        case "pose_bones":
+            guard let raw = a["angles"] as? [String: Any] else { throw ToolError("`angles` must be {boneId: degrees}") }
+            var angles: [String: Double] = [:]
+            for (k, v) in raw { if let n = (v as? NSNumber)?.doubleValue { angles[k] = n } }
+            let t = number(a["time"])
+            try host.mutate("Pose Bones") { try $0.poseBones(angles, at: t, hold: number(a["hold"]) ?? 0.4) }
+            return text("Posed \(angles.count) bone\(angles.count == 1 ? "" : "s")" + (t.map { String(format: " at %.2fs (keyframes)", $0) } ?? " (constant)") + ".")
+
+        case "solve_ik":
+            let bone = try string(a, "bone")
+            guard let x = number(a["x"]), let y = number(a["y"]) else { throw ToolError("`x` and `y` are the target in scene px") }
+            let t = number(a["time"])
+            var solved: [String: Double] = [:]
+            try host.mutate("Solve IK") {
+                solved = try $0.solveIK(bone, target: CGPoint(x: x, y: y), chain: a["chain"] as? Int ?? 2, at: t, hold: number(a["hold"]) ?? 0.4)
+            }
+            let s = host.currentScene()
+            let tip = s.boneTip(bone, at: t ?? 0).map { String(format: "%.0f,%.0f", $0.x, $0.y) } ?? "?"
+            let miss = s.boneTip(bone, at: t ?? 0).map { hypot($0.x - x, $0.y - y) } ?? 0
+            return text("IK: " + solved.map { "\($0.key) \(Int($0.value.rounded()))°" }.sorted().joined(separator: ", ")
+                + (t.map { String(format: " keyed at %.2fs", $0) } ?? "") + ". Tip of '\(bone)' at \(tip)"
+                + (miss > 2 ? String(format: " (target out of reach by %.0f px)", miss) : "") + ".")
+
+        case "draw_frame":
+            let id = try string(a, "id")
+            guard let raw = a["strokes"] as? [[String: Any]] else { throw ToolError("`strokes` must be an array of {d, stroke?, strokeWidth?, fill?}") }
+            let strokes = try raw.map { try SceneJSON.decode(DrawingStroke.self, fromObject: $0) }
+            let frame = DrawingFrame(hold: a["hold"] as? Int ?? 1, strokes: strokes)
+            try host.mutate("Draw Frame") { try $0.setDrawingFrame(id, index: a["index"] as? Int, frame: frame) }
+            let l = try host.currentScene().layer(id)
+            return text("'\(id)' has \(l.drawing.frames.count) frame\(l.drawing.frames.count == 1 ? "" : "s") at \(l.drawing.fps) fps (\(String(format: "%.2f", l.drawing.cycle)) s per cycle\(l.drawing.loop ? ", looping" : "")).")
+
+        case "render_frames":
+            guard let raw = a["times"] as? [Any] else { throw ToolError("`times` must be an array of seconds") }
+            let times = raw.compactMap { ($0 as? NSNumber)?.doubleValue }
+            guard !times.isEmpty, times.count <= 24 else { throw ToolError("give 1–24 times") }
+            let scene = host.currentScene()
+            let columns = max(1, min(a["columns"] as? Int ?? 4, 8))
+            let scale = min(max(number(a["scale"]) ?? 0.25, 0.1), 0.5)
+            guard let png = FrameRenderer().contactSheetPNG(scene, times: times, columns: columns, scale: scale) else {
+                throw ToolError("render failed")
+            }
+            return ["content": [
+                ["type": "image", "data": png.base64EncodedString(), "mimeType": "image/png"],
+                ["type": "text", "text": "Contact sheet of \(times.count) frames, \(columns) per row, left→right then top→bottom: "
+                    + times.map { String(format: "%.2fs", $0) }.joined(separator: ", ") + ". Use render_frame for a closer look at one."],
+            ]]
 
         case "list_voices":
             if try voiceEngine(a) == "vieneu" {
@@ -651,8 +772,11 @@ public final class MCPServer {
             let d = number(a["duration"]) ?? 0.6
             let outId = (a["out"] as? String).flatMap { $0.isEmpty ? nil : $0 }
             let inId = (a["in"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            var origin: (x: Double, y: Double)?
+            if let x = number(a["x"]), let y = number(a["y"]) { origin = (x, y) }
             try host.mutate("Transition") {
-                try $0.transition(type, out: outId, in: inId, at: at, duration: d, direction: a["direction"] as? String)
+                try $0.transition(type, out: outId, in: inId, at: at, duration: d, direction: a["direction"] as? String,
+                                  shape: a["shape"] as? String, origin: origin)
             }
             return text("\(type.rawValue) transition" + (outId.map { " out: \($0)" } ?? "") + (inId.map { " in: \($0)" } ?? "")
                 + " from \(at)s for \(d)s")

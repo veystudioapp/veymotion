@@ -307,7 +307,12 @@ vmotion render scene.json out.mp4
   neon, retro, sunset, studio: gradient backdrop, drifting lights, dust, vignette, grain and a slow camera push in one
   call; also Add → Look in the app; `set_scene` adds one by itself when the background is flat), `check_design`
   (lints for what makes a draft: flat background, system font, unlit layers, static stretches, text on the edge;
-  the in-app chat runs it after every change and hands the findings back to the assistant), `text_to_path` (text → vector
+  the in-app chat runs it after every change and hands the findings back to the assistant), `duplicate_layer`,
+  `shift_time` (makes room in the timeline: everything after a point moves, later keyframes included),
+  `render_frames` (a labeled contact sheet of up to 24 times), `import_vector` (an SVG as a group of editable path
+  layers, one per shape, gradients and transforms kept), `set_bones` / `bind_bone` / `pose_bones` / `solve_ik` (a
+  cut-out rig: bones with lengths, angles and limits, layers hung on them, FK poses and CCD inverse kinematics),
+  `draw_frame` (frame-by-frame `drawing` layers: strokes held for n frames at their own fps), `text_to_path` (text → vector
   paths, whole or per letter), `combine_paths` (union / subtract / intersect / exclude outlines).
 - **Particles**: `{"type": "particles", "x": 960, "y": 900, "width": 220, "height": 0, "particles": {"preset": "fire"}}`.
   Presets: `fire`, `smoke`, `dust`, `sparks`, `snow`, `rain`, `confetti`, `bokeh`, `magic`, `explosion`; any field

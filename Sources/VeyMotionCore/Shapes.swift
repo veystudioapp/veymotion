@@ -510,7 +510,25 @@ public enum LineJoin: String, Codable, CaseIterable, Sendable { case miter, roun
 
 // MARK: - Gradients
 
-public enum GradientType: String, Codable, CaseIterable, Sendable { case linear, radial }
+public enum GradientType: String, Codable, CaseIterable, Sendable { case linear, radial, conic }
+
+extension Gradient {
+    /// Color at a fraction 0…1 along the stops (for the conic gradient, drawn as wedges).
+    public func color(at f: Double) -> RGBA {
+        let sorted = stops.sorted { $0.offset < $1.offset }
+        guard let first = sorted.first, let last = sorted.last else { return .white }
+        if f <= first.offset { return first.color }
+        if f >= last.offset { return last.color }
+        for i in 0..<(sorted.count - 1) {
+            let a = sorted[i], b = sorted[i + 1]
+            if f >= a.offset && f <= b.offset {
+                let span = b.offset - a.offset
+                return RGBA.lerp(a.color, b.color, span > 0 ? (f - a.offset) / span : 1)
+            }
+        }
+        return last.color
+    }
+}
 
 public struct GradientStop: Codable, Equatable, Hashable, Sendable {
     /// 0…1 along the gradient.
@@ -652,14 +670,28 @@ public struct Repeater: Codable, Equatable, Hashable, Sendable {
     public var opacityEnd: Double
     /// Seconds each copy lags behind the previous one (its animation and start time), for cascades and trails.
     public var delay: Double
+    /// Fill/text colors cycled over the copies (copy i gets colors[i % count]); empty = the layer's own.
+    public var colors: [RGBA]
+    /// Per-copy random offsets (px), turn (± degrees) and size (± fraction), fixed by `seed`.
+    public var randomX: Double
+    public var randomY: Double
+    public var randomRotation: Double
+    public var randomScale: Double
+    public var seed: Int
 
     public init(count: Int = 3) {
         self.count = count
         x = .constant(0); y = .constant(0); rotation = .constant(0); scale = .constant(1)
         pivotX = 0; pivotY = 0; opacityEnd = 1; delay = 0
+        colors = []; randomX = 0; randomY = 0; randomRotation = 0; randomScale = 0; seed = 0
     }
 
-    enum CodingKeys: String, CodingKey { case count, x, y, rotation, scale, pivotX, pivotY, opacityEnd, delay }
+    public var hasRandom: Bool { randomX != 0 || randomY != 0 || randomRotation != 0 || randomScale != 0 }
+
+    enum CodingKeys: String, CodingKey {
+        case count, x, y, rotation, scale, pivotX, pivotY, opacityEnd, delay
+        case colors, randomX, randomY, randomRotation, randomScale, seed
+    }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -672,6 +704,12 @@ public struct Repeater: Codable, Equatable, Hashable, Sendable {
         pivotY = try c.decodeIfPresent(Double.self, forKey: .pivotY) ?? 0
         opacityEnd = min(max(try c.decodeIfPresent(Double.self, forKey: .opacityEnd) ?? 1, 0), 1)
         delay = try c.decodeIfPresent(Double.self, forKey: .delay) ?? 0
+        colors = try c.decodeIfPresent([RGBA].self, forKey: .colors) ?? []
+        randomX = try c.decodeIfPresent(Double.self, forKey: .randomX) ?? 0
+        randomY = try c.decodeIfPresent(Double.self, forKey: .randomY) ?? 0
+        randomRotation = try c.decodeIfPresent(Double.self, forKey: .randomRotation) ?? 0
+        randomScale = min(max(try c.decodeIfPresent(Double.self, forKey: .randomScale) ?? 0, 0), 0.95)
+        seed = try c.decodeIfPresent(Int.self, forKey: .seed) ?? 0
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -685,6 +723,12 @@ public struct Repeater: Codable, Equatable, Hashable, Sendable {
         if pivotY != 0 { try c.encode(pivotY, forKey: .pivotY) }
         if opacityEnd != 1 { try c.encode(opacityEnd, forKey: .opacityEnd) }
         if delay != 0 { try c.encode(delay, forKey: .delay) }
+        if !colors.isEmpty { try c.encode(colors, forKey: .colors) }
+        if randomX != 0 { try c.encode(randomX, forKey: .randomX) }
+        if randomY != 0 { try c.encode(randomY, forKey: .randomY) }
+        if randomRotation != 0 { try c.encode(randomRotation, forKey: .randomRotation) }
+        if randomScale != 0 { try c.encode(randomScale, forKey: .randomScale) }
+        if seed != 0 { try c.encode(seed, forKey: .seed) }
     }
 
     /// Transform (in the layer's parent space) and opacity of copy i, for a layer whose center is at `position`.
@@ -696,6 +740,17 @@ public struct Repeater: Codable, Equatable, Hashable, Sendable {
             .concatenating(CGAffineTransform(translationX: px + x.value(at: t), y: py + y.value(at: t)))
         var m = CGAffineTransform.identity
         for _ in 0..<i { m = m.concatenating(step) }
+        if hasRandom, i > 0 || count == 1 {
+            // Jitter around the copy's own center, the same for a given copy and seed on every frame.
+            let salt = Noise.mix(UInt64(bitPattern: Int64(seed)) &+ 0x5BD1E995)
+            func u(_ k: Int) -> Double { Noise.unit(i * 4 + k, salt) * 2 - 1 }
+            let c = position.applying(m)
+            let j = CGAffineTransform(translationX: -c.x, y: -c.y)
+                .concatenating(CGAffineTransform(scaleX: 1 + randomScale * u(2), y: 1 + randomScale * u(2)))
+                .concatenating(CGAffineTransform(rotationAngle: randomRotation * u(3) * .pi / 180))
+                .concatenating(CGAffineTransform(translationX: c.x + randomX * u(0), y: c.y + randomY * u(1)))
+            m = m.concatenating(j)
+        }
         let f = count > 1 ? Double(i) / Double(count - 1) : 0
         return (m, 1 + (opacityEnd - 1) * f)
     }

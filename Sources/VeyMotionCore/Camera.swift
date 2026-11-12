@@ -141,6 +141,7 @@ extension MotionScene {
                             layers: group.children)
         s.camera = nil
         s.lights = lights
+        s.bones = bones
         return s
     }
 }

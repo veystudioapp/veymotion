@@ -91,6 +91,10 @@ public enum Preset: String, CaseIterable, Codable, Sendable {
 
 public enum TransitionType: String, CaseIterable, Codable, Sendable {
     case fade, dissolve, push, slide, zoom, whip, wipe, iris, blinds, blocks, clock, glitch, flash, blur
+    /// A circle (or any path, `shape`) growing from a point until it fills the frame, revealing the new layer.
+    case circle, shape
+    /// Match cut: the new layer starts where the old one is (position, scale) and both settle into the new one's place.
+    case match
 
     public var title: String { rawValue.capitalized }
 }
@@ -100,9 +104,18 @@ extension MotionScene {
     /// Animates `out` away and `in` in over [at, at + d]; the outgoing layer ends and the incoming one starts there.
     /// `direction` (left|right|up|down) is where the motion goes for push/slide/whip/wipe.
     public mutating func transition(_ type: TransitionType, out outId: String?, in inId: String?, at s: Double,
-                                    duration d: Double, direction: String?) throws {
+                                    duration d: Double, direction: String?, shape: String? = nil,
+                                    origin: (x: Double, y: Double)? = nil) throws {
         guard d > 0 else { throw SceneError.invalid("duration must be > 0") }
         guard outId != nil || inId != nil else { throw SceneError.invalid("Give `out` and/or `in` layer ids") }
+        if type == .circle || type == .shape {
+            try shapeTransition(out: outId, in: inId, at: s, duration: d, shape: type == .circle ? "circle(1)" : (shape ?? "circle(1)"), origin: origin)
+            return
+        }
+        if type == .match {
+            try matchTransition(out: outId, in: inId, at: s, duration: d)
+            return
+        }
         let e = s + d, mid = s + d / 2
         let dir = direction ?? "left"
         let dx: Double = dir == "left" ? -1 : dir == "right" ? 1 : 0
@@ -152,6 +165,8 @@ extension MotionScene {
                 case .blur:
                     put(&l, .blur, [kf(s, 0, .linear), kf(e, 50, .easeIn)])
                     put(&l, .opacity, [kf(s + d * 0.3, l.opacity.value(at: s), .linear), kf(e, 0, .easeIn)])
+                case .circle, .shape, .match:
+                    break // handled above
                 }
                 if l.end == nil || l.end! > e { l.end = type == .whip || type == .glitch || type == .flash ? mid + 0.02 : e }
             }
@@ -198,6 +213,8 @@ extension MotionScene {
                 case .blur:
                     put(&l, .blur, [kf(s, 50, .linear), kf(e, 0, .easeOut)])
                     put(&l, .opacity, [kf(s, 0, .linear), kf(s + d * 0.7, op, .easeOut)])
+                case .circle, .shape, .match:
+                    break // handled above
                 }
             }
         }
@@ -617,5 +634,87 @@ public enum JSONMerge {
             }
         }
         return t
+    }
+}
+
+
+// MARK: - Shape and match transitions
+
+extension MotionScene {
+    /// Reveals the incoming layer through a path growing from `origin` (frame center by default) until it covers
+    /// the frame, and hides the outgoing one by its inverse. Works with a copy of each layer for the transition
+    /// span (track mattes cannot be keyed), so the originals stay plain before/after.
+    mutating func shapeTransition(out outId: String?, in inId: String?, at s: Double, duration d: Double,
+                                  shape: String, origin: (x: Double, y: Double)?) throws {
+        let e = s + d
+        let w = Double(width), h = Double(height)
+        let ox = origin?.x ?? w / 2, oy = origin?.y ?? h / 2
+        let path = try PathShape(shape)
+        let box = path.cgPath.boundingBoxOfPath
+        let radius = max(abs(box.minX), abs(box.maxX), abs(box.minY), abs(box.maxY), 0.5)
+        // Far corner of the frame from the origin, so the shape covers everything at the end.
+        let far = [CGPoint(x: 0, y: 0), CGPoint(x: w, y: 0), CGPoint(x: 0, y: h), CGPoint(x: w, y: h)]
+            .map { hypot($0.x - ox, $0.y - oy) }.max() ?? hypot(w, h)
+        let cover = far / radius * 1.05
+        let base = (inId ?? outId ?? "reveal")
+        var matte = MotionLayer(id: "\(base)-reveal", name: "Reveal Shape", type: .path, x: ox, y: oy)
+        matte.d = .constant(path)
+        matte.fill = .constant(.white)
+        matte.start = s; matte.end = e
+        matte.scale = .keyframes([MotionKeyframe(t: s, v: 0.001, easing: .linear),
+                                  MotionKeyframe(t: e, v: cover, easing: .curve(.cubic, .inOut))])
+        let matteId = addLayer(matte)
+        func split(_ id: String, mode: MatteMode, incoming: Bool) throws {
+            guard let i = layers.firstIndex(where: { $0.id == id }) else {
+                throw SceneError.invalid("'\(id)' must be a top-level layer for a shape transition")
+            }
+            var copy = layers[i]
+            copy.id = uniqueId(base: id + (incoming ? "-in" : "-out"))
+            copy.name = layers[i].name + (incoming ? " (entering)" : " (leaving)")
+            copy.start = s; copy.end = e
+            copy.matte = Matte(source: matteId, mode: mode)
+            if incoming { layers[i].start = max(layers[i].start, e) } else { layers[i].end = s }
+            if copy.type == .group {
+                var seen = Set(allLayers.map(\.id)); seen.insert(copy.id)
+                Self.normalizeIds(&copy.children, seen: &seen)
+            }
+            layers.insert(copy, at: i + 1)
+        }
+        if let outId { try split(outId, mode: .alphaInverted, incoming: false) }
+        if let inId { try split(inId, mode: .alpha, incoming: true) }
+        // The matte stays on top of both copies.
+        if let mi = layers.firstIndex(where: { $0.id == matteId }) {
+            let m = layers.remove(at: mi)
+            layers.append(m)
+        }
+    }
+
+    /// The incoming layer appears where the outgoing one is and both move to the incoming one's place.
+    mutating func matchTransition(out outId: String?, in inId: String?, at s: Double, duration d: Double) throws {
+        let e = s + d
+        func kf(_ t: Double, _ v: Double, _ easing: Easing = .easeInOut) -> MotionKeyframe { MotionKeyframe(t: t, v: v, easing: easing) }
+        func put(_ l: inout MotionLayer, _ p: AnimProperty, _ kfs: [MotionKeyframe]) {
+            l[p] = l[p].inserting(kfs, replacing: kfs.first!.t, kfs.last!.t)
+        }
+        guard let outId, let inId else { throw SceneError.invalid("A match cut needs both `out` and `in`") }
+        let from = try layer(outId), to = try layer(inId)
+        let fx = from.x.value(at: s), fy = from.y.value(at: s), fs = from.scale.value(at: s), fr = from.rotation.value(at: s)
+        let tx = to.x.value(at: e), ty = to.y.value(at: e), ts = to.scale.value(at: e), tr = to.rotation.value(at: e)
+        try withLayer(inId) { l in
+            if l.start > s { l.start = s }
+            put(&l, .x, [kf(s, fx, .linear), kf(e, tx, .curve(.expo, .out))])
+            put(&l, .y, [kf(s, fy, .linear), kf(e, ty, .curve(.expo, .out))])
+            put(&l, .scale, [kf(s, fs, .linear), kf(e, ts, .curve(.expo, .out))])
+            if abs(fr - tr) > 0.01 { put(&l, .rotation, [kf(s, fr, .linear), kf(e, tr, .curve(.expo, .out))]) }
+            put(&l, .opacity, [kf(s, 0, .linear), kf(s + d * 0.35, max(l.opacity.value(at: e), 0.01), .easeOut)])
+        }
+        try withLayer(outId) { l in
+            put(&l, .x, [kf(s, fx, .linear), kf(e, tx, .curve(.expo, .out))])
+            put(&l, .y, [kf(s, fy, .linear), kf(e, ty, .curve(.expo, .out))])
+            put(&l, .scale, [kf(s, fs, .linear), kf(e, ts, .curve(.expo, .out))])
+            if abs(fr - tr) > 0.01 { put(&l, .rotation, [kf(s, fr, .linear), kf(e, tr, .curve(.expo, .out))]) }
+            put(&l, .opacity, [kf(s + d * 0.2, l.opacity.value(at: s), .linear), kf(s + d * 0.6, 0, .easeIn)])
+            if l.end == nil || l.end! > e { l.end = e }
+        }
     }
 }

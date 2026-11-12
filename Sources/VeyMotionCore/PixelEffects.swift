@@ -19,6 +19,7 @@ struct PixelEffects {
     var rays = 0.0, raysLength = 0.6, outline = 0.0, innerGlow = 0.0, innerGlowRadius = 20.0
     var outlineColor = RGBA.white, innerGlowColor = RGBA.white
     var shine = 0.0
+    var goo = 0.0, halftone = 0.0
     var grading: Grading?
     var time = 0.0
     var frame = 0
@@ -44,6 +45,7 @@ struct PixelEffects {
         innerGlow = min(max(v(.innerGlow), 0), 4); innerGlowRadius = max(1, v(.innerGlowRadius))
         innerGlowColor = layer.innerGlowColor ?? .white
         shine = min(max(v(.shine), 0), 4)
+        goo = max(0, v(.goo)); halftone = max(0, v(.halftone))
         grading = Grading(layer, at: t)
         time = t
         frame = Int(floor(t * Double(max(fps, 1)) + 1e-6))
@@ -57,6 +59,7 @@ struct PixelEffects {
         keyColor != nil || distorts || colors != nil || posterize >= 2 || pixelate >= 1 || directionalBlur >= 1
             || zoomBlur > 0.001 || rgbSplit != 0 || glitch > 0.001 || grain > 0.001 || scanlines > 0.001
             || vignette > 0.001 || rays > 0.001 || outline >= 0.5 || innerGlow > 0.001 || shine > 0.001 || grading != nil
+            || goo > 0.001 || halftone >= 2
     }
 
 
@@ -77,6 +80,7 @@ struct PixelEffects {
         grading?.apply(buf)
         if posterize >= 2 { buf.posterize(levels: min(posterize, 64)) }
         if pixelate * scale >= 1.5 { buf.pixelate(size: pixelate * scale, center: center) }
+        if halftone * scale >= 2 { buf.halftone(cell: halftone * scale, center: center) }
         if innerGlow > 0.001 { buf.innerGlow(innerGlow, radius: innerGlowRadius * scale, color: innerGlowColor) }
         if outline * scale >= 0.5 { buf.outline(radius: outline * scale, color: outlineColor) }
     }
@@ -92,6 +96,7 @@ struct PixelEffects {
         if grain > 0.001 { buf.grain(grain, frame: frame, seed: seed) }
         if scanlines > 0.001 { buf.scanlines(scanlines, period: max(2, Int((3 * pixelScale).rounded()))) }
         if vignette > 0.001 { buf.vignette(vignette) }
+        if goo > 0.001 { buf.alphaContrast(8) }
     }
 
     /// Wave warp, ripple, twirl, bulge and turbulent displacement, as one inverse mapping (where each output
@@ -328,6 +333,110 @@ struct PixelBuffer {
                 q[1] = UInt8(min(max(g * na, 0), na).rounded())
                 q[2] = UInt8(min(max(b * na, 0), na).rounded())
                 q[3] = UInt8(na.rounded())
+            }
+        }
+    }
+
+    /// Re-sharpens a blurred alpha around 50% (the "gooey" filter): blobs that overlap fuse into one shape.
+    func alphaContrast(_ k: Double) {
+        for y in 0..<h {
+            let row = p + y * rb
+            for x in 0..<w {
+                let q = row + 4 * x
+                let a = Double(q[3])
+                guard a > 0 else { continue }
+                let na = min(max((a - 128) * k + 128, 0), 255)
+                let f = na / a
+                for c in 0..<3 { q[c] = UInt8(min(Double(q[c]) * f, na).rounded()) }
+                q[3] = UInt8(na.rounded())
+            }
+        }
+    }
+
+    /// Classic print halftone: each cell becomes one dot of the cell's average color, bigger where the cell is
+    /// darker and more opaque (white areas vanish, as ink on paper).
+    func halftone(cell: Double, center: CGPoint) {
+        let s = max(2, Int(cell.rounded()))
+        let ox = ((Int(center.x.rounded()) % s) + s) % s - s, oy = ((Int(center.y.rounded()) % s) + s) % s - s
+        let src = copy()
+        var by = oy
+        while by < h {
+            let y0 = max(by, 0), y1 = min(by + s, h)
+            var bx = ox
+            while bx < w {
+                let x0 = max(bx, 0), x1 = min(bx + s, w)
+                var sr = 0, sg = 0, sb = 0, sa = 0
+                for y in y0..<y1 {
+                    let row = y * rb
+                    for x in x0..<x1 {
+                        let q = row + 4 * x
+                        sr += Int(src[q]); sg += Int(src[q + 1]); sb += Int(src[q + 2]); sa += Int(src[q + 3])
+                    }
+                }
+                let n = (x1 - x0) * (y1 - y0)
+                let cx = Double(bx) + Double(s) / 2 - 0.5, cy = Double(by) + Double(s) / 2 - 0.5
+                var radius = 0.0
+                var cr = 0.0, cg = 0.0, cb = 0.0
+                if sa > 0 {
+                    // Un-premultiply the average color; dot size from coverage × darkness.
+                    cr = Double(sr) / Double(sa); cg = Double(sg) / Double(sa); cb = Double(sb) / Double(sa)
+                    let lum = 0.2126 * cr + 0.7152 * cg + 0.0722 * cb
+                    let cover = Double(sa) / Double(n * 255) * (1 - 0.85 * lum)
+                    radius = Double(s) / 2 * cover.squareRoot() * 1.15
+                }
+                for y in y0..<y1 {
+                    let row = p + y * rb
+                    for x in x0..<x1 {
+                        let q = row + 4 * x
+                        let d = ((Double(x) - cx) * (Double(x) - cx) + (Double(y) - cy) * (Double(y) - cy)).squareRoot()
+                        let inside = radius <= 0 ? 0 : d <= radius - 0.5 ? 1.0 : d >= radius + 0.5 ? 0.0 : radius + 0.5 - d
+                        let a = inside * 255
+                        q[0] = UInt8((cr * a).rounded()); q[1] = UInt8((cg * a).rounded()); q[2] = UInt8((cb * a).rounded())
+                        q[3] = UInt8(a.rounded())
+                    }
+                }
+                bx += s
+            }
+            by += s
+        }
+    }
+
+    /// Replaces the picture with its alpha swept along (dx, dy) for `length` px, in `color` (a long shadow).
+    /// The sweep is a union of shifted copies, built by doubling (log2(length) passes).
+    func smear(dx: Double, dy: Double, length: Double, color: RGBA) {
+        var alpha = [UInt8](repeating: 0, count: w * h)
+        for y in 0..<h {
+            let row = p + y * rb
+            for x in 0..<w { alpha[y * w + x] = row[4 * x + 3] }
+        }
+        var tmp = alpha
+        var covered = 0.0
+        while covered < length - 0.5 {
+            let s = min(max(covered, 1), length - covered)
+            let ox = Int((dx * s).rounded()), oy = Int((dy * s).rounded())
+            if ox == 0 && oy == 0 { covered += s; continue }
+            for y in 0..<h {
+                let sy = y - oy
+                for x in 0..<w {
+                    let sx = x - ox
+                    var v = alpha[y * w + x]
+                    if sx >= 0, sx < w, sy >= 0, sy < h { v = max(v, alpha[sy * w + sx]) }
+                    tmp[y * w + x] = v
+                }
+            }
+            swap(&alpha, &tmp)
+            covered += s
+        }
+        let cr = color.r * color.a, cg = color.g * color.a, cb = color.b * color.a
+        for y in 0..<h {
+            let row = p + y * rb
+            for x in 0..<w {
+                let a = Double(alpha[y * w + x]) * color.a
+                let q = row + 4 * x
+                q[0] = UInt8((cr * Double(alpha[y * w + x])).rounded())
+                q[1] = UInt8((cg * Double(alpha[y * w + x])).rounded())
+                q[2] = UInt8((cb * Double(alpha[y * w + x])).rounded())
+                q[3] = UInt8(a.rounded())
             }
         }
     }

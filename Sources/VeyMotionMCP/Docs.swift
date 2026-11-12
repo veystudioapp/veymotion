@@ -59,7 +59,7 @@ enum Docs {
        - Anything overlapping, clipped, or closer than 80 px to the edge? → fix layout.
 
     LAYER
-    Common: id, name, type ("rect" | "ellipse" | "path" | "text" | "image" | "video" | "audio" | "particles" | "generator" | "group" | "model"), start, end (seconds, end optional = scene end),
+    Common: id, name, type ("rect" | "ellipse" | "path" | "text" | "image" | "video" | "audio" | "particles" | "generator" | "group" | "model" | "drawing"), start, end (seconds, end optional = scene end),
             x, y, scale, rotation (degrees), opacity (0..1)
     rect/ellipse: width, height, cornerRadius (rect), fill "#RRGGBB[AA]", stroke, strokeWidth (see STROKES for trim)
     path: any vector shape. d = the shape in layer px around the layer's x/y (0,0 in d is at x/y and is the pivot for
@@ -157,7 +157,9 @@ enum Docs {
         {"type":"linear","colors":["#FF6B6B","#FFD93D"],"angle":90}
       colors spread evenly, or "stops":[{"offset":0,"color":"#..."},{"offset":0.7,"color":"#..."}]. linear: angle in
       degrees (0 = left→right, 90 = top→bottom). radial: cx, cy (center as a fraction of the layer box, default 0.5) and
-      radius (fraction of half its diagonal, default 1). angle, radius and shift are animatable. shift slides the colors
+      radius (fraction of half its diagonal, default 1). conic: the colors sweep around cx/cy (angle = where the first
+      stop starts; make the last color equal the first for a seamless wheel; animate shift 0 → 1 to spin it: loaders,
+      pie-like rings, iridescent discs). angle, radius and shift are animatable. shift slides the colors
       along (radial: outward): a metallic shine sweeping over a title = colors ["#C9A227","#FFF6C8","#C9A227"] with shift
       keyframes -1 → 1.
     - matte (track matte): {"source":"shape-id","mode":"alpha"} (or just "shape-id") shows the layer only where the
@@ -172,7 +174,9 @@ enum Docs {
       x/y/rotation/scale are animatable (a fan opening: rotation 0 → 15). Recipes: ring of 12 dots = a dot at the ring's
       top, rotation 30, pivotY = radius; row of bars = x 60; echo trail of a moving layer = count 6, delay 0.04,
       opacityEnd 0.1; burst of rays = a thin rect above the center, rotation 360/count, pivotY = its distance to the
-      center.
+      center. Variation per copy: colors ["#FF5A5F","#2EC4B6","#FFBF47"] cycles the fill (text: color) over the copies;
+      randomX/randomY (px), randomRotation (± degrees), randomScale (± fraction) scatter each copy a little, fixed by
+      seed (change it for another arrangement): confetti rings, hand-placed dot patterns, uneven rays.
     - motionBlur: shutter angle (180 = natural film blur, 360 = strong, 0 = off); fast moves, spins and zooms smear like
       a real camera. It renders the layer several times per frame, so use it on the few fast-moving layers.
     - glow (strength 0..4, animatable), glowRadius (px, default 24), glowColor (optional tint): light around the layer —
@@ -242,6 +246,12 @@ enum Docs {
       family name as fontName. Imported fonts are files in the asset library (fonts/ in a project), so they travel
       with the project and render the same in preview and export.
     - Use 1–2 families per piece: e.g. a display or serif font for titles and a clean sans for the rest.
+    - Variable fonts (one file with axes, e.g. Inter, Roboto Flex, Fraunces, Anybody, most Google Fonts): fontWeightAxis
+      (wght, 100–900) and fontWidth (wdth, e.g. 75–125) are animatable: keyframe a title from thin to black, or from
+      condensed to extended ("the letters breathe"). Other axes go in fontVariations {"slnt": -10, "opsz": 24}. Text
+      animators can do it per character: {"unit":"char","fontWeightAxis":900,"fontWidth":125,...} takes each letter from
+      the text's own axes to those values and back (mode in/out). The font must have the axis (import a variable font
+      with import_stock; static families ignore the axes).
     - A font warning in a tool result means the name was not found or the font lacks some letters: fix it.
 
     TEXT EXTRAS
@@ -477,6 +487,47 @@ enum Docs {
     - Footage rendered in Blender (or any 3D app) still works too: a PNG sequence with alpha or a ProRes 4444 .mov
       as a video layer.
 
+    FLAT-DESIGN AND PRINT LOOKS
+    - longShadow (px) + longShadowAngle (degrees, 45 = down-right) + longShadowColor: a hard-edged shadow cast across the
+      scene from text, shapes, icons (flat design, posters). Use a darker tone of the background as the color.
+    - textHighlights (text layers): [{"word":"key word","color":"#FFE600","start":1.2,"duration":0.4,"skew":-8,
+      "padding":6,"radius":6,"all":false}] draws a marker band behind that word (first occurrence, or every one with
+      all), swept in from the left from `start` (omit start = always on). The band sits behind the letters and follows
+      line breaks.
+    - halftone (dot cell px, 6–20): the layer as a grid of ink dots, bigger where it is darker (newspaper, comic,
+      risograph). Combine with posterize, grain and a paper-colored background; rgbSplit 2–3 for misregistration.
+    - goo (px, 20–60) on a group: its children are blurred and re-sharpened so overlapping shapes fuse like liquid
+      (metaballs, drops splitting, blobs merging, gooey menus). Keep the group at the frame center (its box is the
+      frame) and animate the children's x/y/scale; add particles with big soft shapes inside the group for drips.
+    - transition types circle / shape: the new scene grows out of a point (x, y; default the center) as a circle or any
+      path d ("star(5,1,0.5)", "M…") until it fills the frame — works through a copy of each layer with a matte, so
+      the originals are untouched outside the transition. match: a match cut, the incoming layer starts where the
+      outgoing one is (position, scale, rotation) and both glide to the incoming one's place.
+
+    RIGS (bones + IK) AND FRAME-BY-FRAME DRAWING
+    - A rig is a list of bones in the scene ("bones": [{"id":"arm","x":900,"y":500,"length":180,"angle":20},
+      {"id":"forearm","parent":"arm","length":160,"angle":40,"minAngle":0,"maxAngle":150}]; set_bones adds them).
+      A child bone starts at its parent's tip; its angle is relative to the parent. Layers hang on a bone with
+      bind_bone (or "bone":"forearm" in their JSON: x/y/rotation are then in the bone's space, 0,0 = the bone's start,
+      x along the bone). Animate with pose_bones (FK: angles at times) or solve_ik (the tip of a chain reaches a
+      point). Workflow for a character: import_vector its SVG (parts as layers) → set_bones along the limbs → bind
+      each part to its bone at time 0 → pose. Parts that should not bend (a head) just bind to the body bone.
+    - "drawing" layers are hand-drawn, frame by frame: {"type":"drawing","x":960,"y":540,"drawing":{"fps":12,"loop":true,
+      "frames":[{"hold":2,"strokes":[{"d":"M-80 40 Q 0 -80 80 40","stroke":"#111111","strokeWidth":8}]}, …]}}; draw_frame
+      appends/replaces frames. Strokes are path data in layer px (round caps). Use 3–6 frames of slightly different
+      lines for a boiling/wobbly outline, smear frames under a fast move, ink splashes, scribbled emphasis; hold 2
+      for the classic look. Everything else (position keyframes, effects, bones) applies to the layer as a whole.
+    - Groups with "localTime": true count their children's times from the group's start: keyframes at t 0 inside
+      the group happen when the group starts, so a section built once can be moved by changing the group's start
+      (and duplicated with timeOffset). Children's audioReact timing is not shifted in such groups.
+
+    SECONDARY MOTION (automatic follow-through)
+    - inertia (0…1): after a keyframed move, turn or scale stops (or changes speed abruptly), the layer overshoots and
+      wobbles back for about a second (2.5 Hz, damped). 0.3 = subtle, 1 = cartoon. Works with any easing; the whole
+      thing is deterministic, so every frame renders alone.
+    - squash (0…1): while the layer moves, it stretches along its velocity and squeezes across it (squash & stretch);
+      1 at 1000 px/s ≈ 1.5× long. Use with inertia on bouncing balls, jumping characters, logos that land.
+
     AUDIO
     audio layers: type "audio", path, start, end (optional; default = end of file), role ("voice"|"music"|"sfx"),
           volume (animatable, 1 = original), trimIn, fadeIn, fadeOut, duckTo (music: level while a voice speaks).
@@ -593,6 +644,12 @@ enum Docs {
     - ALWAYS call render_frame at a few key times to check layout and timing visually before saying you are done.
     - Stagger entrances by 0.1–0.2s, use easeOut for entrances and easeIn for exits, keep text inside a safe margin
       (~80px from edges), and give the viewer time to read (about 1s per 4 words).
+    - duplicate_layer makes rows/rings/copies (with offsets and a time offset per copy) in one call; shift_time makes
+      room in the timeline when a section gets longer (everything after `from` moves, later keyframes included);
+      remove_layer / add_layer {group} / reorder_layer work on a group's children by id.
+    - render_frames {times:[…]} shows up to 24 frames in one contact sheet: check pacing of a whole piece in one look.
+    - import_vector turns an SVG (asset or file) into a group of path layers, one per shape: animate the parts of an
+      illustration or character separately (set_parent them to a body part, or rig them with bones).
     - apply_preset is a quick way to add common entrances/exits/emphasis; pass `ids` + `stagger` to cascade one preset
       over several layers (e.g. list items 0.12s apart). Combine with easings like easeOutBack / easeOutExpo for polish,
       and use loop/wiggle for ambient motion (floating shapes, subtle drift).
@@ -636,12 +693,13 @@ enum Docs {
       },
       {
         "name": "add_layer",
-        "description": "Add one layer on top of the others (or at `index`, 0 = bottom). Returns the final layer id.",
+        "description": "Add one layer on top of the others (or at `index`, 0 = bottom), or inside a group (`group` = its id). Returns the final layer id.",
         "inputSchema": {
           "type": "object",
           "properties": {
             "layer": { "type": "object", "description": "Layer JSON; `type` is required. Missing fields use defaults." },
-            "index": { "type": "integer" }
+            "index": { "type": "integer" },
+            "group": { "type": "string", "description": "Id of a group layer to add the layer into (children use scene coordinates)." }
           },
           "required": ["layer"]
         }
@@ -666,16 +724,45 @@ enum Docs {
       },
       {
         "name": "remove_layer",
-        "description": "Delete a layer.",
+        "description": "Delete a layer (top-level or a group's child).",
         "inputSchema": { "type": "object", "properties": { "id": { "type": "string" } }, "required": ["id"] }
       },
       {
         "name": "reorder_layer",
-        "description": "Move a layer to a draw-order index (0 = bottom).",
+        "description": "Move a layer to a draw-order index among its siblings (0 = bottom; inside its group for a child).",
         "inputSchema": {
           "type": "object",
           "properties": { "id": { "type": "string" }, "index": { "type": "integer" } },
           "required": ["id", "index"]
+        }
+      },
+      {
+        "name": "duplicate_layer",
+        "description": "Copies a layer (with all its keyframes; a group with its children) `count` times right above it, each copy moved by offsetX/offsetY px and timeOffset seconds more than the previous one. Ids: `ids`, else <id>-2, <id>-3… Use it for rows of stars, speed lines, rings, repeated cards; then update_layer the copies that differ.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "id": { "type": "string" },
+            "count": { "type": "integer", "default": 1 },
+            "offsetX": { "type": "number", "default": 0 },
+            "offsetY": { "type": "number", "default": 0 },
+            "timeOffset": { "type": "number", "default": 0, "description": "Seconds each copy starts later (start, end and every keyframe)." },
+            "ids": { "type": "array", "items": { "type": "string" }, "description": "Ids for the copies, in order." }
+          },
+          "required": ["id"]
+        }
+      },
+      {
+        "name": "shift_time",
+        "description": "Makes room in the timeline (or closes a gap): everything at or after `from` moves by `by` seconds. Layers starting at/after `from` move whole (start, end, keyframes, children, animators); layers spanning `from` keep their start, their later keyframes move and their end grows; the camera's later keyframes move; the scene duration changes by the same amount (extendDuration false keeps it). Use it to lengthen a section without re-keying every later scene.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "from": { "type": "number", "description": "Seconds." },
+            "by": { "type": "number", "description": "Seconds, negative to pull later content earlier (never before `from`)." },
+            "extendDuration": { "type": "boolean", "default": true }
+          },
+          "required": ["from", "by"]
         }
       },
       {
@@ -685,7 +772,7 @@ enum Docs {
           "type": "object",
           "properties": {
             "id": { "type": "string" },
-            "property": { "type": "string", "enum": ["counter", "scramble", "textOffset", "timeRemap", "rotationX", "rotationY", "perspective", "z", "scaleZ", "levelsBlack", "levelsWhite", "levelsGamma", "gradientMapAmount", "lutAmount", "x", "y", "scale", "scaleX", "scaleY", "rotation", "skewX", "skewY", "anchorX", "anchorY", "opacity", "width", "height", "cornerRadius", "strokeWidth", "trim", "trimStart", "trimOffset", "reveal", "letterSpacing", "blur", "shadowX", "shadowY", "shadowBlur", "shadowOpacity", "glow", "glowRadius", "pathProgress", "volume", "emission", "particleSpeed", "particleSize", "brightness", "contrast", "saturation", "hue", "tint", "wipe", "keyTolerance", "keySoftness", "waveWarp", "ripple", "waveLength", "waveSpeed", "twirl", "bulge", "distortRadius", "turbulence", "posterize", "pixelate", "rgbSplit", "glitch", "grain", "scanlines", "vignette", "directionalBlur", "blurAngle", "zoomBlur", "fill", "stroke", "color", "d"] },
+            "property": { "type": "string", "enum": ["counter", "scramble", "textOffset", "timeRemap", "rotationX", "rotationY", "perspective", "z", "scaleZ", "levelsBlack", "levelsWhite", "levelsGamma", "gradientMapAmount", "lutAmount", "fontWeightAxis", "fontWidth", "longShadow", "longShadowAngle", "goo", "halftone", "inertia", "squash", "x", "y", "scale", "scaleX", "scaleY", "rotation", "skewX", "skewY", "anchorX", "anchorY", "opacity", "width", "height", "cornerRadius", "strokeWidth", "trim", "trimStart", "trimOffset", "reveal", "letterSpacing", "blur", "shadowX", "shadowY", "shadowBlur", "shadowOpacity", "glow", "glowRadius", "pathProgress", "volume", "emission", "particleSpeed", "particleSize", "brightness", "contrast", "saturation", "hue", "tint", "wipe", "keyTolerance", "keySoftness", "waveWarp", "ripple", "waveLength", "waveSpeed", "twirl", "bulge", "distortRadius", "turbulence", "posterize", "pixelate", "rgbSplit", "glitch", "grain", "scanlines", "vignette", "directionalBlur", "blurAngle", "zoomBlur", "fill", "stroke", "color", "d"] },
             "keyframes": {
               "type": "array",
               "items": {
@@ -888,11 +975,14 @@ enum Docs {
       },
       {
         "name": "transition",
-        "description": "Animates a transition between two layers (or groups): the outgoing one leaves and the incoming one arrives over [at, at+duration]. Sets the outgoing layer's end and the incoming layer's start. Types: fade, dissolve (block dissolve), push (both move), slide (new one slides over), zoom (through the old one), whip (fast pan with motion blur), wipe, iris, blinds, blocks, clock, glitch, flash (white flash, adds a 'flash' layer), blur.",
+        "description": "Animates a transition between two layers (or groups): the outgoing one leaves and the incoming one arrives over [at, at+duration]. Sets the outgoing layer's end and the incoming layer's start. Types: fade, dissolve (block dissolve), push (both move), slide (new one slides over), zoom (through the old one), whip (fast pan with motion blur), wipe, iris, blinds, blocks, clock, glitch, flash (white flash, adds a 'flash' layer), blur, circle (the new layer grows out of x/y as a circle until it fills the frame; top-level layers only), shape (same with any path `shape`, e.g. star(5,1,0.5)), match (match cut: the new layer starts where the old one is and both settle into the new one's place).",
         "inputSchema": {
           "type": "object",
           "properties": {
-            "type": { "type": "string", "enum": ["fade", "dissolve", "push", "slide", "zoom", "whip", "wipe", "iris", "blinds", "blocks", "clock", "glitch", "flash", "blur"] },
+            "type": { "type": "string", "enum": ["fade", "dissolve", "push", "slide", "zoom", "whip", "wipe", "iris", "blinds", "blocks", "clock", "glitch", "flash", "blur", "circle", "shape", "match"] },
+            "shape": { "type": "string", "description": "shape only: path d centered on 0,0 (star(5,1,0.5), polygon(6,1), M… ); it is scaled from nothing to the frame." },
+            "x": { "type": "number", "description": "circle/shape: where it grows from (default frame center)." },
+            "y": { "type": "number" },
             "out": { "type": "string", "description": "Layer leaving (optional)." },
             "in": { "type": "string", "description": "Layer arriving (optional)." },
             "at": { "type": "number", "description": "Scene time the transition starts." },
@@ -1224,6 +1314,104 @@ enum Docs {
         "name": "get_credits",
         "description": "Credit lines for the downloaded assets used in the scene (needed for CC BY / CC BY-SA content). Put them in the video's end card or description.",
         "inputSchema": { "type": "object", "properties": {} }
+      },
+      {
+        "name": "set_bones",
+        "description": "Adds or replaces the scene's bones (a cut-out rig). A bone: {id, parent?, x, y (root only: where it starts, scene px), length (px), angle (degrees; root: absolute, 0 = right, 90 = down; child: relative to its parent), minAngle?, maxAngle? (IK limits)}. Child bones start at their parent's tip. Then bind_bone hangs layers (e.g. the parts of an import_vector character) on them, and pose_bones / solve_ik animate the angles (keyframes). Bones are not drawn.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "bones": { "type": "array", "items": { "type": "object" } },
+            "replace": { "type": "boolean", "default": false, "description": "Drop bones not in the list." }
+          },
+          "required": ["bones"]
+        }
+      },
+      {
+        "name": "bind_bone",
+        "description": "Hangs a layer on a bone: from then on it moves and turns with the bone (its x/y/rotation become relative to the bone's start and direction). The layer does not jump at `time`. bone \"\" detaches it. Typical rig: upperArm → forearm → hand bones, each part layer bound to its bone.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "id": { "type": "string" },
+            "bone": { "type": "string" },
+            "time": { "type": "number", "default": 0, "description": "When the layer keeps its place." }
+          },
+          "required": ["id", "bone"]
+        }
+      },
+      {
+        "name": "pose_bones",
+        "description": "Sets bone angles (degrees, in each bone's own frame). With `time`, each angle is a keyframe there (the previous pose is kept `hold` seconds before it when the bone had no keyframes yet); without it, constants. Call it at several times to animate a walk, a wave, a nod.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "angles": { "type": "object", "description": "{\"upperArm\": -40, \"forearm\": 70}" },
+            "time": { "type": "number" },
+            "hold": { "type": "number", "default": 0.4 }
+          },
+          "required": ["angles"]
+        }
+      },
+      {
+        "name": "solve_ik",
+        "description": "Inverse kinematics: turns the chain ending at `bone` (that bone and `chain`-1 parents) so the bone's tip reaches x/y (scene px), within the bones' angle limits, and keys the angles at `time` (like pose_bones). Use it to put a hand on an object, a foot on the floor, a head toward a target: reach, grab, point, step.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "bone": { "type": "string", "description": "The last bone of the chain (its tip is the end effector)." },
+            "x": { "type": "number" },
+            "y": { "type": "number" },
+            "chain": { "type": "integer", "default": 2 },
+            "time": { "type": "number" },
+            "hold": { "type": "number", "default": 0.4 }
+          },
+          "required": ["bone", "x", "y"]
+        }
+      },
+      {
+        "name": "draw_frame",
+        "description": "Adds (or replaces, with `index`) one frame of a drawing layer (type \"drawing\"): a list of strokes, each {d: path data in layer px around the layer's x/y, stroke: color (null = none), strokeWidth (default 6), fill?}. hold = how many drawing frames it stays (2 = animate on 2s). The layer's drawing.fps (default 12) and drawing.loop are set with update_layer. Build hand-drawn animation frame by frame: smears, squiggly lines, a wobbling outline, an ink splash.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "id": { "type": "string" },
+            "strokes": { "type": "array", "items": { "type": "object" } },
+            "hold": { "type": "integer", "default": 1 },
+            "index": { "type": "integer", "description": "Replace this frame (0-based) instead of appending." }
+          },
+          "required": ["id", "strokes"]
+        }
+      },
+      {
+        "name": "import_vector",
+        "description": "Turns an SVG into editable layers: a group (`id`) whose children are one path layer per <path>/<rect>/<circle>/<ellipse>/<line>/<polyline>/<polygon> (d, fill, stroke, opacity, gradients, fill rule, caps, dashes kept; transforms baked in) and one group per <g> (flatten true puts every shape in the top group). Scaled to width/height (one keeps the aspect; none = SVG units as px) and centered on x/y (default: the frame center). Use it for illustrations, icons and characters whose parts must move separately (then set_parent / keyframes on the parts, or bones). `source` is an asset-library name (e.g. icons/hand.svg, after import_asset / import_stock) or an absolute path. Not imported: <text>, <image>, <use>, clip paths, masks, CSS <style>.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "source": { "type": "string" },
+            "id": { "type": "string", "description": "Group id; part ids are <id>-<element id> or <id>-path3." },
+            "x": { "type": "number" },
+            "y": { "type": "number" },
+            "width": { "type": "number" },
+            "height": { "type": "number" },
+            "flatten": { "type": "boolean", "default": false }
+          },
+          "required": ["source"]
+        }
+      },
+      {
+        "name": "render_frames",
+        "description": "Renders up to 24 times into one contact-sheet PNG (labeled, `columns` per row). The fast way to check pacing and every section of a long piece in one look; then render_frame for detail.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "times": { "type": "array", "items": { "type": "number" }, "description": "Seconds, 1–24 of them." },
+            "columns": { "type": "integer", "default": 4 },
+            "scale": { "type": "number", "default": 0.25, "description": "Per-frame scale relative to the scene (0.1–0.5)." }
+          },
+          "required": ["times"]
+        }
       },
       {
         "name": "render_frame",

@@ -283,19 +283,24 @@ public struct TextAnimator: Codable, Equatable, Hashable, Sendable {
     public var blur: Double
     public var color: RGBA?
     public var seed: Int
+    /// Variable-font axes of the away state (0 = unchanged): each unit goes from the text's own wght/wdth to these.
+    public var fontWeightAxis: Double
+    public var fontWidth: Double
 
     public init(unit: TextUnit = .char, mode: AnimatorMode = .in, start: Double = 0, duration: Double = 0.5,
                 stagger: Double = 0.04, order: StaggerOrder = .forward, easing: Easing? = nil,
                 opacity: Double = 0, x: Double = 0, y: Double = 0, scale: Double = 1, rotation: Double = 0,
-                blur: Double = 0, color: RGBA? = nil, seed: Int = 0) {
+                blur: Double = 0, color: RGBA? = nil, seed: Int = 0, fontWeightAxis: Double = 0, fontWidth: Double = 0) {
         self.unit = unit; self.mode = mode; self.start = start; self.duration = duration; self.stagger = stagger
         self.order = order; self.easing = easing ?? (mode == .in ? .easeOut : .easeIn)
         self.opacity = opacity; self.x = x; self.y = y; self.scale = scale; self.rotation = rotation
         self.blur = blur; self.color = color; self.seed = seed
+        self.fontWeightAxis = fontWeightAxis; self.fontWidth = fontWidth
     }
 
     enum CodingKeys: String, CodingKey {
         case unit, mode, start, duration, stagger, order, easing, opacity, x, y, scale, rotation, blur, color, seed
+        case fontWeightAxis, fontWidth
     }
 
     public init(from decoder: Decoder) throws {
@@ -315,7 +320,9 @@ public struct TextAnimator: Codable, Equatable, Hashable, Sendable {
                   rotation: try c.decodeIfPresent(Double.self, forKey: .rotation) ?? 0,
                   blur: max(0, try c.decodeIfPresent(Double.self, forKey: .blur) ?? 0),
                   color: try c.decodeIfPresent(RGBA.self, forKey: .color),
-                  seed: try c.decodeIfPresent(Int.self, forKey: .seed) ?? 0)
+                  seed: try c.decodeIfPresent(Int.self, forKey: .seed) ?? 0,
+                  fontWeightAxis: try c.decodeIfPresent(Double.self, forKey: .fontWeightAxis) ?? 0,
+                  fontWidth: try c.decodeIfPresent(Double.self, forKey: .fontWidth) ?? 0)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -335,6 +342,8 @@ public struct TextAnimator: Codable, Equatable, Hashable, Sendable {
         if blur != 0 { try c.encode(blur, forKey: .blur) }
         try c.encodeIfPresent(color, forKey: .color)
         if seed != 0 { try c.encode(seed, forKey: .seed) }
+        if fontWeightAxis != 0 { try c.encode(fontWeightAxis, forKey: .fontWeightAxis) }
+        if fontWidth != 0 { try c.encode(fontWidth, forKey: .fontWidth) }
     }
 
     /// When the last unit finishes.
@@ -377,6 +386,9 @@ public struct GlyphState: Equatable {
     public var blur = 0.0
     /// Color mixed over the text's own (with its alpha as the mix).
     public var tint: RGBA?
+    /// Variable-font axes for this unit (nil = the text's own).
+    public var weightAxis: Double?
+    public var widthAxis: Double?
 
     public static let rest = GlyphState()
     public var isRest: Bool { self == .rest }
@@ -401,9 +413,67 @@ extension MotionLayer {
                     mixed.a = c.a * min(k, 1)
                     states[i].tint = states[i].tint.map { RGBA.lerp($0, mixed, 0.5) } ?? mixed
                 }
+                if a.fontWeightAxis > 0 {
+                    let rest = self[.fontWeightAxis].value(at: t)
+                    let base = rest > 0 ? rest : 400
+                    states[i].weightAxis = base + (a.fontWeightAxis - base) * k
+                }
+                if a.fontWidth > 0 {
+                    let rest = self[.fontWidth].value(at: t)
+                    let base = rest > 0 ? rest : 100
+                    states[i].widthAxis = base + (a.fontWidth - base) * k
+                }
             }
         }
         return states
+    }
+}
+
+/// A marker band behind one word (or every occurrence) of a text layer, swept in from the left.
+public struct TextHighlight: Codable, Equatable, Hashable, Sendable {
+    public var word: String
+    public var color: RGBA
+    /// Extra px around the word's box.
+    public var padding: Double
+    public var radius: Double
+    /// Scene second the sweep starts (nil = always fully shown) and how long it takes.
+    public var start: Double?
+    public var duration: Double
+    /// Slant in degrees for a hand-drawn marker look.
+    public var skew: Double
+    /// Every occurrence of the word, not only the first.
+    public var all: Bool
+
+    public init(word: String, color: RGBA, padding: Double = 6, radius: Double = 6, start: Double? = nil,
+                duration: Double = 0.4, skew: Double = 0, all: Bool = false) {
+        self.word = word; self.color = color; self.padding = padding; self.radius = radius
+        self.start = start; self.duration = duration; self.skew = skew; self.all = all
+    }
+
+    enum CodingKeys: String, CodingKey { case word, color, padding, radius, start, duration, skew, all }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(word: try c.decode(String.self, forKey: .word),
+                  color: try c.decodeIfPresent(RGBA.self, forKey: .color) ?? RGBA(hex: "#FFE600")!,
+                  padding: try c.decodeIfPresent(Double.self, forKey: .padding) ?? 6,
+                  radius: try c.decodeIfPresent(Double.self, forKey: .radius) ?? 6,
+                  start: try c.decodeIfPresent(Double.self, forKey: .start),
+                  duration: max(0.01, try c.decodeIfPresent(Double.self, forKey: .duration) ?? 0.4),
+                  skew: try c.decodeIfPresent(Double.self, forKey: .skew) ?? 0,
+                  all: try c.decodeIfPresent(Bool.self, forKey: .all) ?? false)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(word, forKey: .word)
+        try c.encode(color, forKey: .color)
+        if padding != 6 { try c.encode(padding, forKey: .padding) }
+        if radius != 6 { try c.encode(radius, forKey: .radius) }
+        try c.encodeIfPresent(start, forKey: .start)
+        if duration != 0.4 { try c.encode(duration, forKey: .duration) }
+        if skew != 0 { try c.encode(skew, forKey: .skew) }
+        if all { try c.encode(all, forKey: .all) }
     }
 }
 
@@ -482,6 +552,8 @@ extension MotionScene {
 
     /// The chain of parents' transforms (identity without a parent), before the camera.
     func ancestorsTransform(of layer: MotionLayer, at t: Double) -> CGAffineTransform {
+        // A layer on a bone lives in the bone's space (no layer parents).
+        if let b = layer.bone, let bt = boneTransform(b, at: t) { return bt }
         var m = CGAffineTransform.identity
         var seen: Set<String> = [layer.id]
         var next = layer.parent

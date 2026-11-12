@@ -86,8 +86,13 @@ extension MotionScene {
         let w = Double(width), h = Double(height), area = w * h
         let lookIds: Set<String> = [Self.lookGroupId, Self.lookFinishId]
         // Content layers: everything except the look's own layers and sound.
+        var timeOffset: [String: Double] = [:]
         let content = layers.filter { !lookIds.contains($0.id) }.flatMap { l -> [MotionLayer] in
-            l.type == .group ? [l] + l.children : [l]
+            if l.type == .group {
+                if l.localTime { for c in l.children { timeOffset[c.id] = l.start } }
+                return [l] + l.children
+            }
+            return [l]
         }.filter { $0.type != .audio && $0.type != .group }
         guard !content.isEmpty else { return out }
         let texts = content.filter { $0.type == .text && !$0.text.isEmpty }
@@ -167,9 +172,11 @@ extension MotionScene {
             var moving: [(Double, Double)] = []
             func add(_ a: Double, _ b: Double) { if b > a { moving.append((max(0, a), min(duration, b))) } }
             for l in content + layers.filter({ lookIds.contains($0.id) }).flatMap(\.children) {
+                let shift = timeOffset[l.id] ?? 0
+                func add(_ a: Double, _ b: Double) { if b > a { moving.append((max(0, a + shift), min(duration, b + shift))) } }
                 let (s, e) = life(l)
                 if l.type == .particles || l.type == .video || !l.wiggle.isEmpty || !l.audioReact.isEmpty
-                    || !l.links.isEmpty
+                    || !l.links.isEmpty || (l.type == .drawing && l.drawing.frames.count > 1)
                     || (l.type == .generator && [.spectrum, .waveform, .lightning, .noise].contains(l.generator.kind)) {
                     add(s, e)
                 }

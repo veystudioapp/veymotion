@@ -525,6 +525,7 @@ extension LayerType {
         case .generator: return "waveform.path.ecg"
         case .group: return "folder"
         case .model: return "cube"
+        case .drawing: return "scribble"
         }
     }
 }

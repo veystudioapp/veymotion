@@ -204,6 +204,29 @@ Easy Ease F9 / ⇧F9 / ⌘⇧F9).
   Camera `focus`/`aperture` add `focusBlur` to a layer's blur (and to `motionBounds` padding).
 - `text_to_path` / `combine_paths` (`PathOps.swift`) bake outlines with `FrameRenderer.glyphPaths` and macOS 14
   `CGPath` boolean ops; `trimSequential` trims a path's pieces end to end. `Beats.swift` (`sync_to_beats`) and
+  `LayerTreeOps.swift` reaches into groups (`removeLayerAnywhere`, `addLayer(_:into:)`, `moveLayerAnywhere`,
+  `duplicateLayer(_:count:dx:dy:dt:ids:)`), shifts a stretch of the timeline (`shiftTime(from:by:)`: whole layers
+  after `from`, later keyframes of spanning ones, the camera; `Animated.shifted(after:by:)`) and makes contact sheets
+  (`FrameRenderer.contactSheetPNG`, `render_frames`). `SVGImport.swift` (`import_vector`) parses SVG with XMLParser
+  into path layers (one per shape, transforms baked by `PathShape.applying`, inline styles, gradients by `url(#id)`,
+  nested `<g>` → groups) scaled to a box and centered on x/y; text/image/use/clip/CSS are skipped and reported.
+  `Rig.swift`: `MotionScene.bones` (a `Bone` chain: root x/y, length, relative `angle`, limits; `boneTransform` maps
+  bone space to scene px and `ancestorsTransform` uses it for layers with `bone` set, instead of layer parents),
+  `bind(_:toBone:at:)` (keeps the place, like `setParent`), `poseBones` / `solveIK` (CCD, keyframes via `keyed`:
+  the previous pose is held `hold` s before a new key on a constant track); `Drawing` / `DrawingFrame` /
+  `DrawingStroke` for `drawing` layers (frames of path strokes with holds at `drawing.fps`, `frameIndex(at:)`),
+  drawn by `drawDrawing` with a path cache; bounds cover every frame. Groups with `localTime` give their children a
+  clock that starts at the group's start (`drawGroup`/`drawGroup3D` shift `t`; `shiftTree`/`shiftLate` leave their
+  children alone; `DesignCheck` offsets them). Effects added as extras: `longShadow`/`longShadowAngle`
+  (+ `longShadowColor`, `drawLongShadow`: alpha swept by `PixelBuffer.smear`, doubling passes), `goo` (blur radius +
+  `alphaContrast` after the gaussian: metaballs), `halftone` (`PixelBuffer.halftone`), `inertia` / `squash`
+  (evaluated inside `MotionLayer.value`: damped overshoot after a key where the velocity drops, stretch along the
+  velocity), `fontWeightAxis` / `fontWidth` (+ `fontVariations`, `FrameRenderer.variant` sets CoreText variation
+  axes; text animators carry `fontWeightAxis`/`fontWidth` per unit through `GlyphState.weightAxis/widthAxis`),
+  `textHighlights` (`TextHighlight`, marker bands behind words from the CTLine offsets, swept by `start`/`duration`),
+  `Gradient` `.conic` (wedges, `Gradient.color(at:)`), `Repeater` `colors` + `randomX/Y/Rotation/Scale` + `seed`,
+  and transition types `circle` / `shape` (a growing matte path, through copies of the layers for the span) and
+  `match` (`shapeTransition` / `matchTransition` in `SceneOps.swift`).
   `Templates.swift` (`add_template`, groups whose parts are keyed with presets; text/ink colors and card style follow
   the background's luminance) are pure scene edits. `Looks.swift` (`apply_look` / `remove_look`, Add → Look in the app)
   builds the "finished" layers from ordinary ones: a `look` group at the bottom (radial-gradient backdrop, two blurred

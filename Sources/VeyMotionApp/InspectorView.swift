@@ -174,6 +174,7 @@ struct LayerInspector: View {
         case .generator: return "Generator"
         case .model: return "3D Object"
         case .group: return "Group"
+        case .drawing: return "Drawing"
         default: return "Shape"
         }
     }
@@ -393,6 +394,9 @@ struct LayerInspector: View {
             GeneratorEditor(layer: layer)
         case .model:
             ModelEditor(layer: layer)
+        case .drawing:
+            Text("\(layer.drawing.frames.count) frames at \(Int(layer.drawing.fps)) fps\(layer.drawing.loop ? ", looping" : "") · \(String(format: "%.2f", layer.drawing.cycle)) s per cycle. Frames are edited through the assistant (draw_frame) or the scene JSON.")
+                .font(.caption).foregroundStyle(.secondary)
         case .group:
             Text("\(layer.children.count) layers inside · \(layer.children.map(\.name).joined(separator: ", "))")
                 .font(.caption).foregroundStyle(.secondary).lineLimit(3)
@@ -1391,6 +1395,7 @@ struct GradientRows: View {
                 })) {
                     Text("Linear").tag(GradientType.linear)
                     Text("Radial").tag(GradientType.radial)
+                    Text("Conic").tag(GradientType.conic)
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
