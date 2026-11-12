@@ -143,6 +143,45 @@ final class ChatStore {
     static let maxVersions = 100
     /// Snapshots taken after each prompt that changed the scene, oldest first.
     private(set) var versions: [Version] = []
+
+    /// The project's standing brief: a look and a font pairing the agent follows without being told each time.
+    struct ChatStyle: Codable, Equatable {
+        /// `LookKind` raw value, nil = let the agent (or set_scene's auto look) choose.
+        var look: String?
+        /// A `fontPairings` title, nil = let the agent choose.
+        var fonts: String?
+
+        var isEmpty: Bool { look == nil && fonts == nil }
+        var lookKind: LookKind? { look.flatMap(LookKind.init(rawValue:)) }
+    }
+
+    /// Title font + text font, with the mood they suit.
+    struct FontPairing: Identifiable {
+        var title: String
+        var body: String
+        var mood: String
+        var id: String { "\(title) + \(body)" }
+    }
+
+    static let fontPairings: [FontPairing] = [
+        FontPairing(title: "Be Vietnam Pro", body: "Inter", mood: "Modern, Vietnamese-ready"),
+        FontPairing(title: "Playfair Display", body: "Inter", mood: "Elegant, editorial"),
+        FontPairing(title: "Space Grotesk", body: "IBM Plex Sans", mood: "Tech, product"),
+        FontPairing(title: "Montserrat", body: "Open Sans", mood: "Corporate, clean"),
+        FontPairing(title: "Bebas Neue", body: "Roboto", mood: "Bold, poster, sport"),
+        FontPairing(title: "Lora", body: "Source Sans 3", mood: "Warm, storytelling"),
+    ]
+
+    var style = ChatStyle() {
+        didSet { if style != oldValue { saveConversation() } }
+    }
+
+    /// After a turn that changed the scene, the design lint runs and (once per message) the findings are sent
+    /// back to the agent to fix.
+    var designCheckEnabled: Bool = UserDefaults.standard.object(forKey: "agent.designCheck") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(designCheckEnabled, forKey: "agent.designCheck") }
+    }
+    @ObservationIgnored private var autoChecks = 0
     /// The prompt being worked on and the scene before it.
     @ObservationIgnored private var turnStart: (prompt: String, scene: MotionScene)?
 
@@ -154,6 +193,7 @@ final class ChatStore {
         var sessionIds: [AgentProvider: String] = [:]
         var forkSessions: Set<AgentProvider> = []
         var versions: [Version] = []
+        var style = ChatStyle()
     }
 
     /// The project the shown conversation belongs to (nil = loose scene).
@@ -401,6 +441,7 @@ final class ChatStore {
         lastSentText = agentText
         lastSentImages = images
         stderrTail = ""
+        autoChecks = 0
         setActivity("Thinking…")
         turnStart = (text, scene.scene)
         do {
@@ -618,7 +659,8 @@ final class ChatStore {
         sessionIds = sessions
         saveConversation()
         parked[Self.key(project)] = Conversation(items: items, input: input, attachments: attachments,
-                                                 sessionIds: sessions, forkSessions: forkSessions, versions: versions)
+                                                 sessionIds: sessions, forkSessions: forkSessions, versions: versions,
+                                                 style: style)
     }
 
     /// The conversation's sessions, including the running agent's latest one.
@@ -665,6 +707,7 @@ final class ChatStore {
         attachments = c.attachments
         sessionIds = c.sessionIds
         forkSessions = c.forkSessions
+        style = c.style
         stderrTail = ""
         bump()
     }
@@ -680,6 +723,7 @@ final class ChatStore {
         var codexSessionId: String?
         var codexForkSession: Bool?
         var items: [SavedItem]
+        var style: ChatStyle?
     }
 
     private struct SavedItem: Codable {
@@ -695,7 +739,7 @@ final class ChatStore {
         guard let project else { return }
         let url = ProjectStore.chatURL(project)
         let sessions = currentSessions()
-        guard !items.isEmpty || !sessions.isEmpty else {
+        guard !items.isEmpty || !sessions.isEmpty || !style.isEmpty else {
             try? FileManager.default.removeItem(at: url)
             return
         }
@@ -714,7 +758,8 @@ final class ChatStore {
         let chat = SavedChat(project: project.path, sessionId: sessions[.claude],
                              forkSession: forkSessions.contains(.claude) ? true : nil,
                              codexSessionId: sessions[.codex],
-                             codexForkSession: forkSessions.contains(.codex) ? true : nil, items: saved)
+                             codexForkSession: forkSessions.contains(.codex) ? true : nil, items: saved,
+                             style: style.isEmpty ? nil : style)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let data = try? encoder.encode(chat) else { return }
@@ -743,7 +788,17 @@ final class ChatStore {
         var forks = Set<AgentProvider>()
         if chat.sessionId != nil && (copied || chat.forkSession == true) { forks.insert(.claude) }
         if chat.codexSessionId != nil && (copied || chat.codexForkSession == true) { forks.insert(.codex) }
-        return Conversation(items: items, sessionIds: sessions, forkSessions: forks)
+        return Conversation(items: items, sessionIds: sessions, forkSessions: forks, style: chat.style ?? ChatStyle())
+    }
+
+    /// The standing brief for the context line, or nil when nothing is set.
+    private var styleLine: String? {
+        var parts: [String] = []
+        if let k = style.lookKind { parts.append("look \(k.rawValue) (apply_look \(k.rawValue) on a new scene; \(k.isLight ? "dark text" : "light text"))") }
+        if let id = style.fonts, let p = Self.fontPairings.first(where: { $0.id == id }) {
+            parts.append("fonts \"\(p.title)\" for titles + \"\(p.body)\" for the rest (import from Google Fonts with search_stock kind font + import_stock when not installed)")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: "; ")
     }
 
     /// Prefixed to every message so "this"/"here"/"now" resolve against the editor state.
@@ -758,8 +813,38 @@ final class ChatStore {
             if folders.count > 40 { folders = Array(folders.prefix(40)) + ["…"] }
             project = "; project=\(p.lastPathComponent) (assets go in its folders: \(folders.joined(separator: ", ")))"
         }
-        return String(format: "[VeyMotion context: playhead=%.2fs; selected=%@; scene=%dx%d %dfps %.2fs; layers (bottom→top)=%@%@]",
-                      scene.time, selected, s.width, s.height, s.fps, s.duration, ids.joined(separator: ", "), project)
+        let design = s.layers.isEmpty ? "empty scene" : MotionScene.designSummary(s.designIssues(renderer: FrameRenderer()))
+        let style = styleLine.map { "; style=\($0)" } ?? ""
+        return String(format: "[VeyMotion context: playhead=%.2fs; selected=%@; scene=%dx%d %dfps %.2fs; layers (bottom→top)=%@%@; design=%@%@]",
+                      scene.time, selected, s.width, s.height, s.fps, s.duration, ids.joined(separator: ", "), project, design, style)
+    }
+
+    /// After a turn that changed the scene: lint it and, once per user message, hand the findings back.
+    /// Returns true when a follow-up was sent (the turn goes on).
+    private func autoDesignCheck() -> Bool {
+        guard designCheckEnabled, autoChecks < 1, let start = turnStart, let agent, !stoppedByUser else { return false }
+        let now = scene.scene
+        guard now != start.scene, !now.layers.isEmpty else { return false }
+        let issues = now.designIssues(renderer: FrameRenderer()).filter { $0.severity >= .warning }
+        guard !issues.isEmpty else { return false }
+        autoChecks += 1
+        let codes = issues.map(\.code).joined(separator: ", ")
+        append(.notice("Design check: \(issues.count) finding\(issues.count == 1 ? "" : "s") (\(codes)). Asking \(provider.displayName) to fix them.",
+                       isError: false))
+        let text = "[Design check after your changes]\n" + MotionScene.designReport(issues)
+            + "\nFix these now (or say in one line why a finding is intended for this piece), render a frame to confirm, then reply briefly."
+        isBusy = true
+        setActivity("Fixing design…")
+        lastSentText = text
+        lastSentImages = []
+        stderrTail = ""
+        do { try agent.send(contextLine() + "\n" + text, images: []) } catch {
+            isBusy = false
+            activity = nil
+            append(.notice("Could not send the design check: \(error.localizedDescription)", isError: true))
+            return false
+        }
+        return true
     }
 
     // MARK: - Events
@@ -821,6 +906,7 @@ final class ChatStore {
             isBusy = false
             activity = nil
             retriedFresh = false
+            if !isError, autoDesignCheck() { return }
             recordVersion()
             if isError {
                 append(.notice(explainFailure(result ?? "\(provider.cliName) reported an error.", details: stderrTail),

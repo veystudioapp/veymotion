@@ -21,6 +21,43 @@ enum Docs {
     When a tool says Pro is needed, tell the user (Settings → Account) and offer a Free alternative (macOS voices,
     stock photos, manual keyframes, building the layers yourself) instead of retrying.
 
+    LOOK & DESIGN (read this before building anything: it is what separates a finished video from a rough draft)
+    A composition made of flat fills on a flat background looks like a draft. Professional motion graphics always
+    have three layers of depth, and every new piece you build must have them unless the user asks for a flat style:
+    1. A BACKGROUND WITH DEPTH: never a plain color. Call apply_look first (one call, see its description) or build it
+       yourself: a full-frame rect with a radial gradient (lighter near the subject, dark edges), two big blurred
+       ellipses (blur 150–300, blendMode screen or add on dark looks, opacity 0.4–0.6) in two related colors that
+       drift slowly (wiggle x/y amount 40–80, frequency 0.08), a dust or bokeh particles layer at opacity 0.3–0.5, and
+       on top a vignette (radial gradient from transparent to #000000AA) and a grain layer (mid-gray rect, blendMode
+       overlay, grain 0.15–0.3). Light looks: white → light gray gradient, pastel blobs, no grain, dark text.
+    2. A SUBJECT WITH LIGHT: text and shapes carry shadowOpacity 0.3–0.5 (shadowY 10–20, shadowBlur 30–50) on light
+       looks, or glow 0.5–1.5 on dark looks; gradients instead of flat fills on big shapes, cards and hero titles
+       (two neighboring hues, e.g. "#7C5CFF" → "#4FD1FF"); cards get cornerRadius 16–28, a 1 px stroke of white at
+       8–15% alpha and a translucent fill (#FFFFFF14) on dark looks (glass), or white with a soft shadow on light.
+    3. SECONDARY MOTION: something is always moving slowly — the look's blobs and particles, a camera zoom 1 → 1.04
+       over the whole piece (or a 2–3% push per section), loop/wiggle on decorative shapes, and the subject's own
+       entrance overshoot (easeOutBack / easeOutExpo / spring), so no frame is static.
+    Typography: choose a font family for the mood (see FONTS; the system font is a last resort), 1–2 families per
+       piece. Build a hierarchy: hero 120–180 px (heavy/black, letterSpacing -2 to -4), heading 64–96, body 32–44
+       (medium, color at 70–80% of the text color, e.g. "#C8CAD6" on dark), label/eyebrow 22–28 (semibold, uppercase,
+       letterSpacing 3–6, in the accent color). Lines of body text stay under ~45 characters (maxWidth).
+    Color: pick ONE palette and stick to it: a background family (2 close dark or light tones), 1 accent (used on
+       labels, rules, the key number, the main blob), 1 secondary hue related to the accent (second blob, gradients),
+       and text in near-white (#F2F3F7) or near-black (#15171C), never pure #FFFFFF on pure #000000. Good pairs:
+       indigo #6C5CE7 + cyan #4FD1FF; coral #FF6B6B + gold #FFD166; emerald #10B981 + mint #A7F3D0;
+       magenta #FF2D95 + cyan #00D4FF (neon); orange #FF8C42 + plum #C34A8F (retro).
+    Timing and rhythm: entrances 0.5–0.8 s staggered 0.08–0.15 s, exits shorter (0.3–0.5 s, easeIn), hold readable
+       text ~1 s per 4 words, transitions between sections with a wipe, a shape morph or a camera move (not just a
+       cut), and sound: a whoosh on moves, a soft hit on landings, music ducked under voice (see AUDIO).
+    Before you say you are done, run check_design (it finds the items below automatically; set_scene runs it too) and
+    render 2–3 frames; fix everything it lists and anything you see that fails this list:
+       - Is the background flat? → look layers (gradient, blobs, grain, vignette).
+       - Does the subject sit on the background without a shadow or glow? → add one.
+       - Is any text pure white on pure black, the system font, or all the same size? → palette, font, hierarchy.
+       - Are there frames where nothing moves? → ambient motion, camera drift.
+       - Do entrances just fade or slide linearly? → overshoot easings, stagger, motionBlur on fast moves.
+       - Anything overlapping, clipped, or closer than 80 px to the edge? → fix layout.
+
     LAYER
     Common: id, name, type ("rect" | "ellipse" | "path" | "text" | "image" | "video" | "audio" | "particles" | "generator" | "group" | "model"), start, end (seconds, end optional = scene end),
             x, y, scale, rotation (degrees), opacity (0..1)
@@ -547,6 +584,8 @@ enum Docs {
       or add a small credits text at the end if they want it in the video.
 
     WORKFLOW TIPS
+    - Start every new composition with the LOOK & DESIGN rules above: set_scene with the settings and content, then
+      apply_look (or your own background/finish layers), then check the list at the end of that section.
     - For a short piece (up to ~15 layers), build it in one set_scene call, then refine with update_layer / set_keyframes.
     - For a longer piece, plan it as time sections (e.g. 0–8s intro, 8–20s concept 1, …). Call set_scene with the
       settings and the first section, then add_layers once per section. Give each section's layers start/end so the
@@ -571,12 +610,20 @@ enum Docs {
       },
       {
         "name": "set_scene",
-        "description": "Replace the entire scene. Use this to build a new composition in one step. See the server instructions for the format.",
+        "description": "Replace the entire scene. Use this to build a new composition in one step. See the server instructions for the format. When the scene's background is one flat color, a look is applied automatically (`look` auto): pass a look kind to choose it, or \"none\" to keep the scene exactly as given. The result includes a design check: fix what it lists before you finish.",
         "inputSchema": {
           "type": "object",
-          "properties": { "scene": { "type": "object", "description": "Full scene JSON: width, height, fps, duration, background, layers." } },
+          "properties": {
+            "scene": { "type": "object", "description": "Full scene JSON: width, height, fps, duration, background, layers." },
+            "look": { "type": "string", "enum": ["auto", "none", "cinematic", "clean", "neon", "retro", "sunset", "studio"], "default": "auto" }
+          },
           "required": ["scene"]
         }
+      },
+      {
+        "name": "check_design",
+        "description": "Lints the scene for what makes a video look like a draft: flat background, pure white on pure black, system font, no type hierarchy, layers without shadow/glow/gradient, stretches where nothing moves, text within 80 px of the edge, linear entrances, and (hint) only text and boxes. Returns findings with a fix for each. Run it before you say you are done; fix errors and warnings (or tell the user why one is intended).",
+        "inputSchema": { "type": "object", "properties": {} }
       },
       {
         "name": "update_scene",
@@ -732,6 +779,28 @@ enum Docs {
           },
           "required": ["kind"]
         }
+      },
+      {
+        "name": "apply_look",
+        "description": "Gives the scene a finished look in one call: sets the background, adds a `look` group at the bottom (radial-gradient backdrop, two slow drifting blurred color blobs, ambient dust/bokeh particles) and a `look-finish` group on top (vignette, film grain), plus a slow camera push-in when the scene has no camera. Kinds: cinematic (deep navy/black, blue + teal, dust: titles, tech, trailers), clean (white/light gray, pastel blobs, no grain: product, corporate, explainer; use dark text), neon (black with magenta + cyan glow, bokeh: music, gaming), retro (warm brown/plum, orange + pink, heavy grain + scanlines: vintage), sunset (coral → violet, golden blobs: lifestyle, travel), studio (charcoal with a top spotlight, one accent blob: business, data). Applying again replaces the previous look's layers; the parts are normal layers you can edit by id (look-bg, look-light-1, look-light-2, look-particles, look-vignette, look-grain). Content layers keep their place between the two groups: call it after set_scene, or before add_layers.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "kind": { "type": "string", "enum": ["cinematic", "clean", "neon", "retro", "sunset", "studio"] },
+            "accent": { "type": "string", "description": "Accent color #RRGGBB for the main blob (and a tint of the gradient); default per kind." },
+            "intensity": { "type": "number", "default": 1, "description": "0.5 subtle … 1.5 strong: blob opacity, grain and vignette." },
+            "particles": { "type": "boolean", "default": true },
+            "grain": { "type": "boolean", "default": true },
+            "vignette": { "type": "boolean", "default": true },
+            "cameraDrift": { "type": "boolean", "default": true, "description": "Slow zoom 1 → 1.04 over the scene (only when it has no camera yet)." }
+          },
+          "required": ["kind"]
+        }
+      },
+      {
+        "name": "remove_look",
+        "description": "Removes the layers added by apply_look (background color and camera stay).",
+        "inputSchema": { "type": "object", "properties": {} }
       },
       {
         "name": "text_to_path",

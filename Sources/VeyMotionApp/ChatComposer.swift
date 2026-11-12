@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
+import VeyMotionCore
 import VeyMotionMCP
 
 /// The chat's input box: Return sends, ⇧Return (or ⌥Return) breaks the line, pasted images become
@@ -96,6 +97,7 @@ struct ChatComposer: View {
     private var toolbar: some View {
         HStack(spacing: 12) {
             ModelPickerButton()
+            StylePickerButton()
 
             Spacer(minLength: 0)
 
@@ -161,6 +163,95 @@ private struct ModelPickerButton: View {
         .popover(isPresented: $open, arrowEdge: .top) {
             ModelPicker(close: { open = false })
         }
+    }
+}
+
+/// "Style ⌄" / "Cinematic · Playfair ⌄": the project's standing look and font pairing, sent with every message,
+/// and the switch for the automatic design check.
+private struct StylePickerButton: View {
+    @Environment(ChatStore.self) private var chat
+    @State private var open = false
+    @State private var hover = false
+
+    private var label: String {
+        var parts: [String] = []
+        if let k = chat.style.lookKind { parts.append(k.title) }
+        if let id = chat.style.fonts, let p = ChatStore.fontPairings.first(where: { $0.id == id }) { parts.append(p.title) }
+        return parts.isEmpty ? "Style" : parts.joined(separator: " · ")
+    }
+
+    var body: some View {
+        Button { open.toggle() } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "paintpalette")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(chat.style.isEmpty ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.accentColor))
+                Text(label).lineLimit(1)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(RoundedRectangle(cornerRadius: 6).fill(Color.secondary.opacity(hover || open ? 0.12 : 0)))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hover = $0 }
+        .help("Look and fonts the assistant uses for this project, and the automatic design check")
+        .popover(isPresented: $open, arrowEdge: .top) {
+            StylePicker()
+        }
+    }
+}
+
+private struct StylePicker: View {
+    @Environment(ChatStore.self) private var chat
+
+    var body: some View {
+        @Bindable var chat = chat
+        VStack(alignment: .leading, spacing: 2) {
+            header("Look")
+            PickerRow(title: "Let the assistant choose", checked: chat.style.look == nil, trailing: nil, chevron: false) {
+                chat.style.look = nil
+            }
+            ForEach(LookKind.allCases, id: \.self) { k in
+                PickerRow(title: k.title, checked: chat.style.look == k.rawValue, trailing: nil, chevron: false,
+                          subtitle: k.summary.components(separatedBy: " (").first) {
+                    chat.style.look = k.rawValue
+                }
+            }
+            Divider().padding(.vertical, 4)
+            header("Fonts")
+            PickerRow(title: "Let the assistant choose", checked: chat.style.fonts == nil, trailing: nil, chevron: false) {
+                chat.style.fonts = nil
+            }
+            ForEach(ChatStore.fontPairings) { p in
+                PickerRow(title: "\(p.title) + \(p.body)", checked: chat.style.fonts == p.id, trailing: nil, chevron: false,
+                          subtitle: p.mood) {
+                    chat.style.fonts = p.id
+                }
+            }
+            Divider().padding(.vertical, 4)
+            Toggle(isOn: $chat.designCheckEnabled) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Check design after each change")
+                    Text("Flat background, system font, unlit layers, static stretches… are sent back to fix once.")
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                }
+            }
+            .toggleStyle(.checkbox)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+        }
+        .padding(6)
+        .frame(width: 300)
+        .font(.system(size: 12))
+    }
+
+    private func header(_ s: String) -> some View {
+        Text(s.uppercased()).font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
+            .padding(.horizontal, 8).padding(.top, 4).padding(.bottom, 2)
     }
 }
 

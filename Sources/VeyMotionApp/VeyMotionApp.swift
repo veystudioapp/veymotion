@@ -100,6 +100,9 @@ struct VeyMotionApp: App {
                 Menu("Add Template") {
                     ForEach(TemplateKind.allCases, id: \.self) { k in Button(k.title) { store.addTemplate(k) } }
                 }
+                Menu("Apply Look") {
+                    ForEach(LookKind.allCases, id: \.self) { k in Button(k.title) { store.applyLook(k) } }
+                }
                 Menu("Add Generator") {
                     ForEach(GeneratorKind.allCases, id: \.self) { k in Button(k.title) { store.addGenerator(k) } }
                 }

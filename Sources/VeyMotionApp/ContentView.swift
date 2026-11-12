@@ -149,6 +149,9 @@ extension ContentView {
             Menu("Template") {
                 ForEach(TemplateKind.allCases, id: \.self) { k in Button(k.title) { store.addTemplate(k) } }
             }
+            Menu("Look") {
+                ForEach(LookKind.allCases, id: \.self) { k in Button(k.title) { store.applyLook(k) } }
+            }
         } label: {
             Label("Add", systemImage: "plus")
         }

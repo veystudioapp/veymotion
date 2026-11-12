@@ -303,7 +303,11 @@ vmotion render scene.json out.mp4
   glitch, flash, blur between two layers), `group_layers`/`ungroup`, `track_motion` (Vision object tracking that pins a
   layer to something in a video), `auto_reframe` (Vision saliency keeps the subject centered for 9:16 exports),
   `stabilize` (removes camera shake), `sync_to_beats` (presets, pulses, cuts or flashes on the music's beats),
-  `add_template` (lower third, call-out, subscribe, end card, title card, quote), `text_to_path` (text → vector
+  `add_template` (lower third, call-out, subscribe, end card, title card, quote), `apply_look` (cinematic, clean,
+  neon, retro, sunset, studio: gradient backdrop, drifting lights, dust, vignette, grain and a slow camera push in one
+  call; also Add → Look in the app; `set_scene` adds one by itself when the background is flat), `check_design`
+  (lints for what makes a draft: flat background, system font, unlit layers, static stretches, text on the edge;
+  the in-app chat runs it after every change and hands the findings back to the assistant), `text_to_path` (text → vector
   paths, whole or per letter), `combine_paths` (union / subtract / intersect / exclude outlines).
 - **Particles**: `{"type": "particles", "x": 960, "y": 900, "width": 220, "height": 0, "particles": {"preset": "fire"}}`.
   Presets: `fire`, `smoke`, `dust`, `sparks`, `snow`, `rain`, `confetti`, `bokeh`, `magic`, `explosion`; any field

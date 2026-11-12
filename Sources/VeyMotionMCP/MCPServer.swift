@@ -94,8 +94,27 @@ public final class MCPServer {
             guard let obj = a["scene"] as? [String: Any] else { throw ToolError("`scene` must be an object") }
             var scene = try SceneJSON.decode(MotionScene.self, fromObject: obj)
             let problems = scene.refreshMediaInfo()
+            // A flat scene gets a look by default, so a one-line prompt still comes out finished.
+            let lookArg = (a["look"] as? String ?? "auto").lowercased()
+            var lookNote = ""
+            if lookArg != "none" && lookArg != "auto" {
+                guard let kind = LookKind(rawValue: lookArg) else {
+                    throw ToolError("`look` must be auto, none or one of \(LookKind.allCases.map(\.rawValue))")
+                }
+                try scene.applyLook(kind)
+                lookNote = " Applied the \(kind.title) look."
+            } else if lookArg == "auto", let kind = try scene.applyAutoLook() {
+                lookNote = " The background was flat, so the \(kind.title) look was added (groups look / look-finish; apply_look to change it, remove_look or \"look\":\"none\" to drop it)."
+            }
             try host.mutate("Set Scene") { $0 = scene }
-            return text("Scene set: \(scene.width)x\(scene.height) @\(scene.fps)fps, \(scene.duration)s, \(scene.layers.count) layers: \(scene.layers.map(\.id).joined(separator: ", "))" + warnings(problems + fontNotes(scene.layers) + modelNotes(scene.layers)))
+            let design = scene.designIssues(renderer: FrameRenderer()).filter { $0.severity >= .warning }
+            let designNote = design.isEmpty ? "" : "\n" + MotionScene.designReport(design) + "\nFix these before you finish (check_design re-checks)."
+            return text("Scene set: \(scene.width)x\(scene.height) @\(scene.fps)fps, \(scene.duration)s, \(scene.layers.count) layers: \(scene.layers.map(\.id).joined(separator: ", "))." + lookNote + warnings(problems + fontNotes(scene.layers) + modelNotes(scene.layers)) + designNote)
+
+        case "check_design":
+            let scene = host.currentScene()
+            let issues = scene.designIssues(renderer: FrameRenderer())
+            return text(MotionScene.designReport(issues))
 
         case "update_scene":
             guard let changes = a["changes"] as? [String: Any] else { throw ToolError("`changes` must be an object") }
@@ -529,6 +548,27 @@ public final class MCPServer {
             try host.mutate("Add \(kind.title)") { gid = try $0.addTemplate(kind, id: a["id"] as? String, options: o) }
             let g = try host.currentScene().layer(gid)
             return text("Added \(kind.title) '\(gid)' from \(o.start)s for \(o.duration)s: a group of \(g.children.map(\.id).joined(separator: ", ")). Edit its parts by id (text, colors, timing) like any layer.")
+
+        case "apply_look":
+            guard let kind = LookKind(rawValue: try string(a, "kind")) else {
+                throw ToolError("`kind` must be one of \(LookKind.allCases.map(\.rawValue))")
+            }
+            var o = LookOptions()
+            o.accent = (a["accent"] as? String).flatMap(RGBA.init(hex:))
+            o.intensity = number(a["intensity"]) ?? 1
+            o.particles = a["particles"] as? Bool ?? true
+            o.grain = a["grain"] as? Bool ?? true
+            o.vignette = a["vignette"] as? Bool ?? true
+            o.cameraDrift = a["cameraDrift"] as? Bool ?? true
+            var ids: [String] = []
+            try host.mutate("Apply \(kind.title) Look") { ids = try $0.applyLook(kind, options: o) }
+            let s = host.currentScene()
+            let parts = ids.compactMap { try? s.layer($0) }.flatMap { $0.children.map(\.id) }
+            return text("Applied the \(kind.title) look (\(kind.summary)): groups \(ids.joined(separator: ", ")) with \(parts.joined(separator: ", ")). \(kind.isLight ? "This is a light look: use dark text (#15171C) and shadows instead of glow." : "Dark look: near-white text (#F2F3F7), glow or soft shadows on the subject.") Render a frame to check.")
+
+        case "remove_look":
+            try host.mutate("Remove Look") { try $0.removeLook() }
+            return text("Removed the look layers.")
 
         case "text_to_path":
             let id = try string(a, "id")

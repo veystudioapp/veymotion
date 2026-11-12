@@ -343,6 +343,13 @@ final class SceneStore: SceneHost {
         catch { message = error.localizedDescription }
     }
 
+    func applyLook(_ kind: LookKind) {
+        var ids: [String] = []
+        do { try apply("Apply \(kind.title) Look") { ids = try $0.applyLook(kind) } }
+        catch { message = error.localizedDescription; return }
+        selection = ids.first
+    }
+
     func addTemplate(_ kind: TemplateKind) {
         var o = TemplateOptions()
         o.start = time

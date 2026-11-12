@@ -41,12 +41,16 @@ extension MotionScene {
         let s = o.start, e = o.start + max(o.duration, 1)
         let accent = o.accent ?? RGBA(hex: "#FF4D6D")!
         let base = id ?? kind.rawValue
+        // Text follows the background: near-white on dark scenes, near-black on light ones (see `apply_look` clean).
+        let onLight = background.r * 0.2126 + background.g * 0.7152 + background.b * 0.0722 > 0.6
+        let ink = onLight ? RGBA(hex: "#15171C")! : RGBA(hex: "#F2F3F7")!
+        let inkSoft = onLight ? RGBA(hex: "#4A4E5C")! : RGBA(r: 0.8, g: 0.82, b: 0.88)
         // Child ids: "<group>-<part>" made unique scene-wide by addLayer.
         var children: [MotionLayer] = []
         func text(_ part: String, _ string: String, size: Double, weight: String = "bold", x: Double, y: Double,
-                  color: RGBA = .white, align: TextAlign = .center) -> MotionLayer {
+                  color: RGBA? = nil, align: TextAlign = .center) -> MotionLayer {
             var l = MotionLayer(id: "\(base)-\(part)", name: part.capitalized, type: .text, x: x, y: y)
-            l.text = string; l.fontSize = size; l.fontWeight = weight; l.color = .constant(color); l.align = align
+            l.text = string; l.fontSize = size; l.fontWeight = weight; l.color = .constant(color ?? ink); l.align = align
             l.fontName = o.fontName
             l.start = s; l.end = e
             return l
@@ -57,6 +61,29 @@ extension MotionScene {
             l.start = s; l.end = e
             return l
         }
+        // Finishing touches (see LOOK & DESIGN in the agent docs): nothing sits flat on the background.
+        func shadow(_ l: inout MotionLayer, _ opacity: Double = 0.4) {
+            l[.shadowOpacity] = .constant(opacity); l[.shadowY] = .constant(14); l[.shadowBlur] = .constant(36)
+        }
+        func glow(_ l: inout MotionLayer, _ strength: Double, color: RGBA? = nil, radius: Double = 40) {
+            l[.glow] = .constant(strength); l[.glowRadius] = .constant(radius); l.glowColor = color
+        }
+        func glass(_ l: inout MotionLayer) {
+            if onLight {
+                l.fill = .constant(RGBA(r: 1, g: 1, b: 1, a: 0.75))
+                l.stroke = .constant(RGBA(r: 1, g: 1, b: 1, a: 0.9)); l.strokeWidth = .constant(1.5)
+                shadow(&l, 0.18)
+            } else {
+                l.gradient = Gradient(stops: [GradientStop(offset: 0, color: RGBA(r: 1, g: 1, b: 1, a: 0.14)),
+                                              GradientStop(offset: 1, color: RGBA(r: 1, g: 1, b: 1, a: 0.05))], angle: 90)
+                l.stroke = .constant(RGBA(r: 1, g: 1, b: 1, a: 0.16)); l.strokeWidth = .constant(1.5)
+                shadow(&l, 0.35)
+            }
+        }
+        func shaded(_ color: RGBA) -> Gradient {
+            Gradient(stops: [GradientStop(offset: 0, color: color.mixed(with: .white, 0.18)),
+                             GradientStop(offset: 1, color: color.mixed(with: .black, 0.18))], angle: 90)
+        }
         var presets: [(String, Preset, Double, Double)] = [] // (child id, preset, start, duration)
         switch kind {
         case .lowerThird:
@@ -66,11 +93,18 @@ extension MotionScene {
             var panel = rect("panel", x: left + tw / 2 + 24, y: top + h * 0.04, w: tw + 48, h: h * 0.13,
                              color: RGBA(r: 0.05, g: 0.06, b: 0.09, a: 0.82), radius: 10)
             panel.wipeStyle = WipeStyle(type: .linear, angle: 180, feather: 30)
+            panel.gradient = Gradient(stops: [GradientStop(offset: 0, color: RGBA(r: 0.08, g: 0.09, b: 0.14, a: 0.9)),
+                                              GradientStop(offset: 1, color: RGBA(r: 0.03, g: 0.04, b: 0.07, a: 0.82))], angle: 90)
+            panel.stroke = .constant(RGBA(r: 1, g: 1, b: 1, a: 0.12)); panel.strokeWidth = .constant(1.5)
+            shadow(&panel, 0.45)
             children.append(panel)
-            children.append(rect("bar", x: left + 6, y: top + h * 0.04, w: 12, h: h * 0.13, color: accent, radius: 4))
+            var bar = rect("bar", x: left + 6, y: top + h * 0.04, w: 12, h: h * 0.13, color: accent, radius: 4)
+            glow(&bar, 0.8, color: accent, radius: 24)
+            children.append(bar)
             children.append(text("title", title, size: h * 0.05, weight: "heavy", x: left + 36 + tw / 2, y: top + h * 0.015,
                                  align: .left))
             children[children.count - 1].maxWidth = tw
+            children[children.count - 1][.letterSpacing] = .constant(-1)
             children.append(text("subtitle", o.subtitle ?? "Title · Company", size: h * 0.028, weight: "medium",
                                  x: left + 36 + tw / 2, y: top + h * 0.075, color: RGBA(r: 0.8, g: 0.82, b: 0.88), align: .left))
             children[children.count - 1].maxWidth = tw
@@ -82,16 +116,19 @@ extension MotionScene {
             let lx = px + w * 0.12, ly = py - h * 0.16
             var dot = MotionLayer(id: "\(base)-dot", name: "Dot", type: .ellipse, x: px, y: py)
             dot.width = .constant(26); dot.height = .constant(26); dot.fill = .constant(accent)
-            dot.stroke = .constant(.white); dot.strokeWidth = .constant(4); dot.start = s; dot.end = e
+            dot.stroke = .constant(ink); dot.strokeWidth = .constant(4); dot.start = s; dot.end = e
+            glow(&dot, 1.2, color: accent, radius: 30)
             children.append(dot)
             var line = MotionLayer(id: "\(base)-line", name: "Line", type: .path, x: 0, y: 0)
             line.d = .constant((try? PathShape("M \(px) \(py) L \(px + w * 0.05) \(ly) L \(lx + w * 0.11) \(ly)")) ?? .zero)
-            line.fill = .constant(.clear); line.stroke = .constant(.white); line.strokeWidth = .constant(3)
+            line.fill = .constant(.clear); line.stroke = .constant(ink); line.strokeWidth = .constant(3)
             line.start = s; line.end = e
+            glow(&line, 0.5, radius: 20)
             children.append(line)
             children.append(text("title", o.title ?? "Look here", size: h * 0.04, weight: "heavy", x: lx + w * 0.11, y: ly - h * 0.035))
+            shadow(&children[children.count - 1], 0.5)
             children.append(text("subtitle", o.subtitle ?? "A detail worth noticing", size: h * 0.024, weight: "medium",
-                                 x: lx + w * 0.11, y: ly + h * 0.03, color: RGBA(r: 0.85, g: 0.87, b: 0.92)))
+                                 x: lx + w * 0.11, y: ly + h * 0.03, color: inkSoft))
             presets = [("dot", .popIn, s, 0.4), ("line", .drawOn, s + 0.2, 0.6), ("title", .textPop, s + 0.6, 0.5),
                        ("subtitle", .fadeIn, s + 0.8, 0.5), ("dot", .pulse, s + 1.4, 0.6),
                        ("title", .fadeOut, e - 0.5, 0.4), ("subtitle", .fadeOut, e - 0.5, 0.4), ("dot", .popOut, e - 0.4, 0.4)]
@@ -102,11 +139,12 @@ extension MotionScene {
             let click = s + 1.3
             button.fill = .keyframes([ColorKeyframe(t: click, v: RGBA(hex: "#FF0033")!, easing: .linear),
                                       ColorKeyframe(t: click + 0.1, v: RGBA(hex: "#3A3D46")!, easing: .hold)])
+            shadow(&button, 0.45)
             children.append(button)
-            var label = text("label", o.title ?? "SUBSCRIBE", size: bh * 0.4, weight: "heavy", x: cx, y: cy)
+            var label = text("label", o.title ?? "SUBSCRIBE", size: bh * 0.4, weight: "heavy", x: cx, y: cy, color: .white)
             label.end = click + 0.1
             children.append(label)
-            var done = text("done", o.subtitle ?? "SUBSCRIBED ✓", size: bh * 0.36, weight: "heavy", x: cx, y: cy)
+            var done = text("done", o.subtitle ?? "SUBSCRIBED ✓", size: bh * 0.36, weight: "heavy", x: cx, y: cy, color: .white)
             done.start = click + 0.1
             children.append(done)
             var cursor = MotionLayer(id: "\(base)-cursor", name: "Cursor", type: .path, x: cx + bw * 0.25, y: cy + bh * 0.9)
@@ -127,23 +165,29 @@ extension MotionScene {
             let cardW = w * 0.3, cardH = cardW * 9 / 16, gy = h * 0.55
             for (k, dx) in [-0.19, 0.19].enumerated() {
                 var c = rect("video\(k + 1)", x: w / 2 + w * dx, y: gy, w: cardW, h: cardH,
-                             color: RGBA(r: 1, g: 1, b: 1, a: 0.08), radius: 16)
-                c.stroke = .constant(RGBA(r: 1, g: 1, b: 1, a: 0.5)); c.strokeWidth = .constant(3)
+                             color: RGBA(r: 1, g: 1, b: 1, a: 0.08), radius: 20)
+                glass(&c)
                 children.append(c)
                 children.append(text("label\(k + 1)", k == 0 ? "Next video" : "Best of", size: h * 0.03, weight: "semibold",
-                                     x: w / 2 + w * dx, y: gy + cardH / 2 + h * 0.04, color: RGBA(r: 0.8, g: 0.82, b: 0.88)))
+                                     x: w / 2 + w * dx, y: gy + cardH / 2 + h * 0.04, color: inkSoft))
             }
             var sub = MotionLayer(id: "\(base)-sub", name: "Subscribe", type: .ellipse, x: w / 2, y: h * 0.86)
             sub.width = .constant(h * 0.13); sub.height = .constant(h * 0.13); sub.fill = .constant(accent)
+            sub.gradient = shaded(accent)
+            glow(&sub, 0.9, color: accent, radius: 50)
             sub.start = s; sub.end = e
             children.append(sub)
-            children.append(text("subtext", o.subtitle ?? "Subscribe", size: h * 0.025, weight: "bold", x: w / 2, y: h * 0.86))
+            children.append(text("subtext", o.subtitle ?? "Subscribe", size: h * 0.025, weight: "bold", x: w / 2, y: h * 0.86, color: .white))
             presets = [("title", .textRise, s, 0.7), ("video1", .zoomIn, s + 0.3, 0.6), ("video2", .zoomIn, s + 0.45, 0.6),
                        ("label1", .fadeIn, s + 0.7, 0.4), ("label2", .fadeIn, s + 0.8, 0.4), ("sub", .bounceIn, s + 0.9, 0.7),
                        ("subtext", .fadeIn, s + 1.2, 0.3), ("sub", .heartbeat, s + 2, 1)]
         case .titleCard:
             let cx = o.x ?? w / 2, cy = o.y ?? h * 0.47
             var title = text("title", o.title ?? "THE TITLE", size: h * 0.12, weight: "black", x: cx, y: cy)
+            title[.letterSpacing] = .constant(-2)
+            title.gradient = Gradient(stops: [GradientStop(offset: 0, color: ink),
+                                              GradientStop(offset: 1, color: ink.mixed(with: accent, 0.25))], angle: 90)
+            glow(&title, 0.6, color: accent, radius: 70)
             title[.shine] = .constant(1.2)
             title[.shinePosition] = .keyframes([MotionKeyframe(t: s + 0.8, v: -0.3, easing: .linear),
                                                 MotionKeyframe(t: s + 2, v: 1.3, easing: .curve(.cubic, .inOut))])
@@ -152,20 +196,24 @@ extension MotionScene {
             rule.d = .constant((try? PathShape("M -\(w * 0.16) 0 L \(w * 0.16) 0")) ?? .zero)
             rule.fill = .constant(.clear); rule.stroke = .constant(accent); rule.strokeWidth = .constant(6)
             rule.start = s; rule.end = e
+            glow(&rule, 1, color: accent, radius: 30)
             children.append(rule)
             children.append(text("subtitle", o.subtitle ?? "A short subtitle", size: h * 0.035, weight: "medium",
-                                 x: cx, y: cy + h * 0.16, color: RGBA(r: 0.82, g: 0.84, b: 0.9)))
+                                 x: cx, y: cy + h * 0.16, color: inkSoft))
             presets = [("title", .textFocus, s, 0.9), ("rule", .drawOn, s + 0.4, 0.6), ("subtitle", .slideUp, s + 0.7, 0.6),
                        ("title", .textOut, e - 0.7, 0.6), ("rule", .fadeOut, e - 0.5, 0.4), ("subtitle", .fadeOut, e - 0.6, 0.4)]
         case .quote:
             let cx = o.x ?? w / 2, cy = o.y ?? h * 0.48
-            children.append(text("mark", "\u{201C}", size: h * 0.3, weight: "black", x: cx - w * 0.3, y: cy - h * 0.15, color: accent))
+            var mark = text("mark", "\u{201C}", size: h * 0.3, weight: "black", x: cx - w * 0.3, y: cy - h * 0.15, color: accent)
+            glow(&mark, 0.7, color: accent, radius: 60)
+            children.append(mark)
             var body = text("body", o.title ?? "Simplicity is the ultimate sophistication.", size: h * 0.06, weight: "semibold",
                             x: cx, y: cy)
             body.maxWidth = w * 0.6
+            shadow(&body, 0.5)
             children.append(body)
             children.append(text("author", "— " + (o.subtitle ?? "Leonardo da Vinci"), size: h * 0.032, weight: "medium",
-                                 x: cx, y: cy + h * 0.16, color: RGBA(r: 0.8, g: 0.82, b: 0.88)))
+                                 x: cx, y: cy + h * 0.16, color: inkSoft))
             presets = [("mark", .popIn, s, 0.5), ("body", .textPop, s + 0.3, 1.2), ("author", .fadeIn, s + 1.5, 0.6),
                        ("body", .fadeOut, e - 0.6, 0.5), ("author", .fadeOut, e - 0.6, 0.5), ("mark", .popOut, e - 0.5, 0.4)]
         }

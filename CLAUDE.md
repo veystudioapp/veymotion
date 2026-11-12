@@ -204,7 +204,22 @@ Easy Ease F9 / ⇧F9 / ⌘⇧F9).
   Camera `focus`/`aperture` add `focusBlur` to a layer's blur (and to `motionBounds` padding).
 - `text_to_path` / `combine_paths` (`PathOps.swift`) bake outlines with `FrameRenderer.glyphPaths` and macOS 14
   `CGPath` boolean ops; `trimSequential` trims a path's pieces end to end. `Beats.swift` (`sync_to_beats`) and
-  `Templates.swift` (`add_template`, groups whose parts are keyed with presets) are pure scene edits.
+  `Templates.swift` (`add_template`, groups whose parts are keyed with presets; text/ink colors and card style follow
+  the background's luminance) are pure scene edits. `Looks.swift` (`apply_look` / `remove_look`, Add → Look in the app)
+  builds the "finished" layers from ordinary ones: a `look` group at the bottom (radial-gradient backdrop, two blurred
+  drifting blobs, dust/bokeh) and `look-finish` on top (vignette gradient, mid-gray overlay rect with `grain`), plus a
+  camera zoom 1 → 1.04 when the scene has none; re-applying replaces both groups by id. `Docs.instructions` opens with
+  a LOOK & DESIGN section (depth, light, secondary motion, type hierarchy, palette, self-check list) that the agent
+  prompt points at, and `Sample.swift` is written to follow it, so keep the three in step.
+  Quality is enforced in code, not only in the prompt (`DesignCheck.swift`): `designIssues(renderer:)` is a
+  deterministic lint (flat background, pure white on black, system font, flat type sizes, unlit layers, ≥ 2 s
+  stretches with no motion, text within 80 px of the edge, linear entrances, "only text and boxes" hint) behind the
+  `check_design` tool; `set_scene` runs it and, unless `look` is "none", `applyAutoLook` adds a look to a scene whose
+  background is flat (`hasBackgroundDepth`), picking the kind from the background's luminance. In the app,
+  `ChatStore` puts `design=` (the lint summary) and `style=` (the project's `ChatStyle`: look + font pairing,
+  chosen in the composer's Style popover, saved in `.chat.json`) on every context line, and `autoDesignCheck`
+  sends warnings back to the agent once per user message after a turn that changed the scene
+  (`agent.designCheck` default off switch in the same popover).
 - `VideoML.swift`: background removal (Vision person segmentation / foreground instance mask, cached per frame in
   `FrameRenderer.cutoutCache`), `frameBlend` in-betweens (cross-fade or Vision optical flow) and `stabilize`
   (translational registration). Like saliency, the neural requests fail in sandboxed processes; they fall back to
