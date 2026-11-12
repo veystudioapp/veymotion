@@ -241,11 +241,16 @@ private struct ProjectCard: View {
 
     private func loadThumb() {
         let url = project.url
-        DispatchQueue.global(qos: .userInitiated).async {
+        // GCD's global queues give worker threads a small stack, which deeply nested groups can overflow
+        // while decoding/resolving the scene (see MotionScene.resolveLinks). Use a thread with a full stack.
+        let thread = Thread {
             let cg = ProjectStore.thumbnail(url)
             DispatchQueue.main.async {
                 thumb = cg.map { NSImage(cgImage: $0, size: NSSize(width: $0.width, height: $0.height)) }
             }
         }
+        thread.stackSize = 8 * 1024 * 1024
+        thread.qualityOfService = .userInitiated
+        thread.start()
     }
 }

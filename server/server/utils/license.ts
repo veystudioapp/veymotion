@@ -292,8 +292,17 @@ function polarToHTTP(error: unknown, action: "activate" | "validate" | "deactiva
       return new HTTPError({ status: 502, message: error.message, data: { code: "polar_unreachable" } });
     case 403: {
       // Activation refused: revoked/disabled/expired key, or no activation left
-      // (Polar says "License key only supports N activations.").
-      const full = /limit|only supports|activations/i.test(error.message);
+      // (Polar says "License key only supports N activations."). A benefit without an activation limit is also
+      // refused here ("…does not support activations"): that is a Polar setup error, not a full key.
+      if (/not support activations|does not require activation/i.test(error.message)) {
+        console.error(`Polar refused the activation: ${error.message} — enable "Limit activations" on the License Keys benefit.`);
+        return new HTTPError({
+          status: 503,
+          message: "Licensing is misconfigured on the server: the license key benefit has no activation limit.",
+          data: { code: "key_refused" },
+        });
+      }
+      const full = /only supports/i.test(error.message);
       return new HTTPError({
         status: 403,
         message: full

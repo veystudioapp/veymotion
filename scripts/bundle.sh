@@ -53,5 +53,19 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
+# The server the app talks to: $BASE_API_URL, else the repo's .env. Only this one line goes into the app
+# (Contents/Resources/.env), so nothing else from .env ships; a .env in Application Support/VeyMotion overrides it.
+API_URL="${BASE_API_URL:-}"
+if [ -z "$API_URL" ] && [ -f .env ]; then
+  API_URL="$(sed -n 's/^BASE_API_URL=//p' .env | tail -1 | tr -d "\"' \r")"
+fi
+if [ -n "$API_URL" ]; then
+  echo "BASE_API_URL=$API_URL" > "$APP/Contents/Resources/.env"
+  echo "Server: $API_URL"
+  case "$API_URL" in
+    *localhost*|*127.0.0.1*) echo "warning: this build talks to a local server ($API_URL); set BASE_API_URL for a release" >&2 ;;
+  esac
+fi
+
 codesign --force --sign - "$APP" >/dev/null
 echo "Built $APP $VERSION ($BUILD) and dist/vmotion"

@@ -198,6 +198,11 @@ enum DotEnv {
         }
         urls.append(fm.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/VeyMotion/.env"))
+        // Bundled default written by scripts/bundle.sh (Contents/Resources/.env; also found by the vmotion next to the
+        // app binary). Checked last, so any .env above overrides it.
+        if let exe = Bundle.main.executableURL?.resolvingSymlinksInPath().deletingLastPathComponent() {
+            urls.append(exe.deletingLastPathComponent().appendingPathComponent("Resources/.env"))
+        }
         return urls
     }
 }

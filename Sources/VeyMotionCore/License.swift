@@ -77,7 +77,7 @@ public enum LicenseError: LocalizedError {
 public enum License {
     /// Raw Ed25519 public key (base64) matching the server's NITRO_LICENSE_PRIVATE_KEY (`bun run license:keygen`).
     /// Empty = licensing not set up: everyone is on Free.
-    public static let publicKeyBase64 = ""
+    public static let publicKeyBase64 = "2alO3WK4W+ucOGonAcyzE5Qq8KjMYsA0h8QoKtg32m8="
 
     /// Posted (on any thread) when the license is activated, refreshed, dropped or removed.
     public static let didChange = Notification.Name("VeyMotionLicenseDidChange")
@@ -155,7 +155,17 @@ public enum License {
             "key": key, "device": deviceId, "deviceName": deviceName, "appVersion": AppVersion.display,
         ], token: nil)
         guard (200..<300).contains(status) else { throw LicenseError.failed(message(data, status: status)) }
-        return try save(data)
+        do {
+            return try save(data)
+        } catch {
+            // Polar counted this activation but the app cannot use the token (e.g. a signing key mismatch):
+            // free it again, or every retry would use up one of the key's Macs.
+            if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let token = obj["token"] as? String {
+                _ = try? call("/api/license/deactivate", json: [:], token: token)
+            }
+            throw error
+        }
     }
 
     /// Renews the token. Returns nil (and removes the license) when the server says it ended; throws when the

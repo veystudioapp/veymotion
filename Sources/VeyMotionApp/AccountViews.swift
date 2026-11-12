@@ -201,22 +201,27 @@ struct AccountPanel: View {
     ]
 }
 
-/// Toolbar button on the Free plan: opens the Account panel (enter a key or buy Pro) in a popover.
+/// Toolbar button that opens the Account panel in a popover: "Upgrade to Pro" on the Free plan (enter a key or buy
+/// Pro), a PRO tag once activated (the panel then shows the license, so a successful activation is visible in place).
 struct UpgradeToolbarButton: View {
     @Bindable var store = LicenseStore.shared
     @State private var showPanel = false
 
     var body: some View {
-        if !store.isPro {
-            Button { showPanel.toggle() } label: {
+        Button { showPanel.toggle() } label: {
+            if store.isPro {
+                ProBadge()
+            } else {
                 Label("Upgrade to Pro", systemImage: "sparkles")
                     .labelStyle(.titleAndIcon)
                     .foregroundStyle(Color.accentColor)
             }
-            .help(store.info != nil ? "VeyMotion Pro is paused: this Mac needs to reach the server" : "Unlock 4K export without watermark, VieNeu voices, stock video, 3D and more")
-            .popover(isPresented: $showPanel, arrowEdge: .bottom) {
-                AccountPanel().padding(16).frame(width: 400)
-            }
+        }
+        .help(store.isPro ? "VeyMotion Pro is active on this Mac"
+              : store.info != nil ? "VeyMotion Pro is paused: this Mac needs to reach the server"
+              : "Unlock 4K export without watermark, VieNeu voices, stock video, 3D and more")
+        .popover(isPresented: $showPanel, arrowEdge: .bottom) {
+            AccountPanel().padding(16).frame(width: 400)
         }
     }
 }
