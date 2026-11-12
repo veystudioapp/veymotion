@@ -15,8 +15,25 @@ public enum AssetStore {
     private static let activeLock = NSLock()
     nonisolated(unsafe) private static var active: URL?
 
+    private static let threadLibraryKey = "VeyMotion.AssetStore.library"
+
+    /// A project library set for the current thread only (`withLibrary`).
+    private static var threadLibrary: URL? { Thread.current.threadDictionary[threadLibraryKey] as? URL }
+
+    /// Runs `body` with `url` as this thread's library (nil = no change): a chat agent still working on a project
+    /// that is no longer open keeps its asset tools in that project.
+    public static func withLibrary<T>(_ url: URL?, _ body: () throws -> T) rethrows -> T {
+        guard let url else { return try body() }
+        let dict = Thread.current.threadDictionary
+        let old = dict[threadLibraryKey]
+        dict[threadLibraryKey] = url.standardizedFileURL
+        defer { dict[threadLibraryKey] = old }
+        return try body()
+    }
+
     /// The library that asset tools and the Assets panel work on.
     public static var directory: URL {
+        if let t = threadLibrary { return t }
         activeLock.lock(); defer { activeLock.unlock() }
         return active ?? sharedDirectory
     }
@@ -29,6 +46,7 @@ public enum AssetStore {
 
     /// True while a project's library is active. New files then go into type folders (images/, music/, …) by default.
     public static var isProjectLibrary: Bool {
+        if threadLibrary != nil { return true }
         activeLock.lock(); defer { activeLock.unlock() }
         return active != nil
     }

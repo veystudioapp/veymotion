@@ -5,8 +5,9 @@ import VeyMotionCore
 import VeyMotionMCP
 
 /// State of the embedded chat, run by Claude Code or the Codex CLI (`provider`). Claude edits the scene through the
-/// `vmotion` CLI, Codex through `vmotion mcp`; both reach `SceneStore` over the control socket, so every agent change
-/// is live and undoable.
+/// `vmotion` CLI, Codex through `vmotion mcp`; both reach the app over the agent's own control socket, so every agent
+/// change to the open project is live and undoable (`AgentSceneHost`; a turn still running when another project is
+/// opened finishes on its own project's file).
 ///
 /// Each project has its own conversation (transcript, plus one session per provider), saved in the project folder
 /// (`ProjectStore.chatURL`). Loose scenes share one in-memory conversation.
@@ -96,23 +97,101 @@ final class ChatStore {
     /// Effort levels the selected model accepts (all of them while the list is unknown).
     var modelEfforts: [String] { selectedModel?.efforts ?? (provider == .claude ? Self.efforts : Self.codexEfforts) }
 
-    var items: [Item] = []
-    var input = ""
-    var attachments: [Attachment] = []
-    var isBusy = false
-    var activity: String?
-    var activityStart = Date()
-    var scrollToken = 0
+    /// One conversation: its transcript, sessions and versions, and its agent while one runs. The shown one is
+    /// `current`; the others are parked. A parked conversation whose turn was still running keeps working on its
+    /// own project (its agent's socket then writes to that project's scene file) and lets its agent go when done.
+    @Observable
+    final class Session {
+        var items: [Item] = []
+        var input = ""
+        var attachments: [Attachment] = []
+        var isBusy = false
+        var activity: String?
+        var activityStart = Date()
+        var scrollToken = 0
+        /// Snapshots taken after each prompt that changed the scene, oldest first.
+        fileprivate(set) var versions: [Version] = []
+        /// The project's standing brief (look + fonts).
+        var style = ChatStyle()
+
+        /// The project it belongs to (nil = loose scene).
+        @ObservationIgnored fileprivate var project: URL?
+        /// Sessions the next agent of each provider resumes (when no process of it is running).
+        @ObservationIgnored fileprivate var sessionIds: [AgentProvider: String] = [:]
+        /// The conversation came from a copy of another project: these providers' first resume forks the session.
+        @ObservationIgnored fileprivate var forkSessions: Set<AgentProvider> = []
+        @ObservationIgnored fileprivate var agent: ChatAgent?
+        /// The CLI `agent` runs.
+        @ObservationIgnored fileprivate var agentProvider: AgentProvider = .claude
+        /// The agents' own control socket, and the scene it serves (this conversation's project).
+        @ObservationIgnored fileprivate var socket: ControlSocketServer?
+        @ObservationIgnored fileprivate var host: AgentSceneHost?
+        /// The prompt being worked on and the scene before it.
+        @ObservationIgnored fileprivate var turnStart: (prompt: String, scene: MotionScene)?
+        /// Design checks sent back to the agent since the last user message.
+        @ObservationIgnored fileprivate var autoChecks = 0
+        @ObservationIgnored fileprivate var stoppedByUser = false
+        @ObservationIgnored fileprivate var stderrTail = ""
+        @ObservationIgnored fileprivate var pendingRenderTime: Double?
+        @ObservationIgnored fileprivate var lastSentText: String?
+        @ObservationIgnored fileprivate var lastSentImages: [ClaudeCodeAgent.ImageAttachment] = []
+        /// The context line sent with the last message (sent again when a fresh session has to be started).
+        @ObservationIgnored fileprivate var lastContext = ""
+        @ObservationIgnored fileprivate var needsRestart = false
+        @ObservationIgnored fileprivate var retriedFresh = false
+        @ObservationIgnored fileprivate var resumeFailed = false
+
+        fileprivate init(project: URL?) { self.project = project }
+
+        /// The conversation's sessions, including the running agent's latest one.
+        fileprivate var currentSessions: [AgentProvider: String] {
+            var s = sessionIds
+            if let id = agent?.sessionId { s[agentProvider] = id }
+            return s
+        }
+
+        fileprivate func append(_ kind: Kind) {
+            items.append(Item(kind: kind))
+            bump()
+        }
+
+        fileprivate func bump() { scrollToken &+= 1 }
+
+        /// Sets a new activity phase and restarts its elapsed-time clock.
+        fileprivate func setActivity(_ text: String) {
+            activity = text
+            activityStart = Date()
+        }
+    }
+
+    /// The conversation shown: the open project's.
+    private(set) var current: Session
+
+    var items: [Item] { current.items }
+    var input: String {
+        get { current.input }
+        set { current.input = newValue }
+    }
+    var attachments: [Attachment] {
+        get { current.attachments }
+        set { current.attachments = newValue }
+    }
+    var isBusy: Bool { current.isBusy }
+    var activity: String? { current.activity }
+    var activityStart: Date { current.activityStart }
+    var scrollToken: Int { current.scrollToken }
+    var versions: [Version] { current.versions }
+
     var model: String = UserDefaults.standard.string(forKey: ChatStore.settingKey("model", ChatStore.savedProvider)) ?? "" {
         didSet {
             UserDefaults.standard.set(model, forKey: Self.settingKey("model", provider))
-            needsRestart = true // the next message restarts the process with the new model (session resumes)
+            current.needsRestart = true // the next message restarts the process with the new model (session resumes)
         }
     }
     var effort: String = UserDefaults.standard.string(forKey: ChatStore.settingKey("effort", ChatStore.savedProvider)) ?? "" {
         didSet {
             UserDefaults.standard.set(effort, forKey: Self.settingKey("effort", provider))
-            needsRestart = true
+            current.needsRestart = true
         }
     }
     private(set) var claudePath: String?
@@ -120,17 +199,8 @@ final class ChatStore {
     private(set) var setupProblem: String?
 
     @ObservationIgnored private let scene: SceneStore
-    @ObservationIgnored private var agent: ChatAgent?
-    @ObservationIgnored private var stoppedByUser = false
-    @ObservationIgnored private var stderrTail = ""
-    @ObservationIgnored private var pendingRenderTime: Double?
-    @ObservationIgnored private var lastSentText: String?
-    @ObservationIgnored private var lastSentImages: [ClaudeCodeAgent.ImageAttachment] = []
     /// Folders of files dragged into the chat, so the agent's Read can open them.
     @ObservationIgnored private var readDirectories: [String] = []
-    @ObservationIgnored private var needsRestart = false
-    @ObservationIgnored private var retriedFresh = false
-    @ObservationIgnored private var resumeFailed = false
 
     /// The scene as one prompt left it. `prompt` is nil for the scene before the first prompt.
     struct Version: Identifiable, Codable {
@@ -141,9 +211,6 @@ final class ChatStore {
     }
 
     static let maxVersions = 100
-    /// Snapshots taken after each prompt that changed the scene, oldest first.
-    private(set) var versions: [Version] = []
-
     /// The project's standing brief: a look and a font pairing the agent follows without being told each time.
     struct ChatStyle: Codable, Equatable {
         /// `LookKind` raw value, nil = let the agent (or set_scene's auto look) choose.
@@ -172,8 +239,14 @@ final class ChatStore {
         FontPairing(title: "Lora", body: "Source Sans 3", mood: "Warm, storytelling"),
     ]
 
-    var style = ChatStyle() {
-        didSet { if style != oldValue { saveConversation() } }
+    /// The shown conversation's brief, saved with it.
+    var style: ChatStyle {
+        get { current.style }
+        set {
+            guard newValue != current.style else { return }
+            current.style = newValue
+            saveConversation(current)
+        }
     }
 
     /// After a turn that changed the scene, the design lint runs and (once per message) the findings are sent
@@ -181,37 +254,18 @@ final class ChatStore {
     var designCheckEnabled: Bool = UserDefaults.standard.object(forKey: "agent.designCheck") as? Bool ?? true {
         didSet { UserDefaults.standard.set(designCheckEnabled, forKey: "agent.designCheck") }
     }
-    @ObservationIgnored private var autoChecks = 0
-    /// The prompt being worked on and the scene before it.
-    @ObservationIgnored private var turnStart: (prompt: String, scene: MotionScene)?
 
-    /// One project's conversation while another project is open.
-    private struct Conversation {
-        var items: [Item] = []
-        var input = ""
-        var attachments: [Attachment] = []
-        var sessionIds: [AgentProvider: String] = [:]
-        var forkSessions: Set<AgentProvider> = []
-        var versions: [Version] = []
-        var style = ChatStyle()
-    }
-
-    /// The project the shown conversation belongs to (nil = loose scene).
-    @ObservationIgnored private var project: URL?
     /// Conversations of the projects opened earlier in this run, by project path ("" = loose scene).
-    @ObservationIgnored private var parked: [String: Conversation] = [:]
-    /// Sessions the next agent of each provider resumes (when no process of it is running).
-    @ObservationIgnored private var sessionIds: [AgentProvider: String] = [:]
-    /// The conversation came from a copy of another project: these providers' first resume forks the session.
-    @ObservationIgnored private var forkSessions: Set<AgentProvider> = []
+    @ObservationIgnored private var parked: [String: Session] = [:]
 
     private init(scene: SceneStore) {
         self.scene = scene
-        project = scene.project
+        current = Session(project: scene.project)
+        Self.removeStaleSockets()
         restoreConversation()
         scene.onProjectChange = { [weak self] change in self?.projectChanged(change) }
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil,
-                                               queue: .main) { [weak self] _ in self?.saveConversation() }
+                                               queue: .main) { [weak self] _ in self?.shutdown() }
         // Back from Terminal (installing or logging in): look again at the CLIs that were not ready.
         NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil,
                                                queue: .main) { [weak self] _ in
@@ -272,7 +326,8 @@ final class ChatStore {
                 self.agentStates[p] = state
                 guard let path, state == .ready else { return }
                 // A new login or install: the running process still has the old one.
-                if p == self.provider, self.agent != nil { if self.isBusy { self.needsRestart = true } else { self.restartAgent() } }
+                let s = self.current
+                if p == self.provider, s.agent != nil { if s.isBusy { s.needsRestart = true } else { self.restartAgent(s) } }
                 self.loadModels(p, path: path)
             }
         }
@@ -312,7 +367,7 @@ final class ChatStore {
                                                     commands: commands)
             if !NSWorkspace.shared.open(url) { throw CocoaError(.fileReadUnknown) }
         } catch {
-            append(.notice("Could not open Terminal. Run this in Terminal yourself:\n\(commands)", isError: true))
+            current.append(.notice("Could not open Terminal. Run this in Terminal yourself:\n\(commands)", isError: true))
         }
     }
 
@@ -324,7 +379,7 @@ final class ChatStore {
         switch provider {
         case .claude:
             do { try AnthropicKeyStore.save(key) } catch {
-                append(.notice(error.localizedDescription, isError: true))
+                current.append(.notice(error.localizedDescription, isError: true))
                 return
             }
             AgentCLI.extraEnvironment["ANTHROPIC_API_KEY"] = key
@@ -335,7 +390,7 @@ final class ChatStore {
             DispatchQueue.global(qos: .userInitiated).async {
                 let error = AgentSetup.codexLogin(apiKey: key, path: path)
                 DispatchQueue.main.async {
-                    if let error { self.append(.notice("Codex did not take the key: \(error)", isError: true)) }
+                    if let error { self.current.append(.notice("Codex did not take the key: \(error)", isError: true)) }
                     self.detect(.codex)
                 }
             }
@@ -350,16 +405,16 @@ final class ChatStore {
 
     /// Error text from the CLI, explained when it is a login or billing problem (a refused login also brings up
     /// the setup card).
-    private func explainFailure(_ text: String, details: String = "") -> String {
+    private func explainFailure(_ text: String, details: String = "", _ p: AgentProvider) -> String {
         switch AgentSetup.classify(text + "\n" + details) {
         case .auth?:
-            agentStates[provider] = .authFailed(text)
-            return "\(provider.cliName) could not sign in: its login or API key was refused or has expired.\n\(text)"
+            agentStates[p] = .authFailed(text)
+            return "\(p.cliName) could not sign in: its login or API key was refused or has expired.\n\(text)"
         case .limit?:
-            let fix = provider == .claude
+            let fix = p == .claude
                 ? "Check your Claude plan's usage, or your Anthropic API credits."
                 : "Check your ChatGPT plan's usage, or your OpenAI API credits."
-            return "\(provider.cliName) is out of credits or hit a usage limit. \(fix)\n\(text)"
+            return "\(p.cliName) is out of credits or hit a usage limit. \(fix)\n\(text)"
         case nil:
             return text
         }
@@ -373,9 +428,10 @@ final class ChatStore {
         return dirs.first { fm.isExecutableFile(atPath: "\($0)/vmotion") }
     }
 
-    private func makeAgent(resume: String?) -> ChatAgent? {
+    private func makeAgent(for s: Session, resume: String?) -> ChatAgent? {
         guard let dir = vmotionDirectory else { return nil }
         let work = ClaudeCodeAgent.Config.defaultWorkingDirectory
+        let socket = socketPath(for: s)
         let a: ChatAgent
         switch provider {
         case .claude:
@@ -387,27 +443,82 @@ final class ChatStore {
                 model: model,
                 extraEnvironment: [
                     "VEYMOTION_FRAMES_DIR": work.appendingPathComponent("frames").path,
-                    "VEYMOTION_SOCKET": ControlSocket.defaultPath,
-                ])
+                    "VEYMOTION_SOCKET": socket,
+                ],
+                unixSockets: [socket])
             cfg.effort = effort
             cfg.extraReadDirectories = readDirectories
-            cfg.forkSession = forkSessions.contains(.claude)
+            cfg.forkSession = s.forkSessions.contains(.claude)
             a = ClaudeCodeAgent(config: cfg, resumeSessionId: resume)
         case .codex:
             guard let codexPath else { return nil }
             var cfg = CodexAgent.Config(codexPath: codexPath, vmotionPath: "\(dir)/vmotion", workingDirectory: work,
-                                        model: model, effort: effort)
-            cfg.forkSession = forkSessions.contains(.codex)
+                                        model: model, effort: effort, socketPath: socket)
+            cfg.forkSession = s.forkSessions.contains(.codex)
             a = CodexAgent(config: cfg, resumeSessionId: resume)
         }
-        // Events still queued from a replaced agent (another project's) must not reach this conversation.
-        a.onEvent = { [weak self, weak a] ev in
+        s.agentProvider = provider
+        // Events still queued from a replaced agent must not reach the conversation.
+        a.onEvent = { [weak self, weak s, weak a] ev in
             DispatchQueue.main.async {
-                guard let self, let a, self.agent === a else { return }
-                self.handle(ev)
+                guard let self, let s, let a, s.agent === a else { return }
+                self.handle(ev, s)
             }
         }
         return a
+    }
+
+    /// Each conversation's agent reaches the app through a control socket of its own, whose host is bound to the
+    /// conversation's project: when the user opens another project mid-turn, the agent keeps editing its own.
+    /// Falls back to the app's socket (which follows the open document) if it cannot be opened.
+    private func socketPath(for s: Session) -> String {
+        if let sock = s.socket { return sock.path }
+        let host = AgentSceneHost(store: scene, project: s.project)
+        let server = MCPServer(host: host)
+        server.log = { [weak self, weak s] line in
+            DispatchQueue.main.async {
+                guard let self, let s, s === self.current else { return }
+                self.scene.lastAgentAction = line
+            }
+        }
+        let path = Self.socketDirectory.appendingPathComponent("agent-\(UUID().uuidString.prefix(8)).sock").path
+        let sock = ControlSocketServer(server: server, path: path)
+        do { try sock.start() } catch { return ControlSocket.defaultPath }
+        s.socket = sock
+        s.host = host
+        return path
+    }
+
+    private static var socketDirectory: URL { ControlSocket.supportDirectory }
+
+    /// Agent sockets left behind by a run that did not quit normally.
+    private static func removeStaleSockets() {
+        let fm = FileManager.default
+        guard let names = try? fm.contentsOfDirectory(atPath: socketDirectory.path) else { return }
+        for n in names where n.hasPrefix("agent-") && n.hasSuffix(".sock") {
+            try? fm.removeItem(at: socketDirectory.appendingPathComponent(n))
+        }
+    }
+
+    /// Ends the conversation's agent and its socket. The sessions stay, so the next message resumes them.
+    private func dropAgent(_ s: Session) {
+        s.sessionIds = s.currentSessions
+        if let a = s.agent {
+            a.onEvent = nil
+            a.stop()
+        }
+        s.agent = nil
+        s.socket?.stop()
+        s.socket = nil
+        s.host = nil
+        s.needsRestart = false
+    }
+
+    private func shutdown() {
+        for s in [current] + parked.values {
+            saveConversation(s)
+            dropAgent(s)
+        }
     }
 
     // MARK: - Actions
@@ -418,54 +529,63 @@ final class ChatStore {
     }
 
     func send() {
-        var text = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        let s = current
+        var text = s.input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard canSend else { return }
-        if needsRestart { restartAgent() }
-        if agent == nil { agent = makeAgent(resume: sessionIds[provider]) }
-        guard let agent else {
-            append(.notice(setupProblem ?? "\(provider.cliName) is not available.", isError: true))
+        if s.needsRestart { restartAgent(s) }
+        if s.agent == nil { s.agent = makeAgent(for: s, resume: s.sessionIds[provider]) }
+        guard let agent = s.agent else {
+            s.append(.notice(setupProblem ?? "\(provider.cliName) is not available.", isError: true))
             return
         }
-        let sent = attachments
+        let sent = s.attachments
         if text.isEmpty { text = "(see the attached image\(sent.count == 1 ? "" : "s"))" }
         let images = sent.map { ClaudeCodeAgent.ImageAttachment(mediaType: $0.mediaType, data: $0.data) }
         let notes = sent.compactMap(\.note)
         let agentText = notes.isEmpty ? text : (notes + [text]).joined(separator: "\n")
-        input = ""
-        attachments = []
-        append(.user(text, images: sent))
-        isBusy = true
-        stoppedByUser = false
-        retriedFresh = false
-        resumeFailed = false
-        lastSentText = agentText
-        lastSentImages = images
-        stderrTail = ""
-        autoChecks = 0
-        setActivity("Thinking…")
-        turnStart = (text, scene.scene)
+        s.input = ""
+        s.attachments = []
+        s.append(.user(text, images: sent))
+        s.isBusy = true
+        s.stoppedByUser = false
+        s.retriedFresh = false
+        s.resumeFailed = false
+        s.lastSentText = agentText
+        s.lastSentImages = images
+        s.lastContext = contextLine()
+        s.stderrTail = ""
+        s.autoChecks = 0
+        s.setActivity("Thinking…")
+        s.turnStart = (text, scene.scene)
         do {
-            try agent.send(contextLine() + "\n" + agentText, images: images)
+            try agent.send(s.lastContext + "\n" + agentText, images: images)
         } catch {
-            isBusy = false
-            activity = nil
-            turnStart = nil
-            append(.notice("Could not start \(provider.cliName): \(error.localizedDescription)", isError: true))
+            s.isBusy = false
+            s.activity = nil
+            s.turnStart = nil
+            s.append(.notice("Could not start \(provider.cliName): \(error.localizedDescription)", isError: true))
         }
     }
 
     // MARK: - Versions
 
-    /// Keeps the scene as the finished (or stopped) prompt left it, if the prompt changed it.
-    private func recordVersion() {
-        guard let start = turnStart else { return }
-        turnStart = nil
-        let now = scene.scene
-        guard now != start.scene else { return }
-        if versions.isEmpty { versions.append(Version(prompt: nil, scene: start.scene)) }
-        versions.append(Version(prompt: start.prompt, scene: now))
-        if versions.count > Self.maxVersions { versions.removeFirst(versions.count - Self.maxVersions) }
-        saveVersions()
+    /// Keeps the scene as the finished (or stopped) prompt left it, if the prompt changed it. `now` defaults to
+    /// the conversation's scene: the open one, or its project's file once another project is open.
+    private func recordVersion(_ s: Session, scene now: MotionScene? = nil) {
+        guard let start = s.turnStart else { return }
+        s.turnStart = nil
+        guard let now = now ?? sceneNow(s), now != start.scene else { return }
+        if s.versions.isEmpty { s.versions.append(Version(prompt: nil, scene: start.scene)) }
+        s.versions.append(Version(prompt: start.prompt, scene: now))
+        if s.versions.count > Self.maxVersions { s.versions.removeFirst(s.versions.count - Self.maxVersions) }
+        saveVersions(s)
+    }
+
+    private func isOpen(_ s: Session) -> Bool { s.project?.standardizedFileURL.path == scene.project?.standardizedFileURL.path }
+
+    private func sceneNow(_ s: Session) -> MotionScene? {
+        if isOpen(s) { return scene.scene }
+        return s.project.flatMap { try? ProjectStore.load($0) }
     }
 
     /// Puts a version's scene back (one undo step).
@@ -475,14 +595,14 @@ final class ChatStore {
         scene.apply("Restore Version") { $0 = s }
     }
 
-    private func saveVersions() {
-        guard let project else { return }
+    private func saveVersions(_ s: Session) {
+        guard let project = s.project else { return }
         let url = ProjectStore.versionsURL(project)
-        guard !versions.isEmpty else {
+        guard !s.versions.isEmpty else {
             try? FileManager.default.removeItem(at: url)
             return
         }
-        let saved = versions.map { v -> Version in
+        let saved = s.versions.map { v -> Version in
             var v = v
             v.scene = v.scene.relativizingPaths(to: project)
             return v
@@ -543,18 +663,19 @@ final class ChatStore {
             added = true
         }
         guard added else { return }
-        if isBusy { needsRestart = true } else { restartAgent() }
+        if current.isBusy { current.needsRestart = true } else { restartAgent(current) }
     }
 
-    /// Replaces the agent with one started with the current Read folders, resuming the same session.
-    /// The old process is detached first so its exit is not reported as an error.
-    private func restartAgent() {
-        needsRestart = false
-        guard let old = agent else { return }
-        let session = old.sessionId ?? sessionIds[provider]
+    /// Replaces the agent with one started with the current Read folders, resuming the same session (its socket
+    /// stays). The old process is detached first so its exit is not reported as an error.
+    private func restartAgent(_ s: Session) {
+        s.needsRestart = false
+        guard let old = s.agent else { return }
+        let session = old.sessionId ?? s.sessionIds[s.agentProvider]
         old.onEvent = nil
         old.stop()
-        agent = makeAgent(resume: session)
+        s.agent = nil
+        s.agent = makeAgent(for: s, resume: session)
     }
 
     private static func mediaType(of data: Data) -> String? {
@@ -581,135 +702,138 @@ final class ChatStore {
     }
 
     func stop() {
-        guard isBusy else { return }
-        stoppedByUser = true
-        agent?.stop()
-        recordVersion()
-        isBusy = false
-        activity = nil
-        append(.notice("Stopped. Your next message continues the same conversation.", isError: false))
+        let s = current
+        guard s.isBusy else { return }
+        s.stoppedByUser = true
+        s.agent?.stop()
+        recordVersion(s)
+        s.isBusy = false
+        s.activity = nil
+        s.append(.notice("Stopped. Your next message continues the same conversation.", isError: false))
     }
 
     func newChat() {
-        recordVersion()
-        stoppedByUser = true
-        agent?.reset()
-        agent = nil
-        sessionIds = [:]
-        forkSessions = []
-        items = []
-        attachments = []
-        isBusy = false
-        activity = nil
-        saveConversation()
-        bump()
+        let s = current
+        recordVersion(s)
+        s.stoppedByUser = true
+        s.agent?.reset()
+        s.agent = nil
+        s.sessionIds = [:]
+        s.forkSessions = []
+        s.items = []
+        s.attachments = []
+        s.isBusy = false
+        s.activity = nil
+        saveConversation(s)
+        s.bump()
     }
 
     // MARK: - Per-project conversations
 
     private func projectChanged(_ change: SceneStore.ProjectChange) {
+        let s = current
         switch change {
         case let .opened(url):
-            guard url?.path != project?.path else { return }
+            guard url?.path != s.project?.path else { return }
             parkConversation()
-            project = url
+            current = Session(project: url)
             restoreConversation()
         case let .moved(from, to):
             // Same conversation, new place; Read's folders changed with it.
-            project = to
-            for i in versions.indices { versions[i].scene.replaceFolder(from.path, with: to.path) }
-            if let start = turnStart {
-                var s = start.scene
-                s.replaceFolder(from.path, with: to.path)
-                turnStart = (start.prompt, s)
+            s.project = to
+            s.host?.project = to
+            for i in s.versions.indices { s.versions[i].scene.replaceFolder(from.path, with: to.path) }
+            if let start = s.turnStart {
+                var scene = start.scene
+                scene.replaceFolder(from.path, with: to.path)
+                s.turnStart = (start.prompt, scene)
             }
-            saveConversation()
-            saveVersions()
-            if isBusy { needsRestart = true } else { restartAgent() }
+            saveConversation(s)
+            saveVersions(s)
+            if s.isBusy { s.needsRestart = true } else { restartAgent(s) }
         case let .adopted(url):
             // The loose scene's conversation becomes the new project's.
             parked[""] = nil
-            project = url
-            saveConversation()
-            saveVersions()
-            if isBusy { needsRestart = true } else { restartAgent() }
+            s.project = url
+            s.host?.project = url
+            saveConversation(s)
+            saveVersions(s)
+            if s.isBusy { s.needsRestart = true } else { restartAgent(s) }
         }
     }
 
     private static func key(_ project: URL?) -> String { project?.path ?? "" }
 
-    /// Stops the agent (its `vmotion` calls would otherwise edit the next project's scene) and stores the
-    /// conversation, in memory and in the project folder. The session resumes when the project is reopened.
+    /// Stores the shown conversation, in memory and in the project folder, before another project opens.
+    /// A project's turn that is still running keeps going: its agent's socket now edits the project's scene file
+    /// (SceneStore saved it just before), and the agent is let go when the turn ends. Otherwise the agent is
+    /// stopped; the session resumes when the project is reopened. A loose scene's turn is stopped, since that
+    /// scene exists only in the editor.
     private func parkConversation() {
-        let sessions = currentSessions()
-        if let a = agent {
-            a.onEvent = nil
-            a.stop()
+        let s = current
+        if s.isBusy, let project = s.project, s.agent != nil, s.host != nil {
+            scene.message = "\(s.agentProvider.displayName) keeps working on \(project.lastPathComponent) in the background"
+        } else {
+            let wasBusy = s.isBusy
+            dropAgent(s)
+            recordVersion(s, scene: scene.scene) // the old document is still loaded
+            if wasBusy {
+                s.append(.notice("Stopped because you switched projects. Your next message here continues the conversation.",
+                                 isError: false))
+            }
+            s.isBusy = false
+            s.activity = nil
+            s.pendingRenderTime = nil
         }
-        agent = nil
-        recordVersion()
-        if isBusy {
-            append(.notice("Stopped because you switched projects. Your next message here continues the conversation.",
-                           isError: false))
-        }
-        isBusy = false
-        activity = nil
-        pendingRenderTime = nil
-        needsRestart = false
-        sessionIds = sessions
-        saveConversation()
-        parked[Self.key(project)] = Conversation(items: items, input: input, attachments: attachments,
-                                                 sessionIds: sessions, forkSessions: forkSessions, versions: versions,
-                                                 style: style)
+        saveConversation(s)
+        parked[Self.key(s.project)] = s
     }
 
-    /// The conversation's sessions, including the running agent's latest one.
-    private func currentSessions() -> [AgentProvider: String] {
-        var s = sessionIds
-        if let id = agent?.sessionId { s[provider] = id }
-        return s
+    /// A parked conversation's turn ended: keep the result and let its agent go.
+    private func finishedInBackground(_ s: Session) {
+        saveConversation(s)
+        dropAgent(s)
+        guard !s.stoppedByUser, let project = s.project else { return }
+        scene.message = "\(s.agentProvider.displayName) finished working on \(project.lastPathComponent)"
     }
 
     private static let switchNoticePrefix = "Now chatting with "
 
     /// Switching CLIs: the old one's session is kept for when the user switches back.
     private func providerChanged(from old: AgentProvider) {
+        let s = current
         UserDefaults.standard.set(provider.rawValue, forKey: "agent.provider")
-        if let a = agent {
-            if let id = a.sessionId { sessionIds[old] = id }
+        if let a = s.agent {
+            if let id = a.sessionId { s.sessionIds[old] = id }
             a.onEvent = nil
             a.stop()
         }
-        agent = nil
+        s.agent = nil
         model = UserDefaults.standard.string(forKey: Self.settingKey("model", provider)) ?? ""
         effort = UserDefaults.standard.string(forKey: Self.settingKey("effort", provider)) ?? ""
-        needsRestart = false
+        s.needsRestart = false
         // Switching back and forth: keep only the latest of these notices.
-        if case let .notice(text, _)? = items.last?.kind, text.hasPrefix(Self.switchNoticePrefix) { items.removeLast() }
-        if items.contains(where: { if case .user = $0.kind { return true }; return false }) {
-            append(.notice("\(Self.switchNoticePrefix)\(provider.displayName). \(old.displayName) and \(provider.displayName) keep "
-                           + "separate conversations: \(provider.displayName) does not see the messages above, but it sees the scene.",
-                           isError: false))
+        if case let .notice(text, _)? = s.items.last?.kind, text.hasPrefix(Self.switchNoticePrefix) { s.items.removeLast() }
+        if s.items.contains(where: { if case .user = $0.kind { return true }; return false }) {
+            s.append(.notice("\(Self.switchNoticePrefix)\(provider.displayName). \(old.displayName) and \(provider.displayName) keep "
+                             + "separate conversations: \(provider.displayName) does not see the messages above, but it sees the scene.",
+                             isError: false))
         }
-        saveConversation()
+        saveConversation(s)
     }
 
-    /// Shows the open project's conversation: from this run if it was open before, else from its folder.
+    /// Shows the open project's conversation (`current.project`): from this run if it was open before (still
+    /// working, maybe), else from its folder.
     private func restoreConversation() {
-        let c = parked.removeValue(forKey: Self.key(project)) ?? project.map { p in
-            var c = Self.loadConversation(p) ?? Conversation()
-            c.versions = Self.loadVersions(p)
-            return c
-        } ?? Conversation()
-        items = c.items
-        versions = c.versions
-        input = c.input
-        attachments = c.attachments
-        sessionIds = c.sessionIds
-        forkSessions = c.forkSessions
-        style = c.style
-        stderrTail = ""
-        bump()
+        let project = current.project
+        if let s = parked.removeValue(forKey: Self.key(project)) {
+            current = s
+        } else if let project {
+            let s = Self.loadConversation(project) ?? Session(project: project)
+            s.versions = Self.loadVersions(project)
+            current = s
+        }
+        current.bump()
     }
 
     /// On disk: text only (images are dropped), long tool outputs shortened.
@@ -734,16 +858,16 @@ final class ChatStore {
         var isError: Bool?
     }
 
-    /// Writes the open project's conversation to its folder (nothing for loose scenes).
-    private func saveConversation() {
-        guard let project else { return }
+    /// Writes a project's conversation to its folder (nothing for loose scenes).
+    private func saveConversation(_ s: Session) {
+        guard let project = s.project else { return }
         let url = ProjectStore.chatURL(project)
-        let sessions = currentSessions()
-        guard !items.isEmpty || !sessions.isEmpty || !style.isEmpty else {
+        let sessions = s.currentSessions
+        guard !s.items.isEmpty || !sessions.isEmpty || !s.style.isEmpty else {
             try? FileManager.default.removeItem(at: url)
             return
         }
-        let saved = items.suffix(500).compactMap { item -> SavedItem? in
+        let saved = s.items.suffix(500).compactMap { item -> SavedItem? in
             switch item.kind {
             case let .user(text, _): return SavedItem(kind: "user", text: text)
             case let .assistant(text, _): return SavedItem(kind: "assistant", text: text)
@@ -756,17 +880,17 @@ final class ChatStore {
             }
         }
         let chat = SavedChat(project: project.path, sessionId: sessions[.claude],
-                             forkSession: forkSessions.contains(.claude) ? true : nil,
+                             forkSession: s.forkSessions.contains(.claude) ? true : nil,
                              codexSessionId: sessions[.codex],
-                             codexForkSession: forkSessions.contains(.codex) ? true : nil, items: saved,
-                             style: style.isEmpty ? nil : style)
+                             codexForkSession: s.forkSessions.contains(.codex) ? true : nil, items: saved,
+                             style: s.style.isEmpty ? nil : s.style)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let data = try? encoder.encode(chat) else { return }
         try? data.write(to: url, options: .atomic)
     }
 
-    private static func loadConversation(_ project: URL) -> Conversation? {
+    private static func loadConversation(_ project: URL) -> Session? {
         guard let data = try? Data(contentsOf: ProjectStore.chatURL(project)),
               let chat = try? JSONDecoder().decode(SavedChat.self, from: data) else { return nil }
         let items = chat.items.enumerated().compactMap { i, s -> Item? in
@@ -788,7 +912,12 @@ final class ChatStore {
         var forks = Set<AgentProvider>()
         if chat.sessionId != nil && (copied || chat.forkSession == true) { forks.insert(.claude) }
         if chat.codexSessionId != nil && (copied || chat.codexForkSession == true) { forks.insert(.codex) }
-        return Conversation(items: items, sessionIds: sessions, forkSessions: forks, style: chat.style ?? ChatStyle())
+        let s = Session(project: project)
+        s.items = items
+        s.sessionIds = sessions
+        s.forkSessions = forks
+        s.style = chat.style ?? ChatStyle()
+        return s
     }
 
     /// The standing brief for the context line, or nil when nothing is set.
@@ -820,28 +949,31 @@ final class ChatStore {
     }
 
     /// After a turn that changed the scene: lint it and, once per user message, hand the findings back.
-    /// Returns true when a follow-up was sent (the turn goes on).
-    private func autoDesignCheck() -> Bool {
-        guard designCheckEnabled, autoChecks < 1, let start = turnStart, let agent, !stoppedByUser else { return false }
+    /// Returns true when a follow-up was sent (the turn goes on). Only for the shown conversation: the context line
+    /// describes the open editor.
+    private func autoDesignCheck(_ s: Session) -> Bool {
+        guard designCheckEnabled, s === current, s.autoChecks < 1, let start = s.turnStart, let agent = s.agent,
+              !s.stoppedByUser else { return false }
         let now = scene.scene
         guard now != start.scene, !now.layers.isEmpty else { return false }
         let issues = now.designIssues(renderer: FrameRenderer()).filter { $0.severity >= .warning }
         guard !issues.isEmpty else { return false }
-        autoChecks += 1
+        s.autoChecks += 1
         let codes = issues.map(\.code).joined(separator: ", ")
-        append(.notice("Design check: \(issues.count) finding\(issues.count == 1 ? "" : "s") (\(codes)). Asking \(provider.displayName) to fix them.",
-                       isError: false))
+        s.append(.notice("Design check: \(issues.count) finding\(issues.count == 1 ? "" : "s") (\(codes)). Asking \(s.agentProvider.displayName) to fix them.",
+                         isError: false))
         let text = "[Design check after your changes]\n" + MotionScene.designReport(issues)
             + "\nFix these now (or say in one line why a finding is intended for this piece), render a frame to confirm, then reply briefly."
-        isBusy = true
-        setActivity("Fixing design…")
-        lastSentText = text
-        lastSentImages = []
-        stderrTail = ""
-        do { try agent.send(contextLine() + "\n" + text, images: []) } catch {
-            isBusy = false
-            activity = nil
-            append(.notice("Could not send the design check: \(error.localizedDescription)", isError: true))
+        s.isBusy = true
+        s.setActivity("Fixing design…")
+        s.lastSentText = text
+        s.lastSentImages = []
+        s.lastContext = contextLine()
+        s.stderrTail = ""
+        do { try agent.send(s.lastContext + "\n" + text, images: []) } catch {
+            s.isBusy = false
+            s.activity = nil
+            s.append(.notice("Could not send the design check: \(error.localizedDescription)", isError: true))
             return false
         }
         return true
@@ -849,121 +981,126 @@ final class ChatStore {
 
     // MARK: - Events
 
-    private func handle(_ ev: AgentEvent) {
+    /// An event of `s`'s agent: `s` is the shown conversation, or a parked one still finishing its turn.
+    private func handle(_ ev: AgentEvent, _ s: Session) {
+        let p = s.agentProvider
         switch ev {
         case let .started(sessionId, _):
             // A copied project's conversation has forked by now: later restarts resume the new session.
-            forkSessions.remove(provider)
-            if !sessionId.isEmpty { sessionIds[provider] = sessionId }
+            s.forkSessions.remove(p)
+            if !sessionId.isEmpty { s.sessionIds[p] = sessionId }
 
         case .thinking:
-            if isBusy && activity != "Thinking…" { setActivity("Thinking…") }
+            if s.isBusy && s.activity != "Thinking…" { s.setActivity("Thinking…") }
 
         case let .toolInputProgress(name, bytes):
-            guard isBusy else { break }
+            guard s.isBusy else { break }
             let label = name == "Bash" ? "Writing command" : "Preparing \(name)"
             let size = bytes >= 1024 ? String(format: "%.1f KB", Double(bytes) / 1024) : "\(bytes) B"
-            if bytes == 0 { setActivity("\(label)…") } else { activity = "\(label) (\(size))…" }
+            if bytes == 0 { s.setActivity("\(label)…") } else { s.activity = "\(label) (\(size))…" }
 
         case let .textDelta(messageId, text):
-            activity = nil
-            if case let .assistant(existing, id)? = items.last?.kind, id == messageId {
-                items[items.count - 1].kind = .assistant(existing + text, messageId: id)
+            s.activity = nil
+            if case let .assistant(existing, id)? = s.items.last?.kind, id == messageId {
+                s.items[s.items.count - 1].kind = .assistant(existing + text, messageId: id)
             } else {
-                items.append(Item(kind: .assistant(text, messageId: messageId)))
+                s.items.append(Item(kind: .assistant(text, messageId: messageId)))
             }
-            bump()
+            s.bump()
 
         case let .text(messageId, text):
-            append(.assistant(text, messageId: messageId))
+            s.append(.assistant(text, messageId: messageId))
             // Codex sends whole messages mid-turn and nothing while it writes the next tool call: keep the spinner.
-            if isBusy { setActivity("Working…") } else { activity = nil }
+            if s.isBusy { s.setActivity("Working…") } else { s.activity = nil }
 
         case let .toolUse(id, name, input):
-            let call = describe(id: id, name: name, input: input)
-            setActivity("Running \(call.title)…")
-            append(.tool(call))
+            let call = describe(id: id, name: name, input: input, s)
+            s.setActivity("Running \(call.title)…")
+            s.append(.tool(call))
 
         case let .toolResult(toolUseId, output, isError, image):
-            if let i = items.lastIndex(where: { if case let .tool(c) = $0.kind { return c.id == toolUseId }; return false }),
-               case var .tool(call) = items[i].kind {
+            if let i = s.items.lastIndex(where: { if case let .tool(c) = $0.kind { return c.id == toolUseId }; return false }),
+               case var .tool(call) = s.items[i].kind {
                 call.isDone = true
                 call.isError = isError
                 call.output = output
-                items[i].kind = .tool(call)
+                s.items[i].kind = .tool(call)
             }
             if let image, let ns = NSImage(data: image) {
-                append(.image(ns, time: pendingRenderTime))
-                pendingRenderTime = nil
+                s.append(.image(ns, time: s.pendingRenderTime))
+                s.pendingRenderTime = nil
             }
-            if isBusy { setActivity("Thinking…") } else { activity = nil }
-            bump()
+            if s.isBusy { s.setActivity("Thinking…") } else { s.activity = nil }
+            s.bump()
 
         case let .turnFinished(isError, result, cost, ms):
-            if isError, stderrTail.contains("No conversation found") {
+            if isError, s.stderrTail.contains("No conversation found") {
                 return // handled when the process exits (fresh-session retry)
             }
-            isBusy = false
-            activity = nil
-            retriedFresh = false
-            if !isError, autoDesignCheck() { return }
-            recordVersion()
+            s.isBusy = false
+            s.activity = nil
+            s.retriedFresh = false
+            if !isError, autoDesignCheck(s) { return }
+            recordVersion(s)
             if isError {
-                append(.notice(explainFailure(result ?? "\(provider.cliName) reported an error.", details: stderrTail),
-                               isError: true))
-            } else if case .authFailed = agentState {
-                agentStates[provider] = .ready // signed in again
+                s.append(.notice(explainFailure(result ?? "\(p.cliName) reported an error.", details: s.stderrTail, p),
+                                 isError: true))
+            } else if case .authFailed = agentStates[p] {
+                agentStates[p] = .ready // signed in again
             }
             var parts: [String] = []
             if let ms { parts.append(String(format: "%.1fs", Double(ms) / 1000)) }
             if let cost, cost > 0 { parts.append(String(format: "$%.3f", cost)) }
-            if !parts.isEmpty { append(.summary(parts.joined(separator: " · "))) }
-            saveConversation()
+            if !parts.isEmpty { s.append(.summary(parts.joined(separator: " · "))) }
+            saveConversation(s)
+            if s !== current { finishedInBackground(s) }
 
-        case let .stderr(s):
-            stderrTail = String((stderrTail + s).suffix(2000))
+        case let .stderr(text):
+            s.stderrTail = String((s.stderrTail + text).suffix(2000))
 
         case .resumeFailed:
-            resumeFailed = true
+            s.resumeFailed = true
 
         case let .exited(code):
-            let wasBusy = isBusy
-            isBusy = false
-            activity = nil
+            let wasBusy = s.isBusy
+            s.isBusy = false
+            s.activity = nil
             // Resume failed (session file missing/unwritable): start a fresh session and resend once.
-            if !stoppedByUser, resumeFailed || stderrTail.contains("No conversation found"), let text = lastSentText,
-               !retriedFresh {
-                retriedFresh = true
-                resumeFailed = false
-                agent?.reset()
-                sessionIds[provider] = nil
-                forkSessions.remove(provider)
-                append(.notice("Couldn't resume the previous conversation, so a new one was started.", isError: false))
-                isBusy = true
-                setActivity("Thinking…")
-                stderrTail = ""
-                do { try agent?.send(contextLine() + "\n" + text, images: lastSentImages) } catch {
-                    isBusy = false
-                    activity = nil
-                    append(.notice("Could not start \(provider.cliName): \(error.localizedDescription)", isError: true))
+            if !s.stoppedByUser, s.resumeFailed || s.stderrTail.contains("No conversation found"), let text = s.lastSentText,
+               !s.retriedFresh {
+                s.retriedFresh = true
+                s.resumeFailed = false
+                s.agent?.reset()
+                s.sessionIds[p] = nil
+                s.forkSessions.remove(p)
+                s.append(.notice("Couldn't resume the previous conversation, so a new one was started.", isError: false))
+                s.isBusy = true
+                s.setActivity("Thinking…")
+                s.stderrTail = ""
+                do { try s.agent?.send(s.lastContext + "\n" + text, images: s.lastSentImages) } catch {
+                    s.isBusy = false
+                    s.activity = nil
+                    s.append(.notice("Could not start \(p.cliName): \(error.localizedDescription)", isError: true))
+                    if s !== current { finishedInBackground(s) }
                 }
                 return
             }
-            recordVersion()
-            if !stoppedByUser && (code != 0 || wasBusy) {
-                let detail = stderrTail.trimmingCharacters(in: .whitespacesAndNewlines)
-                append(.notice(explainFailure("\(provider.cliName) exited (code \(code)).\(detail.isEmpty ? "" : "\n" + detail)"),
-                               isError: true))
+            recordVersion(s)
+            if !s.stoppedByUser && (code != 0 || wasBusy) {
+                let detail = s.stderrTail.trimmingCharacters(in: .whitespacesAndNewlines)
+                s.append(.notice(explainFailure("\(p.cliName) exited (code \(code)).\(detail.isEmpty ? "" : "\n" + detail)", p),
+                                 isError: true))
             }
+            if s !== current { finishedInBackground(s) }
         }
     }
 
-    private func describe(id: String, name: String, input: [String: Any]) -> ToolCall {
+    private func describe(id: String, name: String, input: [String: Any], _ s: Session) -> ToolCall {
         // Codex calls the tools directly through MCP.
         let mcpPrefix = "mcp__veymotion__"
         if name.hasPrefix(mcpPrefix) {
             let tool = String(name.dropFirst(mcpPrefix.count))
-            if tool == "render_frame" { pendingRenderTime = (input["time"] as? NSNumber)?.doubleValue }
+            if tool == "render_frame" { s.pendingRenderTime = (input["time"] as? NSNumber)?.doubleValue }
             let args = (try? JSONSerialization.data(withJSONObject: input, options: [.sortedKeys, .withoutEscapingSlashes]))
                 .flatMap { String(data: $0, encoding: .utf8) } ?? ""
             return ToolCall(id: id, title: tool.replacingOccurrences(of: "_", with: " "), detail: args == "{}" ? "" : args)
@@ -982,7 +1119,7 @@ final class ChatStore {
                 }
                 if sub == "render_frame" || sub == "render-frame",
                    let obj = try? JSONSerialization.jsonObject(with: Data(detail.utf8)) as? [String: Any] {
-                    pendingRenderTime = (obj["time"] as? NSNumber)?.doubleValue
+                    s.pendingRenderTime = (obj["time"] as? NSNumber)?.doubleValue
                 }
                 return ToolCall(id: id, title: sub.replacingOccurrences(of: "_", with: " "), detail: detail)
             }
@@ -994,16 +1131,4 @@ final class ChatStore {
         return ToolCall(id: id, title: name, detail: "")
     }
 
-    /// Sets a new activity phase and restarts its elapsed-time clock.
-    private func setActivity(_ text: String) {
-        activity = text
-        activityStart = Date()
-    }
-
-    private func append(_ kind: Kind) {
-        items.append(Item(kind: kind))
-        bump()
-    }
-
-    private func bump() { scrollToken &+= 1 }
 }

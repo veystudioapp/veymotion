@@ -7,6 +7,12 @@ import VeyMotionCore
 public protocol SceneHost: AnyObject {
     func currentScene() -> MotionScene
     func mutate(_ label: String, _ body: (inout MotionScene) throws -> Void) throws
+    /// The asset library tool calls work on, when it is not the active one (`AssetStore.withLibrary`).
+    var assetLibrary: URL? { get }
+}
+
+public extension SceneHost {
+    var assetLibrary: URL? { nil }
 }
 
 /// Transport-independent MCP (JSON-RPC 2.0) request handler. Thread-safe as long as the host is.
@@ -71,7 +77,7 @@ public final class MCPServer {
             let args = params["arguments"] as? [String: Any] ?? [:]
             log("tool \(name)")
             do {
-                return try callTool(name, args)
+                return try AssetStore.withLibrary(host.assetLibrary) { try callTool(name, args) }
             } catch let e as RPCError {
                 throw e
             } catch {

@@ -11,10 +11,11 @@ public final class FileSceneHost: SceneHost {
     /// the project are saved relative to it.
     public let project: URL?
 
-    public init(url: URL) throws {
+    /// `activatesLibrary: false` leaves the active library alone (the app, for a project that is not open).
+    public init(url: URL, activatesLibrary: Bool = true) throws {
         self.url = url
         project = ProjectStore.project(for: url)
-        if let project { AssetStore.setActiveLibrary(ProjectStore.assetsURL(project)) }
+        if activatesLibrary, let project { AssetStore.setActiveLibrary(ProjectStore.assetsURL(project)) }
         if FileManager.default.fileExists(atPath: url.path) {
             scene = try SceneJSON.decode(MotionScene.self, from: Data(contentsOf: url))
             scene.resolvePaths(relativeTo: url.deletingLastPathComponent())
