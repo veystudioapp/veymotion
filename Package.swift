@@ -16,5 +16,6 @@ let package = Package(
                           // The publish preview uses AVPlayerView; link AVKit explicitly.
                           linkerSettings: [.linkedFramework("AVKit")]),
         .executableTarget(name: "vmotion", dependencies: ["VeyMotionCore", "VeyMotionMCP"]),
+        .testTarget(name: "VeyMotionTests", dependencies: ["VeyMotionCore", "VeyMotionMCP"]),
     ]
 )

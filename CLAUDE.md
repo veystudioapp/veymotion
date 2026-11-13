@@ -12,7 +12,7 @@ swift run VeyMotion              # run the app (run `swift build` first: the in-
 bash scripts/bundle.sh           # release build -> "dist/Vey Motion.app" (ad-hoc signed) + dist/vmotion
 ```
 
-There is no test target and no linter configured. To check Core/MCP changes without the GUI, use the CLI against a scene file:
+Tests (`swift test`, swift-testing, `Tests/VeyMotionTests`) cover scene Codable round trips, scene ops, the wipe-transition complement, particle determinism, rendering (pixels of blur/opacity/motion blur/group composites) and the MCP tool round trip through `FileSceneHost`; `Pixels` in `Support.swift` reads a rendered frame. Inside the Claude Code sandbox `swift test` cannot run either: compile the test files with `swiftc` against the per-target dylibs (built with `-enable-testing`), `-F …/CommandLineTools/Library/Developer/Frameworks -plugin-path …/usr/lib/swift/host/plugins/testing`, plus a `@main` that awaits `Testing.__swiftPMEntryPoint()`. No linter is configured. To check Core/MCP changes without the GUI, use the CLI against a scene file:
 
 ```bash
 .build/debug/vmotion sample $TMPDIR/s.json                    # write the demo scene
@@ -20,6 +20,9 @@ There is no test target and no linter configured. To check Core/MCP changes with
 .build/debug/vmotion apply_preset '{"id":"title","preset":"popIn","start":0.5}' --scene $TMPDIR/s.json
 .build/debug/vmotion render $TMPDIR/s.json $TMPDIR/out.mp4
 .build/debug/vmotion tools                                    # command list generated from the tool schemas
+.build/debug/vmotion perf   $TMPDIR/s.json --layers           # ms per frame in-process, and each top-level layer alone
+scripts/bench/run.sh logo-intro revenue-chart                 # agent quality bench: builds scenes from scripts/bench/prompts.json,
+                                                              # scores them (lint + critic) into bench-out/<run>/summary.md
 ```
 
 Without `--scene` (or `VEYMOTION_SCENE`), tool commands go to the running app over the control socket at `~/Library/Application Support/VeyMotion/control.sock` and fail with exit code 3 if the app is not open.
@@ -60,6 +63,8 @@ The timeline's Graph mode (`GraphEditor.swift`) plots the selected top-level lay
 its own value range; keys drag in time and value, and each segment's two handles are its easing as `cubicBezier`
 (`Easing.bezierControls` gives named curves their Bezier fit; `MotionScene.setKeyHandles` edits them, also behind
 Easy Ease F9 / ⇧F9 / ⌘⇧F9).
+
+**CoreGraphics fast paths.** A full-frame image composite costs ~0.5 ms, but 9–17 ms when the CTM is flipped, the context alpha is below 1, the image is scaled or lands on a fractional pixel: every bitmap goes through `drawDeviceImage` (alpha multiplied into the pixels with vImage, scaling through a BGRA bitmap, snapped to whole pixels, drawn with the CTM reset to device space). Wide blurs (sigma ≥ 16 px) render at 1/2…1/8 resolution (`offscreen(_:scene:downsample:)`). Check with `vmotion perf`; the look group + finish cost ~25 ms per 1080p frame and a camera zoom makes every group child a scaled draw.
 
 **One renderer.** `FrameRenderer` (CoreGraphics + CoreText) is used for the canvas preview, `render_frame`, and `VideoExporter` (AVAssetWriter; `.mp4` = H.264, `.mov` = ProRes 4444 with alpha), so preview matches export. The canvas renders on a background queue (`PreviewRenderer` in `ContentView.swift`, latest request wins) and at most 1.5 px/pt while playing. `FrameCache` (`FrameCache.swift`) is the RAM preview: frames at that playback size keyed by `sceneRevision` + pixel width + a generation (bumped on asset changes and `didAnalyze`), filled by the canvas's own renders and, after 0.5 s idle, by background workers (one `FrameRenderer` each, from the playhead; paused while exporting); budget ¼ of RAM ≤ 4 GB, purged on memory pressure, green strip on the ruler and mini scrubber. Playback advances `store.time` in whole frames; inspector and timeline values read `store.panelTime` (held while playing) so they don't re-render every frame — only the canvas, transport and playhead follow `store.time`.
 
