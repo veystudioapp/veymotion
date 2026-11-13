@@ -1,0 +1,62 @@
+[
+  {
+    "id": "logo-intro",
+    "width": 1920, "height": 1080, "duration": 5,
+    "prompt": "Make a 5-second logo intro for a coffee brand called \"Nắng Coffee\". Warm, premium feel. The brand name appears, then the tagline \"Rang mộc mỗi sáng\". End on a clean hold of the logo lockup for the last second."
+  },
+  {
+    "id": "tiktok-earbuds",
+    "width": 1080, "height": 1920, "duration": 15,
+    "prompt": "A 15-second vertical TikTok ad for wireless earbuds called \"Pulse Buds\". Bold kinetic text, one idea per beat: 30-hour battery, active noise cancelling, IPX5 water resistance. End with the price 1.290.000₫ and \"Mua ngay\". No stock footage: build it from shapes, text and effects."
+  },
+  {
+    "id": "lyric-video",
+    "width": 1920, "height": 1080, "duration": 20,
+    "prompt": "A 20-second lyric video section. Lines, each on screen about 4 seconds, in this order: \"Đêm nay thành phố không ngủ\" / \"Ánh đèn rơi trên vai em\" / \"Mình đi qua những con phố cũ\" / \"Và quên hết những muộn phiền\". Dreamy night-city mood, slow drifting light, each line enters differently but the whole stays one piece."
+  },
+  {
+    "id": "youtube-endcard",
+    "width": 1920, "height": 1080, "duration": 8,
+    "prompt": "An 8-second YouTube end screen for a cooking channel called \"Bếp Nhà Lan\": thanks-for-watching title, two video placeholders (one \"Video tiếp theo\", one \"Xem nhiều nhất\"), and a subscribe button that gets clicked. Friendly, warm, clean."
+  },
+  {
+    "id": "remote-work-stats",
+    "width": 1920, "height": 1080, "duration": 18,
+    "prompt": "An 18-second explainer segment with three statistics about remote work: 58% of workers can work remotely at least one day a week; productivity up 13%; 74% say flexibility is the top reason to stay. Numbers count up, each stat has its own moment, and a small bar chart compares the three at the end. Corporate but not boring."
+  },
+  {
+    "id": "meetup-invite",
+    "width": 1080, "height": 1080, "duration": 10,
+    "prompt": "A 10-second square Instagram invite for \"Saigon Design Meetup\" — Saturday 21 March 2026, 7 pm, The Hive, Thảo Điền. Free entry, link in bio. Playful, modern, colorful, with the date as the hero."
+  },
+  {
+    "id": "quote-reel",
+    "width": 1080, "height": 1920, "duration": 8,
+    "prompt": "An 8-second vertical quote reel: “Simplicity is the ultimate sophistication.” — Leonardo da Vinci. Elegant typography, slow and confident, a subtle textured background with depth, nothing else."
+  },
+  {
+    "id": "new-year-countdown",
+    "width": 1920, "height": 1080, "duration": 9,
+    "prompt": "A 9-second New Year countdown: the numbers 5, 4, 3, 2, 1 each take one second with impact, then fireworks and confetti with the title \"Chúc mừng năm mới 2027\". Festive, gold and deep blue."
+  },
+  {
+    "id": "revenue-chart",
+    "width": 1920, "height": 1080, "duration": 12,
+    "prompt": "A 12-second slide for an investor update: headline \"Doanh thu tăng 3,4× trong 4 năm\", then a line chart of yearly revenue 2022: 12 tỷ, 2023: 18 tỷ, 2024: 27 tỷ, 2025: 41 tỷ that draws on over time with the values labeled. Clean, trustworthy, one accent color."
+  },
+  {
+    "id": "news-lower-third",
+    "width": 1920, "height": 1080, "duration": 10,
+    "prompt": "A 10-second broadcast-news style open: a headline \"Giá xăng giảm lần thứ ba liên tiếp\" with a lower third for the reporter \"Minh Anh — Phóng viên kinh tế\", a ticker strip at the bottom and a small live badge. Blue and white, crisp, professional. No video: use a dark studio-like background."
+  },
+  {
+    "id": "kinetic-motivation",
+    "width": 1080, "height": 1920, "duration": 12,
+    "prompt": "A 12-second vertical kinetic typography piece for the sentence \"Làm ít thôi, nhưng làm cho tới.\" One word (or two) at a time, timed to 120 bpm as if to music, each word landing with weight, varied scale and placement, ending with the whole sentence together. High contrast, two colors plus white."
+  },
+  {
+    "id": "app-promo",
+    "width": 1920, "height": 1080, "duration": 15,
+    "prompt": "A 15-second promo for a to-do app called \"Doneo\": a phone-shaped card with a task list where three tasks get checked off one by one with a satisfying tick, a headline \"Việc xong, đầu nhẹ\", and a call to action \"Tải Doneo miễn phí\" at the end. Fresh, light, product-style motion."
+  }
+]
