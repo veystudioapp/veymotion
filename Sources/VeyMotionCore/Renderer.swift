@@ -227,23 +227,74 @@ public final class FrameRenderer {
     }
 
     /// Bitmap covering `area` (device pixels, bottom-left origin) of the frame, set up in scene coordinates.
-    private func offscreen(_ area: CGRect, scene: MotionScene) -> CGContext? {
-        guard let off = Self.bitmap(Int(area.width), Int(area.height)) else { return nil }
+    /// `downsample` k > 1 makes the bitmap 1/k the size (each bitmap pixel covers k × k device pixels); it is still
+    /// drawn in scene coordinates, so callers draw it back into `area` scaled up.
+    private func offscreen(_ area: CGRect, scene: MotionScene, downsample k: Int = 1) -> CGContext? {
+        let bw = max(1, Int((area.width / Double(k)).rounded(.up))), bh = max(1, Int((area.height / Double(k)).rounded(.up)))
+        guard let off = Self.bitmap(bw, bh) else { return nil }
         off.setShouldAntialias(true)
         off.interpolationQuality = .high
+        if k > 1 { off.scaleBy(x: 1 / CGFloat(k), y: 1 / CGFloat(k)) }
         off.translateBy(x: -area.minX, y: -area.minY)
         Self.applySceneSpace(off, scene: scene, pixelWidth: pixelSize.w, pixelHeight: pixelSize.h)
         return off
     }
 
-    /// Draws a device-pixel image of part of the frame at its place (ctx in scene coordinates).
-    private func drawDeviceImage(_ image: CGImage, rect r: CGRect, scene: MotionScene, in ctx: CGContext) {
+    /// Draws a device-pixel image of part of the frame at its place (ctx in scene coordinates), at `alpha`.
+    ///
+    /// CoreGraphics composites a full-frame image in under a millisecond, but takes 13–17 ms when the CTM is
+    /// flipped or the context alpha is below 1, and 9 ms to scale one up: so the alpha is multiplied into the
+    /// pixels, a small bitmap is scaled through a BGRA context first, and the draw itself happens with the CTM
+    /// reset to device space.
+    private func drawDeviceImage(_ image: CGImage, rect r: CGRect, scene: MotionScene, in ctx: CGContext, alpha: Double = 1) {
         let sx = Double(scene.width) / Double(pixelSize.w), sy = Double(scene.height) / Double(pixelSize.h)
+        var image = image
+        if alpha < 0.999 {
+            guard alpha > 0.001, let faded = Self.withAlpha(image, alpha) else { return }
+            image = faded
+        }
         ctx.saveGState()
         ctx.translateBy(x: 0, y: CGFloat(scene.height))
         ctx.scaleBy(x: 1, y: -1)
-        ctx.draw(image, in: CGRect(x: r.minX * sx, y: r.minY * sy, width: r.width * sx, height: r.height * sy))
+        let place = CGRect(x: r.minX * sx, y: r.minY * sy, width: r.width * sx, height: r.height * sy)
+        // Where that lands in the bitmap (inside a group under a camera zoom, scaled), drawn there with an
+        // identity CTM (upright: the two flips cancel) on whole pixels: a fractional offset is the slow path too.
+        let landed = place.applying(ctx.ctm).standardized
+        let dw = max(1, Int(landed.width.rounded())), dh = max(1, Int(landed.height.rounded()))
+        let device = CGRect(x: landed.minX.rounded(), y: landed.minY.rounded(), width: Double(dw), height: Double(dh))
+        if dw != image.width || dh != image.height, let fitted = Self.scaled(image, to: dw, dh) { image = fitted }
+        ctx.concatenate(ctx.ctm.inverted())
+        ctx.draw(image, in: device)
         ctx.restoreGState()
+    }
+
+    /// `image` (premultiplied RGBA, as `bitmap` makes them) with every channel multiplied by `alpha`.
+    private static func withAlpha(_ image: CGImage, _ alpha: Double) -> CGImage? {
+        var format = vImage_CGImageFormat(bitsPerComponent: 8, bitsPerPixel: 32, colorSpace: Unmanaged.passUnretained(colorSpace),
+                                          bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+                                          version: 0, decode: nil, renderingIntent: .defaultIntent)
+        var buf = vImage_Buffer()
+        guard vImageBuffer_InitWithCGImage(&buf, &format, nil, image, vImage_Flags(kvImageNoFlags)) == kvImageNoError else { return nil }
+        defer { free(buf.data) }
+        let a = Int16(min(max(alpha, 0), 1) * 256)
+        var matrix: [Int16] = [a, 0, 0, 0, 0, a, 0, 0, 0, 0, a, 0, 0, 0, 0, a]
+        guard vImageMatrixMultiply_ARGB8888(&buf, &buf, &matrix, 256, nil, nil, vImage_Flags(kvImageNoFlags)) == kvImageNoError
+        else { return nil }
+        var error = kvImageNoError
+        let out = vImageCreateCGImageFromBuffer(&buf, &format, nil, nil, vImage_Flags(kvImageNoFlags), &error)
+        guard error == kvImageNoError else { return nil }
+        return out?.takeRetainedValue()
+    }
+
+    /// `image` resampled to w × h pixels (through a BGRA bitmap, CoreGraphics' fast path for scaling).
+    private static func scaled(_ image: CGImage, to w: Int, _ h: Int) -> CGImage? {
+        guard w > 0, h > 0,
+              let tmp = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0, space: colorSpace,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
+        else { return nil }
+        tmp.interpolationQuality = .high
+        tmp.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+        return tmp.makeImage()
     }
 
     /// Scene transform of a layer (or of one of its repeater copies, `copy` being the step in its parent's space).
@@ -271,27 +322,22 @@ public final class FrameRenderer {
         let area = (motionBounds(layer, scene: scene, times: times, copy: copy) ?? frame).integral.intersection(frame)
         guard !area.isNull, area.width >= 1, area.height >= 1, let off = offscreen(area, scene: scene),
               let data = off.data?.assumingMemoryBound(to: UInt8.self) else { return }
-        let rb = off.bytesPerRow, ah = off.height, rowLen = off.width * 4
-        var acc = [UInt32](repeating: 0, count: rowLen * ah)
+        // Average the samples in float, vectorized (vDSP): a byte loop here cost more than the drawing. The
+        // buffers include the rows' padding bytes; they are never read back.
+        let bytes = off.bytesPerRow * off.height
+        var acc = [Float](repeating: 0, count: bytes)
+        var sample = [Float](repeating: 0, count: bytes)
         inMotionSample = true
         for tk in times {
-            memset(data, 0, rb * ah)
+            memset(data, 0, bytes)
             drawLayer(layer, scene: scene, at: tk, in: off, copy: copy, alphaScale: alphaScale)
-            acc.withUnsafeMutableBufferPointer { a in
-                for y in 0..<ah {
-                    let row = y * rb, ar = y * rowLen
-                    for x in 0..<rowLen { a[ar + x] &+= UInt32(data[row + x]) }
-                }
-            }
+            vDSP_vfltu8(data, 1, &sample, 1, vDSP_Length(bytes))
+            vDSP_vadd(acc, 1, sample, 1, &acc, 1, vDSP_Length(bytes))
         }
         inMotionSample = false
-        let half = UInt32(n / 2), count = UInt32(n)
-        acc.withUnsafeBufferPointer { a in
-            for y in 0..<ah {
-                let row = y * rb, ar = y * rowLen
-                for x in 0..<rowLen { data[row + x] = UInt8((a[ar + x] + half) / count) }
-            }
-        }
+        var inv = Float(1) / Float(n)
+        vDSP_vsmul(acc, 1, &inv, &acc, 1, vDSP_Length(bytes))
+        vDSP_vfixru8(acc, 1, data, 1, vDSP_Length(bytes))
         guard let image = off.makeImage() else { return }
         ctx.saveGState()
         ctx.setBlendMode(layer.blendMode.cgBlendMode)
@@ -393,13 +439,13 @@ public final class FrameRenderer {
         ctx.saveGState()
         ctx.setBlendMode(layer.blendMode.cgBlendMode)
         let shadowReach = applyShadow(layer, at: t, in: ctx)
-        ctx.setAlpha(opacity)
         if blur * pixelScale > 0.25 || fx.isActive {
             // The blurred or processed layer is a device-pixel image of part of the frame: draw it 1:1 at its place.
             if let blurred = blurredLayer(layer, scene: scene, transform: m, radius: blur, fx: fx, at: t) {
-                drawDeviceImage(blurred.image, rect: blurred.rect, scene: scene, in: ctx)
+                drawDeviceImage(blurred.image, rect: blurred.rect, scene: scene, in: ctx, alpha: opacity)
             }
         } else {
+            ctx.setAlpha(opacity)
             // Shadow and partial opacity apply to the layer as a whole, through an offscreen layer that costs
             // a pass over its area: skip it when neither is set, and bound it to what the layer can reach.
             // Particles take the opacity one by one instead, so they keep blending with each other and the background.
@@ -446,9 +492,8 @@ public final class FrameRenderer {
                   color: layer.longShadowColor ?? RGBA(r: 0, g: 0, b: 0, a: 0.35))
         guard let img = off.makeImage() else { return }
         ctx.saveGState()
-        ctx.setAlpha(opacity)
         ctx.setBlendMode(layer.blendMode.cgBlendMode)
-        drawDeviceImage(img, rect: area, scene: scene, in: ctx)
+        drawDeviceImage(img, rect: area, scene: scene, in: ctx, alpha: opacity)
         ctx.restoreGState()
     }
 
@@ -597,8 +642,7 @@ public final class FrameRenderer {
         ctx.setBlendMode(.plusLighter)
         var left = strength
         while left > 0.001 {
-            ctx.setAlpha(min(left, 1) * opacity)
-            drawDeviceImage(image, rect: g.rect, scene: scene, in: ctx)
+            drawDeviceImage(image, rect: g.rect, scene: scene, in: ctx, alpha: min(left, 1) * opacity)
             left -= 1
         }
         ctx.restoreGState()
@@ -983,7 +1027,13 @@ public final class FrameRenderer {
         let w = Double(sub.width), h = Double(sub.height)
         ctx.saveGState()
         ctx.translateBy(x: -w / 2, y: -h / 2)
-        ctx.clip(to: CGRect(x: 0, y: 0, width: w, height: h))
+        // Clip to the group's box, unless it covers the whole bitmap anyway (a full-frame group under a camera
+        // zoom lands on fractional pixels, and every image drawn inside a soft clip takes CoreGraphics' slow path).
+        let box = CGRect(x: 0, y: 0, width: w, height: h)
+        let m = ctx.ctm
+        let coversAll = m.b == 0 && m.c == 0
+            && box.applying(m).insetBy(dx: -0.01, dy: -0.01).contains(CGRect(x: 0, y: 0, width: ctx.width, height: ctx.height))
+        if !coversAll { ctx.clip(to: box) }
         // Drawn flat, the group is a world of its own: its 3D children see its default camera.
         let saved = space3D, savedDepth = depthContext
         space3D = nil
@@ -1089,7 +1139,12 @@ public final class FrameRenderer {
             let reach = Double(Self.blurReach(sigma))
             area = box.applying(toDevice).insetBy(dx: -reach, dy: -reach).integral.intersection(frame)
         }
-        guard !area.isNull, area.width >= 1, area.height >= 1, let off = offscreen(area, scene: scene) else { return nil }
+        // A wide blur (big soft blobs, glows) is rendered and blurred at a fraction of the resolution and scaled
+        // back up: with sigma ≥ 8 bitmap pixels the result is the same to the eye, for a fraction of the work.
+        // Pixel effects work in device pixels, so they keep the full size.
+        let plain = !(fx?.isActive ?? false) && (fx?.shine ?? 0) <= 0.001
+        let k = plain && sigma >= 16 ? min(8, Int(sigma / 8)) : 1
+        guard !area.isNull, area.width >= 1, area.height >= 1, let off = offscreen(area, scene: scene, downsample: k) else { return nil }
         off.saveGState()
         off.concatenate(m)
         // Particles add up among themselves before the blurred result is blended with the frame.
@@ -1100,11 +1155,12 @@ public final class FrameRenderer {
         let o = CGPoint.zero.applying(toDevice)
         let center = CGPoint(x: o.x - area.minX, y: area.maxY - o.y)
         fx?.applyBeforeBlur(off, center: center, scale: scale)
-        Self.boxBlur(off, sigma: sigma)
+        Self.boxBlur(off, sigma: sigma / Double(k))
         fx?.applyAfterBlur(off, center: center, scale: scale, pixelScale: pixelScale)
         if let fx, fx.shine > 0.001 { drawShine(layer, scene: scene, transform: m, strength: fx.shine, at: t, in: off) }
         guard let image = off.makeImage() else { return nil }
-        return (image, area)
+        // The bitmap was rounded up to whole pixels: the rect it covers grows the same way.
+        return (image, CGRect(x: area.minX, y: area.minY, width: Double(off.width * k), height: Double(off.height * k)))
     }
 
     /// A soft bright band across the layer's box, only where the layer has pixels (light sweep / shine).

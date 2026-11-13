@@ -635,7 +635,8 @@ struct PixelBuffer {
     /// Film grain: monochrome noise, new every frame, only where the layer is.
     func grain(_ amount: Double, frame: Int, seed: UInt64) {
         let salt = Noise.mix(seed ^ UInt64(frame) &* 0xD1B54A32D192ED03)
-        let strength = amount * 0.35
+        // Integer math: this runs over every pixel of a full-frame layer each frame.
+        let strength = Int(amount * 0.35 * 256) // × 256
         for y in 0..<h {
             let row = p + y * rb
             var hsh = Noise.mix(salt ^ UInt64(y) &* 0x9E3779B97F4A7C15)
@@ -644,8 +645,8 @@ struct PixelBuffer {
                 hsh = hsh &* 6364136223846793005 &+ 1442695040888963407
                 let a = Int(q[3])
                 guard a > 0 else { continue }
-                let n = Double(Int(hsh >> 56)) / 127.5 - 1 // -1…1
-                let d = Int((n * strength * Double(a)).rounded())
+                let n = Int(hsh >> 56) - 128 // -128…127, about -1…1 in 128ths
+                let d = (n * strength * a) >> 15 // n/128 · strength · a
                 for k in 0..<3 { q[k] = UInt8(min(max(Int(q[k]) + d, 0), a)) }
             }
         }

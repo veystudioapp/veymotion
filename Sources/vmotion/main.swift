@@ -18,6 +18,8 @@ FILES
   vmotion sample <scene.json>                     Write the demo scene
   vmotion frame  <scene.json> <time> <out.png> [scale]
   vmotion render <scene.json> <out.mp4|out.mov> [--preset tiktok|shorts|reels|youtube|facebook|x|square] [--fit fit|fill]
+  vmotion perf   <scene.json> [--scale s] [--frames n] [--layers]
+                                                  Render time per frame (no file output); --layers times each top-level layer alone
 
 AGENT
   vmotion chat [--model m] "prompt"               One Claude Code turn in the terminal (edits the app's scene)
@@ -174,6 +176,51 @@ case "frame":
     guard let png = FrameRenderer().pngData(scene, at: t, scale: scale) else { fail("Render failed") }
     do { try png.write(to: URL(fileURLWithPath: args[2])) } catch { fail(error.localizedDescription) }
     print("Wrote \(args[2])")
+
+case "perf":
+    // vmotion perf <scene.json> [--scale s] [--frames n] [--layers] — how long frames take to draw, in-process.
+    guard let path = args.first else { fail(usage) }
+    var scale = 1.0, frames = 24, perLayer = false
+    var j = 1
+    while j < args.count {
+        switch args[j] {
+        case "--scale" where j + 1 < args.count: scale = Double(args[j + 1]) ?? 1; j += 2
+        case "--frames" where j + 1 < args.count: frames = max(1, Int(args[j + 1]) ?? 24); j += 2
+        case "--layers": perLayer = true; j += 1
+        default: fail("unknown option \(args[j])")
+        }
+    }
+    let scene = loadScene(path)
+    let renderer = FrameRenderer()
+    /// Median and mean milliseconds per frame over `frames` frames spread across the scene (after one warm-up frame).
+    func measure(_ s: MotionScene) -> (median: Double, mean: Double) {
+        _ = renderer.makeImage(s, at: 0, scale: scale)
+        var ms: [Double] = []
+        for i in 0..<frames {
+            let t = s.duration * (Double(i) + 0.5) / Double(frames)
+            let t0 = DispatchTime.now().uptimeNanoseconds
+            _ = renderer.makeImage(s, at: t, scale: scale)
+            ms.append(Double(DispatchTime.now().uptimeNanoseconds - t0) / 1e6)
+        }
+        let sorted = ms.sorted()
+        return (sorted[sorted.count / 2], ms.reduce(0, +) / Double(ms.count))
+    }
+    let w = Int(Double(scene.width) * scale), h = Int(Double(scene.height) * scale)
+    let all = measure(scene)
+    print(String(format: "%d frames at %d×%d: median %.1f ms, mean %.1f ms (%.1f fps)", frames, w, h, all.median, all.mean, 1000 / all.mean))
+    if perLayer {
+        var empty = scene
+        empty.layers = []
+        let base = measure(empty).median
+        print(String(format: "  %6.1f ms  (empty frame)", base))
+        for layer in scene.layers where layer.type.isVisual {
+            var one = scene
+            one.layers = scene.layers.filter { $0.id == layer.id || layer.matte?.source == $0.id }
+            let m = measure(one).median
+            print(String(format: "  %6.1f ms  %@ (%@)", m - base, layer.id, layer.type.rawValue))
+        }
+        print("  (each layer alone, minus the empty frame; they need not add up to the total)")
+    }
 
 case "render":
     guard args.count >= 2 else { fail(usage) }
