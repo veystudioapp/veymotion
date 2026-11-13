@@ -468,6 +468,34 @@ extension MotionScene {
                                        fix: "bring the next subject in earlier, hold the previous one longer, or give the section a real subject that fills ⅓ of the frame", layers: []))
             }
         }
+
+        // 15. Outlines grown with scale: the stroke widens with the shape (a 4 px ring at scale 3.4 draws 14 px),
+        // so expanding rings and frames turn heavy instead of thinning out like a shockwave.
+        var thickened: [String] = []
+        for d in deep where d.layer.type == .rect || d.layer.type == .ellipse || d.layer.type == .path {
+            let l = d.layer
+            guard let stroke = l.stroke, l.strokeWidth.value(at: l.start) > 0 || !l.strokeWidth.keyframeList.isEmpty,
+                  !l.scale.keyframeList.isEmpty || !l[.scaleX].keyframeList.isEmpty || !l[.scaleY].keyframeList.isEmpty
+            else { continue }
+            let (a, b) = life(l)
+            guard b > a else { continue }
+            var designed = 0.0, drawn = 0.0
+            for i in 0...24 {
+                let t = a + (b - a) * Double(i) / 24
+                let sw = l.value(.strokeWidth, at: t)
+                designed = max(designed, sw)
+                guard stroke.value(at: t).a > 0.05, l.value(.opacity, at: t) > 0.1 else { continue }
+                let k = abs(l.value(.scale, at: t)) * max(abs(l.value(.scaleX, at: t)), abs(l.value(.scaleY, at: t)))
+                drawn = max(drawn, sw * k)
+            }
+            if designed > 0, drawn >= 4, drawn >= designed * 2 { thickened.append(l.id) }
+        }
+        if !thickened.isEmpty {
+            out.append(DesignIssue(severity: .warning, code: "scaled-stroke",
+                                   message: "Outlines grown with scale draw their stroke 2× or more wider than strokeWidth, so expanding rings/frames look heavy and crude",
+                                   fix: "grow them with width/height instead (apply_preset ripple does it for rings: grows, thins the stroke, fades, glows), or key strokeWidth down as scale goes up",
+                                   layers: thickened))
+        }
         out += craftIssues(renderer: renderer, pixels: pixels)
         return out.sorted { $0.severity > $1.severity }
     }

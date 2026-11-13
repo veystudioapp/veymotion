@@ -240,7 +240,8 @@ Easy Ease F9 / ⇧F9 / ⌘⇧F9).
   deterministic lint (flat background, pure white on black, system font, flat type sizes, unlit layers, ≥ 2 s
   stretches with no motion, text within 80 px of the edge, linear entrances, "only text and boxes" hint; and, reaching
   into nested groups: text in a `goo` group, long shadows ending inside the frame, ≥ 3 bare straight-edged polygons,
-  overshoot easing on ≥ 40% of ≥ 12 animated layers, ≥ 1 s with under 1% of the frame covered by a subject) behind the
+  overshoot easing on ≥ 40% of ≥ 12 animated layers, ≥ 1 s with under 1% of the frame covered by a subject,
+  outlines grown with scale so the drawn stroke is ≥ 2× strokeWidth: `scaled-stroke`, fixed by preset `ripple`) behind the
   `check_design` tool, whose reply ends with `reviewNote` (`reviewTimes`: one time per top-level group for the agent
   to `render_frame` at full size, since the lint cannot see drawings); `set_scene` runs it and, unless `look` is "none", `applyAutoLook` adds a look to a scene whose
   background is flat (`hasBackgroundDepth`), picking the kind from the background's luminance. In the app,

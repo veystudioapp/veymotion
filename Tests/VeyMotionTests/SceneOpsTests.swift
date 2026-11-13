@@ -69,6 +69,21 @@ import Testing
         #expect(throws: SceneError.self) { try text.applyPreset(.ripple, to: "t", start: 0, duration: 1) }
     }
 
+    @Test func lintFlagsStrokesWidenedByScale() throws {
+        var ring = MotionLayer.rect("ring", x: 320, y: 180, w: 100, h: 100, fill: "#00000000")
+        ring.type = .ellipse
+        ring.stroke = .constant(.white)
+        ring.strokeWidth = .constant(4)
+        ring.scale = .keyframes([MotionKeyframe(t: 0, v: 1), MotionKeyframe(t: 2, v: 3.4)])
+        var scene = MotionScene.test(layers: [ring])
+        #expect(scene.designIssues(pixels: false).contains { $0.code == "scaled-stroke" })
+        // Grown by size instead: nothing to report.
+        ring.scale = .constant(1)
+        scene.layers = [ring]
+        try scene.applyPreset(.ripple, to: "ring", start: 0, duration: 2)
+        #expect(!scene.designIssues(pixels: false).contains { $0.code == "scaled-stroke" })
+    }
+
     @Test func keyframesInterpolateAndHoldOutside() {
         let v = Animated<Double>.keyframes([MotionKeyframe(t: 1, v: 0, easing: .linear), MotionKeyframe(t: 3, v: 10, easing: .linear)])
         #expect(v.value(at: 0) == 0)
