@@ -112,17 +112,9 @@ Easy Ease F9 / ⇧F9 / ⌘⇧F9).
   `server/` (`/api/tts/*`; it holds the VieNeu key) at `BASE_API_URL` (env, else a `.env` in the working dir /
   next to the binary / Application Support). VieNeu gives no word timings, so `VoiceSynth.estimateTimings` fills them.
   Short text uses `/api/tts/speech` (WAV); text over 1500 characters goes through `/api/tts/jobs` and polling.
-- Social video (`Platforms.swift`, `Publish.swift`): `PlatformPreset` sizes feed `ExportOptions.size`; when the
+- Social video sizes (`Platforms.swift`): `PlatformPreset` sizes feed `ExportOptions.size`; when the
   aspect differs, `VideoExporter` renders the scene into its own bitmap and places it per `ExportFit` (bars or crop).
-  Publishing: OAuth is brokered by `server/server/api/social/*` (secrets stay there; the app opens `/connect` with a
-  random state + sha256 challenge and polls `/session` with the secret), tokens live in the keychain
-  (`SocialKeychain`, one item per account keyed `platform:userId`; the active one per platform is in UserDefaults), and `SocialPublisher` uploads straight to YouTube (resumable), TikTok (Content Posting API),
-  Facebook Pages (resumable upload API) and X (media upload v2). Publishing is UI-only on purpose: no MCP tool posts.
-  The sheet goes Edit → Preview (`PublishStore.prepare` renders the scene once, reused while unchanged) → Publish.
-  Thumbnails (`PublishThumbnail`, JPEG ≤ 2 MB) are set after the upload and never fail the post; TikTok gets
-  `video_cover_timestamp_ms` instead. "Write with Claude" (`PublishCopy.swift`) runs `ClaudeCodeAgent.structured`
-  (`claude -p --tools "" --json-schema`).
-  Logos are svgl.app SVGs embedded as strings in `SocialLogos.swift` (the app has no resource bundle).
+  The app has no publishing: videos are exported and uploaded by the user.
   Sandboxed runs cannot encode video at all, and the Nitro server cannot read `server/.env` or listen there.
 - Particles (`Particles.swift`): a `particles` layer is an emitter (width/height = its area) with a `ParticleSystem`
   (preset + overrides; only fields that differ from the preset are encoded). Nothing is carried between frames:
@@ -308,8 +300,8 @@ Easy Ease F9 / ⇧F9 / ⌘⇧F9).
   (`refreshIfDue`, at launch and on app activation). No database: Polar holds keys/activations. The token lives in
   Application Support/VeyMotion/license.json (not the keychain: the CLI reads it too) and is checked offline against
   `License.publicKeyBase64` (empty = everyone is Free). Gates: `License.require(.feature)` sits in Core entry points
-  (VieNeu synthesis, stock video, publishing, tracking/saliency/shake, `addTemplate`), so UI and MCP tools share it;
-  the server checks the token on TTS/stock/social routes too (`requirePro`, Polar re-checked hourly).
+  (VieNeu synthesis, stock video, tracking/saliency/shake, `addTemplate`), so UI and MCP tools share it;
+  the server checks the token on TTS/stock routes too (`requirePro`, Polar re-checked hourly).
   `VideoExporter` calls `License.prepareExport`: Free refuses ProRes and Pro content (`proContent`: 3D/models,
   removeBackground), fits into 1080p and draws `Watermark`. Debug builds only: `VEYMOTION_PRO=1` forces Pro and
   `VEYMOTION_LICENSE_PUBLIC_KEY` overrides the key.

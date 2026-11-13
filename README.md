@@ -36,7 +36,7 @@ server reads releases from `NITRO_UPDATES_REPO=owner/name`; for a private repo a
 
 Free has the whole editor; exports are fitted into 1080p with a small "Made with Vey Motion" watermark. Pro (a
 license key sold through [Polar](https://polar.sh), entered in Settings → Account) adds 4K/ProRes exports without the
-watermark, Vietnamese voices, stock video, publishing, 3D layers and models, background removal, motion tracking,
+watermark, Vietnamese voices, stock video, 3D layers and models, background removal, motion tracking,
 auto reframe, stabilize, templates and the graph editor. A key works on as many Macs as its Polar activation limit
 allows (Deactivate This Mac frees one) and keeps working offline for 14 days.
 
@@ -118,37 +118,13 @@ Claude and Codex keep separate sessions (and model/effort settings) in the same 
   (`.mp4` AAC, `.mov` PCM, audio-only `.m4a` / `.wav`). Preview and export share one mixer (`AudioMixer`).
 - Generated voice files live in `~/Library/Application Support/VeyMotion/assets/`.
 
-## Social video: export sizes and publishing
+## Social video: export sizes
 
 - **Platform sizes**: the Export sheet's **Size** menu has TikTok, YouTube Shorts, Reels (1080×1920), YouTube
   (1920×1080), Facebook feed (1080×1350), X (1920×1080) and Square (1080×1080). A scene of another aspect
   ratio is **fit** (bars in the background color) or **fill** (cropped), and the sheet warns when the video is
   longer or (roughly) bigger than the platform accepts. Agents use `export_video` with `preset` / `fit`; the CLI
   takes `vmotion render scene.json out.mp4 --preset tiktok --fit fill`.
-- **Publishing** (toolbar **Publish**, File → Publish Video… ⇧⌘E, or **Publish…** after an export): upload to
-  YouTube, TikTok (to the creator's inbox, or a direct post), a Facebook Page, or X. From the toolbar/menu the
-  current scene is rendered to MP4 at its own size when you press Publish (the render is reused while the scene is
-  unchanged, so publishing to several platforms renders once); after an export, the exported file is uploaded.
-  **Write with Claude** drafts the title, description and tags (or the TikTok / X caption) from the scene's
-  on-screen text, voice-over and media names, in the video's language, using your Claude Code (`claude -p`, no
-  tools); type notes next to the button to steer it. **Thumbnail**: a frame picked with a slider (default: the
-  playhead) or an image file, set on YouTube (needs a verified channel) and Facebook; for TikTok direct posts it
-  picks the cover frame; X does not let apps set one. **Preview…** renders the video and shows it with a mock-up of
-  the post before the final **Publish** button. **Connect** opens the platform's
-  sign-in in the browser. OAuth goes through the `server/` app, which holds the client secrets
-  (`/api/social/*`): create a developer app on each platform, register
-  `<server URL>/api/social/<platform>/callback` as its redirect URI, and put the client id/secret in
-  `server/.env` (see `.env.example`; platforms without credentials show as not set up). Tokens are kept in the
-  login keychain; videos upload straight from the app to the platform, not through the server.
-  Several accounts per platform can stay connected (e.g. YouTube channels / Brand Accounts): **Post as ▾** switches
-  between them without signing in again, **Add Channel… / Add Account…** connects another (Google always shows its
-  account chooser). When rendering the scene, the **Video** section has the Export sheet's size (platform presets,
-  fit / fill), quality (Auto = best under the platform's size limit) and time-range options.
-- Platform rules to know: Google only allows **private** uploads from API projects it has not verified, and
-  TikTok only allows **Only me** direct posts from apps it has not audited (inbox uploads work without the
-  audit). Facebook only lets apps post to Pages, not personal profiles. X needs MP4 (≤ 2:20, 512 MB) and an API
-  plan that allows posting. Agents cannot publish; only the user can, from the app.
-- Platform logos come from [svgl](https://svgl.app).
 
 ## Projects
 

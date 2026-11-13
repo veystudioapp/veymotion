@@ -5,8 +5,6 @@ import Foundation
 public struct PlatformPreset: Identifiable, Hashable, Sendable {
     public var id: String
     public var name: String
-    /// The platform it publishes to directly, if VeyMotion can upload there.
-    public var platform: SocialPlatform?
     public var width: Int
     public var height: Int
     /// Longest video the platform accepts in this format, in seconds.
@@ -25,31 +23,24 @@ public struct PlatformPreset: Identifiable, Hashable, Sendable {
     }
 
     public static let all: [PlatformPreset] = [
-        PlatformPreset(id: "tiktok", name: "TikTok", platform: .tiktok, width: 1080, height: 1920,
+        PlatformPreset(id: "tiktok", name: "TikTok", width: 1080, height: 1920,
                        maxDuration: 600, maxBytes: 4 << 30),
-        PlatformPreset(id: "shorts", name: "YouTube Shorts", platform: .youtube, width: 1080, height: 1920,
+        PlatformPreset(id: "shorts", name: "YouTube Shorts", width: 1080, height: 1920,
                        maxDuration: 180),
-        PlatformPreset(id: "reels", name: "Instagram / Facebook Reels", platform: .facebook, width: 1080, height: 1920,
+        PlatformPreset(id: "reels", name: "Instagram / Facebook Reels", width: 1080, height: 1920,
                        maxDuration: 180, maxBytes: 4 << 30),
-        PlatformPreset(id: "youtube", name: "YouTube", platform: .youtube, width: 1920, height: 1080),
-        PlatformPreset(id: "facebook", name: "Facebook feed", platform: .facebook, width: 1080, height: 1350,
+        PlatformPreset(id: "youtube", name: "YouTube", width: 1920, height: 1080),
+        PlatformPreset(id: "facebook", name: "Facebook feed", width: 1080, height: 1350,
                        maxDuration: 240 * 60, maxBytes: 10 << 30),
-        PlatformPreset(id: "x", name: "X (Twitter)", platform: .x, width: 1920, height: 1080,
+        PlatformPreset(id: "x", name: "X (Twitter)", width: 1920, height: 1080,
                        maxDuration: 140, maxBytes: 512 << 20),
-        PlatformPreset(id: "square", name: "Square post", platform: nil, width: 1080, height: 1080),
+        PlatformPreset(id: "square", name: "Square post", width: 1080, height: 1080),
     ]
 
     public static func named(_ id: String) -> PlatformPreset? {
         all.first { $0.id == id.lowercased() }
     }
 
-    /// The `platform` preset closest to the scene's aspect ratio (YouTube: Shorts for vertical scenes),
-    /// whose limits apply when the scene is published there as it is.
-    public static func matching(_ platform: SocialPlatform, scene: MotionScene) -> PlatformPreset? {
-        let aspect = Double(scene.width) / Double(max(scene.height, 1))
-        return all.filter { $0.platform == platform }
-            .min { abs(log(Double($0.width) / Double($0.height) / aspect)) < abs(log(Double($1.width) / Double($1.height) / aspect)) }
-    }
 
     /// Problems exporting `scene` with this preset (too long, too many fps, likely too big).
     public func warnings(for scene: MotionScene, duration: Double, estimatedBytes: Int64?) -> [String] {
@@ -72,47 +63,3 @@ public struct PlatformPreset: Identifiable, Hashable, Sendable {
     }
 }
 
-/// Platforms VeyMotion can publish to (see `SocialPublisher`).
-public enum SocialPlatform: String, CaseIterable, Codable, Sendable, Identifiable {
-    case youtube, tiktok, facebook, x
-
-    public var id: String { rawValue }
-
-    public var name: String {
-        switch self {
-        case .youtube: return "YouTube"
-        case .tiktok: return "TikTok"
-        case .facebook: return "Facebook"
-        case .x: return "X"
-        }
-    }
-
-    /// Longest caption / title the platform accepts.
-    public var titleLimit: Int {
-        switch self {
-        case .youtube: return 100
-        case .tiktok: return 2200
-        case .facebook: return 255
-        case .x: return 280
-        }
-    }
-
-    /// Largest upload in bytes through the API.
-    public var maxBytes: Int64 {
-        switch self {
-        case .youtube: return 256 << 30
-        case .tiktok: return 4 << 30
-        case .facebook: return 10 << 30
-        case .x: return 512 << 20
-        }
-    }
-
-    /// Containers each API accepts (X takes MP4 only).
-    public func accepts(_ url: URL) -> Bool {
-        let ext = url.pathExtension.lowercased()
-        switch self {
-        case .x: return ext == "mp4"
-        default: return ["mp4", "mov"].contains(ext)
-        }
-    }
-}

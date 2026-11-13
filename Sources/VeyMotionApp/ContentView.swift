@@ -98,13 +98,10 @@ struct ContentView: View {
                 }
                 .help("Pause and mark up this frame, then send it to Claude (⇧⌘A)")
                 .keyboardShortcut("a", modifiers: [.command, .shift])
-                Menu {
-                    Button("Export Video…") { store.exportVideo() }
-                    Button("Publish…") { store.showPublish = true }
-                } label: {
+                Button { store.exportVideo() } label: {
                     Label("Export", systemImage: "square.and.arrow.up")
                 }
-                .help("Export or publish the video (⌘E)")
+                .help("Export the video (⌘E)")
                 Button { withAnimation(.easeOut(duration: 0.2)) { showInspector.toggle() } } label: {
                     Label("Chat & Inspector", systemImage: "sidebar.right")
                 }
@@ -117,7 +114,6 @@ struct ContentView: View {
         .sheet(isPresented: $showVoice) { VoiceOverSheet() }
         .sheet(isPresented: $showSoundEffect) { SoundEffectSheet() }
         .sheet(isPresented: Bindable(store).showExport) { ExportSheet() }
-        .sheet(isPresented: Bindable(store).showPublish) { PublishSheet() }
     }
 }
 
@@ -621,7 +617,7 @@ struct StatusBar: View {
                         .lineLimit(1).truncationMode(.middle)
                 }
                 .buttonStyle(.plain)
-                .help("Show the export result (Show in Finder, Publish)")
+                .help("Show the export result")
                 Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
                     .buttonStyle(.link)
             } else if let m = store.message {

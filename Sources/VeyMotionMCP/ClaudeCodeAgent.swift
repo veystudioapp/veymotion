@@ -454,7 +454,7 @@ public final class ClaudeCodeAgent {
         return (result?.isEmpty ?? true) ? nil : result
     }
 
-    /// One `claude -p` turn whose answer must match `schema` (JSON Schema), e.g. to draft publishing copy.
+    /// One `claude -p` turn whose answer must match `schema` (JSON Schema), e.g. the design critic's scores.
     /// Tool-less unless `readsFiles`: then it may Read files in `workingDirectory` (the design critic's frames).
     /// The prompt goes in on stdin. Blocking; call it off the main thread.
     public static func structured(prompt: String, schema: [String: Any], claudePath: String, model: String? = nil,

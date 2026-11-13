@@ -8,7 +8,7 @@ import IOKit
 /// the rest is checked here, in the app and the CLI.
 public enum ProFeature: String, CaseIterable, Sendable {
     // Through the VeyMotion server (cost money per use).
-    case vietnameseVoice, stockVideo, publishing
+    case vietnameseVoice, stockVideo
     // Export.
     case highResExport, proResExport, noWatermark
     // Content a Free scene can preview but not export.
@@ -20,7 +20,6 @@ public enum ProFeature: String, CaseIterable, Sendable {
         switch self {
         case .vietnameseVoice: return "Vietnamese voices (VieNeu)"
         case .stockVideo: return "Stock video"
-        case .publishing: return "Publishing to social platforms"
         case .highResExport: return "Export above 1080p"
         case .proResExport: return "ProRes 4444 export"
         case .noWatermark: return "Export without watermark"
@@ -396,6 +395,11 @@ extension Data {
         var b = s.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
         while b.count % 4 != 0 { b += "=" }
         self.init(base64Encoded: b)
+    }
+
+    var base64URL: String {
+        base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
     }
 }
 

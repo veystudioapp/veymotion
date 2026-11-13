@@ -11,7 +11,6 @@ enum Docs {
     - For social video, size the scene for the platform: TikTok / YouTube Shorts / Reels 1080×1920 (9:16, Shorts and
       Reels up to 3 min), YouTube 1920×1080, Facebook feed 1080×1350 (4:5), X 1920×1080 (up to 2:20), square 1080×1080.
       Keep text and faces out of the bottom ~20% and right edge of 9:16 videos (platform buttons and captions cover them).
-      Publishing is done by the user from the app (Export → Publish); you cannot post.
 
     PLANS
     The user is on Free or VeyMotion Pro. Pro-only tools fail with a message saying so: VieNeu voices (generate_voice

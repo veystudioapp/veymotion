@@ -41,8 +41,6 @@ final class SceneStore: SceneHost {
     var mcpStatus = "Starting…"
     /// The Export sheet (options, then live progress).
     var showExport = false
-    /// File > Publish Video… (publish an exported file to YouTube, TikTok, Facebook or X).
-    var showPublish = false
     /// Non-nil while an export is running (0…1).
     var exportProgress: Double?
     private(set) var exportStartedAt: Date?

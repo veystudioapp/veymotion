@@ -196,7 +196,7 @@ struct AccountPanel: View {
 
     static let highlights = [
         "Export in 4K and ProRes 4444 with alpha, no watermark",
-        "Vietnamese voices (VieNeu), stock video, publishing to YouTube, TikTok, Facebook and X",
+        "Vietnamese voices (VieNeu), stock video",
         "3D layers and models, background removal",
         "Motion tracking, auto reframe, stabilize, templates, graph editor",
     ]

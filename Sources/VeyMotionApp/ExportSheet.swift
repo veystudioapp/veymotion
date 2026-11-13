@@ -2,8 +2,7 @@ import AppKit
 import SwiftUI
 import VeyMotionCore
 
-/// Export options (format, platform size, resolution, quality, range), then live progress with Cancel,
-/// then an optional Publish step.
+/// Export options (format, platform size, resolution, quality, range), then live progress with Cancel.
 @MainActor
 struct ExportSheet: View {
     @Environment(SceneStore.self) private var store
@@ -14,7 +13,6 @@ struct ExportSheet: View {
     /// A `PlatformPreset` id, or "" for the scene's own size.
     @AppStorage("export.preset") private var presetId = ""
     @AppStorage("export.fit") private var fit = ExportFit.fit
-    @State private var publishing: URL?
     @State private var useRange = false
     @State private var start = 0.0
     @State private var end = 0.0
@@ -23,16 +21,11 @@ struct ExportSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            if let publishing {
-                PublishView(file: publishing, suggested: preset?.platform, defaultTitle: store.defaultExportName,
-                            onBack: { self.publishing = nil }, onClose: { dismiss() })
-            } else {
-                Text("Export").font(.headline)
-                exportContent
-            }
+            Text("Export").font(.headline)
+            exportContent
         }
         .padding(16)
-        .frame(width: publishing == nil ? 440 : 560)
+        .frame(width: 440)
         .onAppear {
             start = 0
             end = scene.duration
@@ -152,7 +145,7 @@ struct ExportSheet: View {
         if o.isReframed(for: scene) {
             out.append("The scene is \(scene.width)×\(scene.height); it will be \(fit == .fit ? "letterboxed" : "cropped") to \(preset.aspectLabel). For the best result, make the scene \(preset.width)×\(preset.height).")
         }
-        if format == .mov, preset.platform != nil {
+        if format == .mov {
             out.append("Platforms re-encode ProRes uploads and X does not accept MOV; MP4 is smaller and faster to upload.")
         }
         return out
@@ -231,9 +224,6 @@ struct ExportSheet: View {
             HStack {
                 Spacer()
                 Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
-                if !ExportFormat.infer(from: url).isAudioOnly {
-                    Button("Publish…") { publishing = url }
-                }
                 Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
             }
         case let .failed(msg):
