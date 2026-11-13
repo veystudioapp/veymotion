@@ -15,6 +15,8 @@ public enum ParticleShape: String, Codable, CaseIterable, Sendable {
     case spark
     /// The layer's `path` image (e.g. a smoke puff PNG).
     case image
+    /// Paper pieces: mostly strips, some squares and dots, lit as they tumble.
+    case confetti
 }
 
 public enum EmitterShape: String, Codable, CaseIterable, Sendable {
@@ -212,13 +214,13 @@ public struct ParticleSystem: Equatable, Hashable, Sendable {
             p.colors = [hex("#B8CCFF90")]
             p.fadeIn = 0; p.fadeOut = 0.05
         case .confetti:
-            p.rate = 70; p.prewarm = 0; p.lifetime = 5; p.lifetimeRandom = 0.2
+            p.rate = 70; p.prewarm = 0; p.lifetime = 7; p.lifetimeRandom = 0.2
             p.emitter = .line
-            p.speed = 120; p.speedRandom = 0.5; p.direction = 90; p.spread = 50
-            p.gravity = 260; p.drag = 1.4
+            p.speed = 160; p.speedRandom = 0.5; p.direction = 90; p.spread = 50
+            p.gravity = 420; p.drag = 1.6
             p.turbulence = 50; p.turbulenceScale = 220; p.turbulenceSpeed = 0.6
-            p.shape = .square; p.size = 16; p.sizeRandom = 0.35
-            p.spin = 360; p.spinRandom = 0.6; p.flutter = 2.5
+            p.shape = .confetti; p.size = 20; p.sizeRandom = 0.45
+            p.spin = 240; p.spinRandom = 0.6; p.flutter = 2.2
             p.colors = [hex("#FF4D6D"), hex("#FFC93C"), hex("#3CCF91"), hex("#4D96FF"), hex("#B15CFF")]
             p.colorMode = .random
             p.fadeIn = 0; p.fadeOut = 0.15
@@ -406,10 +408,12 @@ public struct Particle: Sendable {
     public var size: Double
     /// Degrees.
     public var rotation: Double
-    /// Vertical squash, -1…1 (confetti flutter).
+    /// Vertical squash, -1…1 (confetti flutter): the cosine of the flip, negative = back side.
     public var scaleY: Double
     /// Color with the particle's fades in `a`.
     public var color: RGBA
+    /// Fixed random number in [0, 1) (confetti: piece shape, flip axis).
+    public var variant: Double = 0
     /// Earlier positions, newest first (when the system has a trail).
     public var trail: [CGPoint] = []
 }
@@ -555,6 +559,20 @@ extension MotionScene {
             }
             vx += ux; vy += uy
         }
+        if sys.flutter > 0 {
+            // Depth: bigger pieces are nearer, so they also travel faster on screen (parallax).
+            let near = spreadOf(sys.sizeRandom, 5)
+            x = Double(origin.x) + (x - Double(origin.x)) * near
+            y = Double(origin.y) + (y - Double(origin.y)) * near
+            vx *= near; vy *= near
+            // Falling paper glides side to side; eased in so a burst leaves in a straight line.
+            let amp = size0 * spreadOf(0.5, 12) * 1.4
+            let w = 2 * .pi * sys.flutter * 0.3 * spreadOf(0.3, 13)
+            let ramp = min(age / 0.8, 1), ease = ramp * ramp * (3 - 2 * ramp)
+            let phase = w * age + 2 * .pi * r(14)
+            x += amp * ease * sin(phase)
+            vx += amp * ease * w * cos(phase)
+        }
 
         // How it looks now.
         let u = age / life
@@ -573,7 +591,8 @@ extension MotionScene {
         var rotation = sys.angleRandom * (2 * r(7) - 1) + spinSign * sys.spin * spreadOf(sys.spinRandom, 9) * age
         if sys.orient { rotation = atan2(vy, vx) * 180 / .pi }
         let scaleY = sys.flutter > 0 ? cos(2 * .pi * (sys.flutter * spreadOf(0.4, 10) * age + r(11))) : 1
-        return Particle(x: x, y: y, vx: vx, vy: vy, size: size, rotation: rotation, scaleY: scaleY, color: color)
+        return Particle(x: x, y: y, vx: vx, vy: vy, size: size, rotation: rotation, scaleY: scaleY, color: color,
+                        variant: r(15))
     }
 
     /// Scene-space velocity of a layer's center, px/s.

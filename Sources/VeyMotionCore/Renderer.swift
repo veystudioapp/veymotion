@@ -2073,6 +2073,16 @@ extension FrameRenderer {
         return ctx.makeImage()!
     }()
 
+    /// A paper piece's color as it tumbles: darker edge-on, a little darker on its back, a glint when it faces you.
+    /// `facing` is the cosine of the flip (negative = back side).
+    static func paperShade(_ c: RGBA, facing: Double) -> CGColor {
+        let f = abs(facing)
+        let k = (0.5 + 0.5 * f) * (facing < 0 ? 0.85 : 1)
+        let glint = 0.35 * pow(f, 14)
+        func ch(_ v: Double) -> Double { v * k * (1 - glint) + glint }
+        return CGColor(srgbRed: ch(c.r), green: ch(c.g), blue: ch(c.b), alpha: 1)
+    }
+
     fileprivate func drawParticles(_ layer: MotionLayer, alpha: Double, in ctx: CGContext) {
         let sys = layer.particles
         let sprite = sys.shape == .image ? layer.path.flatMap(loadImage) : nil
@@ -2111,13 +2121,32 @@ extension FrameRenderer {
                 ctx.setFillColor(color)
                 ctx.fill(r)
                 ctx.restoreGState()
-            case .square:
+            case .square, .confetti:
                 ctx.saveGState()
                 ctx.translateBy(x: p.x, y: p.y)
                 ctx.rotate(by: p.rotation * .pi / 180)
-                ctx.scaleBy(x: 1, y: p.scaleY)
-                ctx.setFillColor(color)
-                ctx.fill(CGRect(x: -s / 2, y: -s / 2, width: s, height: s))
+                var fill = color
+                if sys.flutter > 0 {
+                    // Flip around an axis of its own (a parallelogram, not just a squash), never thinner than a
+                    // sliver, lit by how much it faces the viewer.
+                    let axis = (p.variant * 7.31).truncatingRemainder(dividingBy: 1) * .pi
+                    let c = p.scaleY
+                    ctx.rotate(by: axis)
+                    ctx.scaleBy(x: 1, y: (c < 0 ? -1 : 1) * max(abs(c), 0.14))
+                    ctx.rotate(by: -axis)
+                    fill = Self.paperShade(p.color, facing: c)
+                }
+                ctx.setFillColor(fill)
+                if sys.shape == .square {
+                    ctx.fill(CGRect(x: -s / 2, y: -s / 2, width: s, height: s))
+                } else if p.variant < 0.62 {
+                    let h = s * (0.32 + 0.18 * (p.variant * 13.7).truncatingRemainder(dividingBy: 1))
+                    ctx.fill(CGRect(x: -s / 2, y: -h / 2, width: s, height: h))
+                } else if p.variant < 0.85 {
+                    ctx.fill(CGRect(x: -s * 0.35, y: -s * 0.35, width: s * 0.7, height: s * 0.7))
+                } else {
+                    ctx.fillEllipse(in: CGRect(x: -s * 0.31, y: -s * 0.31, width: s * 0.62, height: s * 0.62))
+                }
                 ctx.restoreGState()
             case .spark:
                 let v = hypot(p.vx, p.vy)

@@ -327,7 +327,7 @@ enum Docs {
         own velocity), gravity (px/s², negative rises), wind (px/s²), drag (1/s), turbulence (swirl strength px/s),
         turbulenceScale (swirl size px), turbulenceSpeed (how fast swirls change), floor (scene y to bounce on), bounce,
         friction
-      look: shape (soft | circle | square | spark | image), size (diameter px), sizeRandom, grow (size at death ×; 0 shrinks
+      look: shape (soft | circle | square | spark | image | confetti: paper strips, squares and dots), size (diameter px), sizeRandom, grow (size at death ×; 0 shrinks
         away, 3 spreads like smoke), streak (spark length in seconds of travel), trail (seconds of past path drawn
         as a fading ribbon: comets, light painting, magic wands; 0.2–0.8), orient (face direction of travel),
         angleRandom, spin (deg/s), spinRandom, flutter (flips/s, confetti), colors ["#FFE9A050","#FF541048",...]
