@@ -19,6 +19,18 @@ import Testing
         #expect(outside.r < 60 && outside.g < 60)
     }
 
+    /// A flare's streak reaches past the layer's box: it must fade out, not be cut at the box edge.
+    @Test func flareStreakIsNotCutAtTheLayerBox() throws {
+        var flare = MotionLayer(id: "f", name: "f", type: .generator, x: 200, y: 180)
+        flare.width = .constant(200); flare.height = .constant(200)
+        flare.generator.kind = .flare
+        flare.generator.scale = 60 // streak: 240 px each way, past the box edge at x = 300
+        flare.opacity = .constant(0.8) // drawn through a transparency layer bounded by the content bounds
+        let px = try #require(Pixels(FrameRenderer().makeImage(MotionScene.test(background: "#000000", layers: [flare]), at: 0)))
+        #expect(px[310, 180].r > 5, "no streak past the box: \(px[310, 180])")
+        #expect(abs(px[296, 180].r - px[304, 180].r) <= 6, "edge at the box: \(px[296, 180]) vs \(px[304, 180])")
+    }
+
     /// Opacity on a blurred layer is multiplied into the pixels before compositing: it must still mean opacity.
     @Test func opacityOnBlurredLayersIsLinear() throws {
         var solid = MotionLayer.rect("r", x: 320, y: 180, w: 300, h: 200, fill: "#FFFFFF")

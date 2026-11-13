@@ -778,54 +778,110 @@ public final class FrameRenderer {
         }
     }
 
-    /// Lens flare: a bright source at `from` (default the box center) with a halo and ghost discs mirrored across
-    /// the center of the box, all adding light.
+    /// Where a flare's parts go: the source, the box center its ghosts mirror across, and its size.
+    struct FlareLayout {
+        var src: CGPoint, center: CGPoint, size: Double
+
+        init(_ g: Generator, box: CGRect) {
+            src = g.from.map { CGPoint(x: $0.x, y: $0.y) } ?? CGPoint(x: box.midX, y: box.midY)
+            center = CGPoint(x: box.midX, y: box.midY)
+            size = g.scale ?? Double(min(box.width, box.height)) * 0.25
+        }
+
+        /// Ghosts sit at `src` mirrored through the center by these factors (0 = center, -1 = mirror image).
+        static let ghostReach = (near: -0.3, far: -1.75)
+        var streakLength: Double { size * 4 }
+        var haloRadius: Double { size * 2.2 }
+        var ringRadius: Double { hypot(src.x - center.x, src.y - center.y) + size }
+
+        func point(_ f: Double) -> CGPoint {
+            CGPoint(x: center.x + (src.x - center.x) * f, y: center.y + (src.y - center.y) * f)
+        }
+
+        /// Everything the flare lights, in layer space (the streak and halo reach well past the layer's box).
+        var bounds: CGRect {
+            var r = CGRect(x: src.x - streakLength, y: src.y - haloRadius, width: streakLength * 2, height: haloRadius * 2)
+            r = r.union(CGRect(x: center.x - ringRadius, y: center.y - ringRadius, width: ringRadius * 2, height: ringRadius * 2))
+            for f in [Self.ghostReach.near, Self.ghostReach.far] {
+                let p = point(f)
+                r = r.union(CGRect(x: p.x - size, y: p.y - size, width: size * 2, height: size * 2))
+            }
+            return r
+        }
+    }
+
+    /// Lens flare: a bright source at `from` (default the box center) with a halo, an anamorphic streak and ghost
+    /// discs mirrored across the center of the box, all adding light. Every part falls off along a smooth curve
+    /// (many gradient stops): straight 2-stop gradients add up to a flat white disc with a visible edge.
     private func drawFlare(_ layer: MotionLayer, in box: CGRect, at t: Double, in ctx: CGContext) {
         let g = layer.generator
-        let src = g.from.map { CGPoint(x: $0.x, y: $0.y) } ?? CGPoint(x: box.midX, y: box.midY)
-        let c = CGPoint(x: box.midX, y: box.midY)
+        let fl = FlareLayout(g, box: box)
+        let src = fl.src, size = fl.size
         let colors = g.colorsValue
         let core = colors.first ?? .white
         let ghost = colors.count > 1 ? colors[1] : RGBA(r: 0.6, g: 0.8, b: 1, a: 1)
-        let size: Double = g.scale ?? Double(min(box.width, box.height)) * 0.25
+        let halo = RGBA.lerp(core, ghost, 0.55)
         let strength = g.gainValue
-        func radial(_ color: RGBA, at p: CGPoint, radius: Double, alpha: Double, hollow: Double = 0) {
-            var a = color, b = color
-            a.a = color.a * alpha; b.a = 0
-            var cols: [CGColor] = [a.cgColor, b.cgColor], locs: [CGFloat] = [0, 1]
-            if hollow > 0 {
-                // A ring: clear inside, peaking at `hollow` of the radius, clear at the edge.
-                var mid = color
-                mid.a = color.a * alpha
-                cols = [b.cgColor, b.cgColor, mid.cgColor, b.cgColor]
-                locs = [0, CGFloat(max(0, hollow - 0.12)), CGFloat(hollow), 1]
+        /// A radial falloff: `profile` maps 0…1 (center → radius) to 0…1. Stops are packed toward the center,
+        /// where the sharp profiles change fastest.
+        func glow(_ color: RGBA, at p: CGPoint, radius: Double, alpha: Double, _ profile: (Double) -> Double) {
+            guard radius > 0, alpha > 0 else { return }
+            let n = 28
+            var cols: [CGColor] = [], locs: [CGFloat] = []
+            for i in 0...n {
+                let x = pow(Double(i) / Double(n), 1.7)
+                var c = color
+                c.a = color.a * alpha * max(0, min(1, profile(x)))
+                cols.append(c.cgColor); locs.append(CGFloat(x))
             }
             guard let grad = CGGradient(colorsSpace: Self.colorSpace, colors: cols as CFArray, locations: locs) else { return }
             ctx.drawRadialGradient(grad, startCenter: p, startRadius: 0, endCenter: p, endRadius: radius, options: [])
         }
+        /// Bright point with long soft tails (≈ 1/r²), reaching 0 at the radius.
+        func hot(_ k: Double) -> (Double) -> Double {
+            { x in let w = 1 - x * x; return w * w / (1 + k * k * x * x) }
+        }
+        /// A thin bright circle at `at` of the radius.
+        func ring(_ at: Double, _ width: Double) -> (Double) -> Double {
+            { x in exp(-pow((x - at) / width, 2)) }
+        }
+        /// An aperture ghost: an even disc, a little brighter toward its rim, with a soft edge.
+        let disc: (Double) -> Double = { x in
+            let edge = x < 0.75 ? 1 : max(0, 1 - (x - 0.75) / 0.25)
+            return (0.55 + 0.45 * x * x * x * x) * edge * edge * (3 - 2 * edge)
+        }
         ctx.saveGState()
         ctx.setBlendMode(.plusLighter)
-        // Core and glow.
-        radial(core, at: src, radius: size * 0.35, alpha: min(1, strength))
-        radial(core, at: src, radius: size * 1.6, alpha: 0.35 * strength)
-        // Streak across the source.
-        ctx.saveGState()
-        ctx.translateBy(x: src.x, y: src.y)
-        ctx.scaleBy(x: 1, y: 0.06)
-        radial(core, at: .zero, radius: size * 4, alpha: 0.6 * strength)
-        ctx.restoreGState()
-        // Ghosts along the line through the center, on the far side.
+        // Tinted halo, then the hot core: only a small point saturates to white.
+        glow(halo, at: src, radius: fl.haloRadius, alpha: 0.32 * strength, hot(3))
+        glow(core, at: src, radius: size * 0.9, alpha: min(1, strength), hot(7))
+        // Anamorphic streak: a thin bright line inside a faint wider band, both fading along their length.
+        let streak = RGBA.lerp(core, ghost, 0.35)
+        for (squash, alpha, k) in [(0.08, 0.16, 2.5), (0.022, 0.6, 4.0)] {
+            ctx.saveGState()
+            ctx.translateBy(x: src.x, y: src.y)
+            ctx.scaleBy(x: 1, y: squash)
+            glow(streak, at: .zero, radius: fl.streakLength, alpha: alpha * strength, hot(k))
+            ctx.restoreGState()
+        }
+        // Ghosts along the line through the center, on the far side, each tinted a little differently. A source at
+        // the center has no axis to mirror along: its ghosts would stack on it as a bullseye, so they fade out.
+        let axis = min(1, hypot(src.x - fl.center.x, src.y - fl.center.y) / (size * 0.75))
         let salt = Noise.mix(Noise.hash("flare.\(layer.id)") ^ UInt64(bitPattern: Int64(g.seedValue)))
         let count = g.detail ?? 5
+        let (near, far) = FlareLayout.ghostReach
         for i in 0..<count {
-            let f = -0.3 - Double(i) * (1.3 / Double(max(count, 1))) - Noise.unit(i, salt) * 0.15
-            let p = CGPoint(x: c.x + (src.x - c.x) * f, y: c.y + (src.y - c.y) * f)
+            let f = near - Double(i) * ((near - far - 0.15) / Double(max(count, 1))) - Noise.unit(i, salt) * 0.15
             let r = size * (0.15 + Noise.unit(i + 50, salt) * 0.5)
-            let hollow = i % 2 == 0 ? 0.0 : 0.75
-            radial(ghost, at: p, radius: r, alpha: 0.25 * strength, hollow: hollow)
+            let tint = RGBA.lerp(ghost, core, Noise.unit(i + 90, salt) * 0.5)
+            if i % 2 == 0 {
+                glow(tint, at: fl.point(f), radius: r, alpha: 0.13 * strength * axis, disc)
+            } else {
+                glow(tint, at: fl.point(f), radius: r, alpha: 0.2 * strength * axis, ring(0.8, 0.07))
+            }
         }
         // Big faint ring around the center (an anamorphic halo).
-        radial(ghost, at: c, radius: hypot(src.x - c.x, src.y - c.y) + size, alpha: 0.18 * strength, hollow: 0.92)
+        glow(ghost, at: fl.center, radius: fl.ringRadius, alpha: 0.12 * strength, ring(0.93, 0.03))
         ctx.restoreGState()
     }
 
@@ -1256,6 +1312,7 @@ public final class FrameRenderer {
             let w = max(layer.shapeWidth(at: t), 0), h = max(layer.shapeHeight(at: t), 0)
             var box = CGRect(x: -w / 2, y: -h / 2, width: w, height: h)
             let g = layer.generator
+            if g.kind == .flare { return FlareLayout(g, box: box).bounds.union(box) }
             if g.kind == .lightning {
                 // The bolt strays up to about twice `scale` from the line between its ends, which may lie outside.
                 for p in [g.from, g.to].compactMap({ $0 }) { box = box.union(CGRect(x: p.x, y: p.y, width: 0, height: 0)) }

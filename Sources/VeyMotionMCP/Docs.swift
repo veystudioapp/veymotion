@@ -459,9 +459,11 @@ enum Docs {
       layer's reveal 0 → 1 to grow it in (bars one by one, line drawn on, pie swept). Colors cycle per bar/slice
       (line/area use the first); fill is used without colors. cornerRadius rounds bars, strokeWidth is the line
       width; labels use the layer's fontSize/fontWeight/fontName and color. Data videos: pair with a counter text.
-    - kind flare: a lens flare. from = light position in layer px from the center (default the center),
-      scale = size px (default a quarter of the box), gain = brightness, detail = number of ghost discs (default 5),
-      colors = [core, ghosts]. Animate x/y (or from) to sweep it across; use blendMode add over footage.
+    - kind flare: a lens flare: a small hot core in a soft tinted halo, a thin anamorphic streak (4 × scale each way,
+      past the layer's box) and ghost discs/rings mirrored through the layer's center. from = light position in layer
+      px from the center (default the center, where there is no axis and the ghosts fade out: put it off-center for
+      ghosts), scale = size px (default a quarter of the box), gain = brightness, detail = number of ghosts (default
+      5), colors = [core, ghosts]. Animate x/y to sweep it across (from is fixed); use blendMode add over footage.
     - seed (all kinds) gives another random pattern.
 
     3D (a shared 3D space with a real camera, and lit 3D objects)
