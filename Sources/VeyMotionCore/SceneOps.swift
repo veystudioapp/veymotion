@@ -150,13 +150,17 @@ extension MotionScene {
                     put(&l, .opacity, [kf(s + d * 0.3, l.opacity.value(at: s), .linear), kf(e, 0, .easeIn)])
                     put(&l, .zoomBlur, [kf(s, 0, .linear), kf(e, 0.6, .easeIn)])
                 case .whip:
-                    put(&l, .x, [kf(s, x0, .linear), kf(mid, x0 + dx * w * 1.2, .curve(.expo, .in))])
-                    put(&l, .y, [kf(s, y0, .linear), kf(mid, y0 + dy * h * 1.2, .curve(.expo, .in))])
-                    put(&l, .directionalBlur, [kf(s, 0, .linear), kf(mid, 160, .easeIn)])
+                    // A push at whip speed: the two layers travel together (edges touching), so no frame shows the
+                    // background between them; the blur peaks as they fly past.
+                    put(&l, .x, [kf(s, x0, .linear), kf(e, x0 + dx * w, .curve(.expo, .inOut))])
+                    put(&l, .y, [kf(s, y0, .linear), kf(e, y0 + dy * h, .curve(.expo, .inOut))])
+                    put(&l, .directionalBlur, [kf(s, 0, .linear), kf(mid, 160, .easeIn), kf(e, 0, .easeOut)])
                     l[.blurAngle] = .constant(dy != 0 ? 90 : 0)
                 case .wipe, .iris, .blinds, .blocks, .clock:
                     let wt: WipeType = type == .wipe ? .linear : type == .iris ? .iris : type == .blinds ? .blinds : type == .blocks ? .blocks : .radial
                     l.wipeStyle = wipeStyle(wt)
+                    // A hole grows from the center (the incoming layer fills it); see the complement below.
+                    if wt == .iris { l.wipeStyle?.reverse = true }
                     put(&l, .wipe, [kf(s, 0, .linear), kf(e, 1, .curve(.cubic, .inOut))])
                 case .glitch:
                     put(&l, .glitch, [kf(s, 0, .linear), kf(s + d * 0.1, 0.9, .hold), kf(mid, 1, .hold)])
@@ -168,7 +172,7 @@ extension MotionScene {
                 case .circle, .shape, .match:
                     break // handled above
                 }
-                if l.end == nil || l.end! > e { l.end = type == .whip || type == .glitch || type == .flash ? mid + 0.02 : e }
+                if l.end == nil || l.end! > e { l.end = type == .glitch || type == .flash ? mid + 0.02 : e }
             }
         }
         if let inId {
@@ -182,7 +186,8 @@ extension MotionScene {
                 case .flash:
                     put(&l, .opacity, [kf(mid, 0, .linear), kf(e, op, .easeOut)])
                 case .dissolve:
-                    l.wipeStyle = wipeStyle(.blocks); l.wipeStyle?.count = 40
+                    // reverse: the blocks the outgoing layer has already dropped (same seed).
+                    l.wipeStyle = wipeStyle(.blocks); l.wipeStyle?.count = 40; l.wipeStyle?.reverse = true
                     put(&l, .wipe, [kf(s, 1, .linear), kf(e, 0, .linear)])
                 case .push:
                     put(&l, .x, [kf(s, x1 - dx * w, .linear), kf(e, x1, .curve(.cubic, .inOut))])
@@ -196,15 +201,24 @@ extension MotionScene {
                     put(&l, .opacity, [kf(s, 0, .linear), kf(s + d * 0.5, op, .easeOut)])
                     put(&l, .zoomBlur, [kf(s, 0.5, .linear), kf(e, 0, .easeOut)])
                 case .whip:
-                    put(&l, .x, [kf(mid, x1 - dx * w * 1.2, .linear), kf(e, x1, .curve(.expo, .out))])
-                    put(&l, .y, [kf(mid, y1 - dy * h * 1.2, .linear), kf(e, y1, .curve(.expo, .out))])
-                    put(&l, .directionalBlur, [kf(mid, 160, .linear), kf(e, 0, .easeOut)])
+                    // Starts a little under the outgoing layer's edge, so the blurred seam shows content, not
+                    // background, whichever of the two is drawn on top.
+                    put(&l, .x, [kf(s, x1 - dx * w * 0.92, .linear), kf(e, x1, .curve(.expo, .inOut))])
+                    put(&l, .y, [kf(s, y1 - dy * h * 0.92, .linear), kf(e, y1, .curve(.expo, .inOut))])
+                    put(&l, .directionalBlur, [kf(s, 0, .linear), kf(mid, 160, .easeIn), kf(e, 0, .easeOut)])
                     l[.blurAngle] = .constant(dy != 0 ? 90 : 0)
-                    if l.start > mid - 0.02 || l.start == s { l.start = min(l.start, mid - 0.02) }
                 case .wipe, .iris, .blinds, .blocks, .clock:
                     let wt: WipeType = type == .wipe ? .linear : type == .iris ? .iris : type == .blinds ? .blinds : type == .blocks ? .blocks : .radial
-                    l.wipeStyle = wipeStyle(wt)
-                    if wt == .iris { l.wipeStyle?.reverse = false }
+                    // The exact complement of the outgoing layer's region at every moment (its wipe runs 1 → 0):
+                    // the edge comes from the other side, the hand's swept sector, the disc inside the hole, the
+                    // blocks already dropped. Otherwise both would hide the same part and show the background.
+                    var st = wipeStyle(wt)
+                    switch wt {
+                    case .linear, .blinds: st.angle = (st.angle + 180).truncatingRemainder(dividingBy: 360)
+                    case .radial, .blocks: st.reverse = true
+                    case .iris: st.reverse = false
+                    }
+                    l.wipeStyle = st
                     put(&l, .wipe, [kf(s, 1, .linear), kf(e, 0, .curve(.cubic, .inOut))])
                 case .glitch:
                     put(&l, .opacity, [kf(mid - 0.01, 0, .linear), kf(mid, op, .hold)])

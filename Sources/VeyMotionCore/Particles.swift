@@ -383,11 +383,13 @@ extension MotionLayer {
         switch preset {
         case .fire: l.y = .constant(h * 0.85); size = (w * 0.12, 0); l[.blur] = .constant(3)
         case .smoke: l.y = .constant(h * 0.75); size = (w * 0.1, 0); l[.blur] = .constant(2)
-        case .sparks: l.y = .constant(h * 0.75)
+        // Light particles get a glow: additive streaks alone read as hard lines, the blur gives them their halo.
+        case .sparks: l.y = .constant(h * 0.75); l[.glow] = .constant(1.2); l[.glowRadius] = .constant(14)
         case .snow, .confetti: l.y = .constant(-40); size = (w * 1.2, 0)
         case .rain: l.x = .constant(w * 0.45); l.y = .constant(-60); size = (w * 1.4, 0)
         case .dust, .bokeh: size = (w, h)
-        case .magic, .explosion: break
+        case .magic: l[.glow] = .constant(1); l[.glowRadius] = .constant(12)
+        case .explosion: l[.glow] = .constant(1); l[.glowRadius] = .constant(16)
         }
         l.width = .constant(size.w.rounded())
         l.height = .constant(size.h.rounded())

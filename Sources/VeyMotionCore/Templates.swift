@@ -160,8 +160,9 @@ extension MotionScene {
                        ("button", .pulse, click - 0.05, 0.3), ("done", .popIn, click + 0.1, 0.35),
                        ("button", .popOut, e - 0.4, 0.4), ("done", .fadeOut, e - 0.4, 0.3), ("cursor", .fadeOut, e - 0.5, 0.3)]
         case .endCard:
+            // Fills the frame: x/y are ignored (a moved title would land on the video cards).
             children.append(text("title", o.title ?? "Thanks for watching", size: h * 0.07, weight: "heavy",
-                                 x: o.x ?? w / 2, y: (o.y ?? h * 0.2)))
+                                 x: w / 2, y: h * 0.2))
             let cardW = w * 0.3, cardH = cardW * 9 / 16, gy = h * 0.55
             for (k, dx) in [-0.19, 0.19].enumerated() {
                 var c = rect("video\(k + 1)", x: w / 2 + w * dx, y: gy, w: cardW, h: cardH,
@@ -178,6 +179,7 @@ extension MotionScene {
             sub.start = s; sub.end = e
             children.append(sub)
             children.append(text("subtext", o.subtitle ?? "Subscribe", size: h * 0.025, weight: "bold", x: w / 2, y: h * 0.86, color: .white))
+            children[children.count - 1].maxWidth = h * 0.11
             presets = [("title", .textRise, s, 0.7), ("video1", .zoomIn, s + 0.3, 0.6), ("video2", .zoomIn, s + 0.45, 0.6),
                        ("label1", .fadeIn, s + 0.7, 0.4), ("label2", .fadeIn, s + 0.8, 0.4), ("sub", .bounceIn, s + 0.9, 0.7),
                        ("subtext", .fadeIn, s + 1.2, 0.3), ("sub", .heartbeat, s + 2, 1)]

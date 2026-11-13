@@ -2153,10 +2153,17 @@ extension FrameRenderer {
                 let len = max(v * sys.streak, 0.01)
                 let (ux, uy) = v > 1e-6 ? (p.vx / v, p.vy / v) : (0.0, -1.0)
                 ctx.setStrokeColor(color)
-                ctx.setLineWidth(s)
-                ctx.move(to: CGPoint(x: p.x - ux * len, y: p.y - uy * len))
-                ctx.addLine(to: CGPoint(x: p.x, y: p.y))
-                ctx.strokePath()
+                // A streak that is hot at its head and thins and fades toward its tail (three strokes, each
+                // shorter and wider than the last). A halo needs a blur: that is the layer's `glow`.
+                let passes: [(from: Double, width: Double, alpha: Double)] =
+                    [(1, 0.55, 0.5), (0.6, 0.8, 0.75), (0.25, 1, 1)]
+                for pass in passes {
+                    ctx.setAlpha(a * pass.alpha)
+                    ctx.setLineWidth(s * pass.width)
+                    ctx.move(to: CGPoint(x: p.x - ux * len * pass.from, y: p.y - uy * len * pass.from))
+                    ctx.addLine(to: CGPoint(x: p.x, y: p.y))
+                    ctx.strokePath()
+                }
             case .image:
                 guard let (img, size) = sprite, size.width > 0 else { continue }
                 let h = s * size.height / size.width

@@ -130,7 +130,8 @@ public struct WipeStyle: Codable, Equatable, Hashable, Sendable {
     public var feather: Double
     /// blinds: number of stripes; blocks: number of blocks across the layer's longer side.
     public var count: Int
-    /// radial: counter-clockwise; iris: a hole grows from the center instead of the layer shrinking into it.
+    /// radial: counter-clockwise; iris: a hole grows from the center instead of the layer shrinking into it;
+    /// blocks: the blocks drop in the opposite order (with the same seed, the complement of the normal one).
     public var reverse: Bool
     /// blocks: change to get another random order.
     public var seed: Int
@@ -245,7 +246,7 @@ public struct WipeStyle: Codable, Equatable, Hashable, Sendable {
             // Blocks centered on the box; each drops out once progress passes its random threshold.
             let ox = box.midX - Double(cols) * size / 2, oy = box.midY - Double(rows) * size / 2
             for r in 0..<rows {
-                for c in 0..<cols where Noise.unit(r * 7919 + c, salt) >= p {
+                for c in 0..<cols where (reverse ? 1 - Noise.unit(r * 7919 + c, salt) : Noise.unit(r * 7919 + c, salt)) >= p {
                     path.addRect(CGRect(x: ox + Double(c) * size, y: oy + Double(r) * size, width: size, height: size))
                 }
             }

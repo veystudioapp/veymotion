@@ -241,7 +241,7 @@ enum Docs {
       goes 0 → 1 (0 = rightward, 90 = down), so reveal left → right = angle 180 with wipe 1 → 0; radial = where the
       hand starts (0 = 12 o'clock). feather = soft edge in px (0 sharp; 30–80 looks smooth). count = stripes (blinds)
       or blocks across (blocks), default 8. reverse: radial turns counter-clockwise; iris opens a hole from the center
-      instead. seed reshuffles blocks. Iris reveal = type iris with wipe 1 → 0. Presets wipeIn / wipeOut animate it
+      instead; blocks drop in the opposite order (the complement of the same seed). seed reshuffles blocks. Iris reveal = type iris with wipe 1 → 0. Presets wipeIn / wipeOut animate it
       (soft left → right edge unless a wipeStyle is set). Wipes work in the layer's own space, so they turn and
       scale with it; unlike a matte they need no extra layer.
     - Stylize (every visual layer, animatable, 0 = off): pixelate (block size px; 40 → 0 = "depixelate" reveal),
