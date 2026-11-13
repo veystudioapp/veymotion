@@ -24,7 +24,7 @@ enum Docs {
     LOOK & DESIGN (read this before building anything: it is what separates a finished video from a rough draft)
     A composition made of flat fills on a flat background looks like a draft. Professional motion graphics always
     have three layers of depth, and every new piece you build must have them unless the user asks for a flat style:
-    1. A BACKGROUND WITH DEPTH: never a plain color. Call apply_look first (one call, see its description) or build it
+    1. A BACKGROUND WITH DEPTH: never a bare color with nothing on it. Call apply_look first (one call, see its description) or build it
        yourself: a full-frame rect with a radial gradient (lighter near the subject, dark edges), two big blurred
        ellipses (blur 150–300, blendMode screen or add on dark looks, opacity 0.4–0.6) in two related colors that
        drift slowly (wiggle x/y amount 40–80, frequency 0.08), a dust or bokeh particles layer at opacity 0.3–0.5, and
@@ -37,6 +37,23 @@ enum Docs {
     3. SECONDARY MOTION: something is always moving slowly — the look's blobs and particles, a camera zoom 1 → 1.04
        over the whole piece (or a 2–3% push per section), loop/wiggle on decorative shapes, and the subject's own
        entrance overshoot (easeOutBack / easeOutExpo / spring), so no frame is static.
+    4. ONE COMPOSITION PER SECTION: a piece is several distinct frames, not one centered card re-texted five times
+       (that is what reviewers call "template" work). Lay each section out differently: the hero anchored to a
+       third (left, right, top), a number or a word set huge so it bleeds off an edge, a big element against small
+       text in the opposite corner, one beat on a full-bleed field of the accent color, one as a vertical stack.
+       Use the whole frame: widescreen content spans the width, vertical content the height; a lone centered
+       column in a 16:9 frame leaves two thirds empty. The moment that matters most (the price, the final value,
+       the name) gets a beat of its own: bigger than anything else in the piece, alone, held longer, with a scale
+       or camera move the other sections do not have.
+    5. THE LOOK COMES FROM THE BRIEF, not from a default: dark navy, two glowing blobs, grain and a vignette behind
+       centered glowing type is the look of every generated video, and reviewers mark it down on sight. Choose the
+       background family from the subject, then build depth inside that family (item 1): finance, corporate,
+       product, explainer, health → a light field (#F4F6FA → #E6EAF2 or warm off-white) with near-black text, one
+       accent and soft shadows; food, craft, lifestyle → warm paper and earth tones; night, music, gaming, tech
+       trailers → dark with light. Imagery belongs to the subject: a coffee brand's mark has steam or a cup rim,
+       not a stock starburst; an icon is drawn for the idea (a waveform that flattens for noise cancelling, drops
+       on a ring for water resistance), never a generic glyph in a circle; a mark can be assembled from a few path
+       layers (import_vector of an icon plus your own curves) and animated part by part.
     Typography: choose a font family for the mood (see FONTS; the system font is a last resort), 1–2 families per
        piece. Build a hierarchy: hero 120–180 px (heavy/black, letterSpacing -2 to -4), heading 64–96, body 32–44
        (medium, color at 70–80% of the text color, e.g. "#C8CAD6" on dark), label/eyebrow 22–28 (semibold, uppercase,
@@ -83,6 +100,10 @@ enum Docs {
          supporting, decoration), 0.06–0.12 s stagger in reading order.
        - More than two font families or more than two hues besides neutrals? → cut down to the palette.
        - Does each text stay about 1 s per 4 words? Do stacked texts share an edge exactly (not 5 px off)?
+       - Do two sections share the same layout (the same centered stack on the same backdrop)? → re-lay one of them
+         (item 4). Does the key moment look like every other beat? → make it the loudest frame of the piece.
+       - Is this the dark-vignette-and-glow default although the brief is corporate, finance, product or food?
+         → a background family chosen for the subject (item 5). Is any mark or icon a generic placeholder shape?
        - Vertical video: is text clear of the bottom 14% and the right 12% of the lower half (app buttons)?
 
     LAYER
