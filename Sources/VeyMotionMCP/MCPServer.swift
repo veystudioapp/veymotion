@@ -534,7 +534,7 @@ public final class MCPServer {
                 throw ToolError("`preset` must be one of \(Preset.allCases.map(\.rawValue))")
             }
             guard let start = number(a["start"]) else { throw ToolError("`start` must be a number") }
-            let duration = number(a["duration"]) ?? 0.6
+            let duration = number(a["duration"]) ?? preset.defaultDuration
             var ids = (a["ids"] as? [Any])?.compactMap { $0 as? String } ?? []
             if let id = a["id"] as? String, !id.isEmpty { ids.insert(id, at: 0) }
             guard !ids.isEmpty else { throw ToolError("Give `id` or `ids`") }

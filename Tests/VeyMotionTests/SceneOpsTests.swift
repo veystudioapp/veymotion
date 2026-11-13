@@ -51,6 +51,24 @@ import Testing
         #expect(abs(l.opacity.value(at: 2) - 1) < 1e-9)
     }
 
+    @Test func rippleGrowsBySizeAndThinsItsStroke() throws {
+        var ring = MotionLayer.rect("ring", x: 320, y: 180, w: 100, h: 100, fill: "#FFFFFF")
+        ring.type = .ellipse
+        ring.strokeWidth = .constant(4)
+        var scene = MotionScene.test(layers: [ring])
+        try scene.applyPreset(.ripple, to: "ring", start: 0.5, duration: 1.4)
+        let l = try scene.layer("ring")
+        #expect(l.stroke?.value(at: 0).a == 1) // the fill became the outline
+        #expect(l.fill.value(at: 0).a == 0)
+        #expect(l.scale.keyframeList.isEmpty)
+        #expect(abs(l.value(.width, at: 1.9) - 320) < 1e-9)
+        #expect(l.value(.strokeWidth, at: 1.9) < 1)
+        #expect(l.value(.opacity, at: 1.9) == 0)
+        #expect(l.value(.glow, at: 1) > 0)
+        var text = MotionScene.test(layers: [.text("t", "Hi", x: 0, y: 0)])
+        #expect(throws: SceneError.self) { try text.applyPreset(.ripple, to: "t", start: 0, duration: 1) }
+    }
+
     @Test func keyframesInterpolateAndHoldOutside() {
         let v = Animated<Double>.keyframes([MotionKeyframe(t: 1, v: 0, easing: .linear), MotionKeyframe(t: 3, v: 10, easing: .linear)])
         #expect(v.value(at: 0) == 0)

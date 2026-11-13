@@ -203,6 +203,11 @@ enum Docs {
       0→1 starting a bit later. Chasing dash on a ring: trimStart 0, trim 0.25, trimOffset 0→1 (linear) + loop offset.
       A path made of several pieces trims each piece on its own, unless trimSequential: true (pieces one after
       another: handwriting). Text → handwriting: text_to_path, then preset writeOn.
+    - Shockwave / ripple rings: never grow a stroked ring with scale (the stroke widens with it: a 4 px ring at scale
+      3.4 draws 14 px, heavy and crude). Use preset ripple (rect/ellipse; default 1.4 s): it grows width/height ×3.2
+      (easeOutQuart), thins the stroke to 0.6 px, fades out and adds a soft glow. Several rings: duplicate_layer with
+      timeOffset 0.2–0.3 s and vary them (stroke 2–6 px, one tinted ring, one a little later or smaller) rather than
+      three identical copies; keep them faint behind the subject (start opacity 0.4–0.8).
     - lineCap: butt | round | square (paths default round); lineJoin: miter | round | bevel (paths default round).
 
     AFTER EFFECTS-STYLE TOOLS
@@ -846,15 +851,15 @@ enum Docs {
       },
       {
         "name": "apply_preset",
-        "description": "Add a ready-made animation to one or more layers between start and start+duration. The layer's current values are the resting state. With several ids, each starts `stagger` seconds after the previous; layers the preset doesn't apply to are skipped. text* presets animate each letter/word/line; drawOn traces a shape's or path's outline.",
+        "description": "Add a ready-made animation to one or more layers between start and start+duration. The layer's current values are the resting state. With several ids, each starts `stagger` seconds after the previous; layers the preset doesn't apply to are skipped. text* presets animate each letter/word/line; drawOn traces a shape's or path's outline; ripple spreads a rect/ellipse ring outward like a shockwave (thinning stroke, fade, glow).",
         "inputSchema": {
           "type": "object",
           "properties": {
             "id": { "type": "string" },
             "ids": { "type": "array", "items": { "type": "string" }, "description": "Several layers, in cascade order." },
-            "preset": { "type": "string", "enum": ["fadeIn", "slideUp", "slideDown", "slideInLeft", "slideInRight", "popIn", "zoomIn", "blurIn", "bounceIn", "dropIn", "flipIn", "rotateIn", "wipeIn", "swingIn", "fadeOut", "slideOutUp", "slideOutDown", "slideOutLeft", "slideOutRight", "popOut", "zoomOut", "blurOut", "flipOut", "wipeOut", "swingOut", "spin", "pulse", "heartbeat", "shake", "wobble", "jello", "glitchBurst", "turntable", "drawOn", "writeOn", "typewriter", "textRise", "textPop", "textDrop", "textLines", "textOut", "decode", "textBlurIn", "textFocus"] },
+            "preset": { "type": "string", "enum": ["fadeIn", "slideUp", "slideDown", "slideInLeft", "slideInRight", "popIn", "zoomIn", "blurIn", "bounceIn", "dropIn", "flipIn", "rotateIn", "wipeIn", "swingIn", "fadeOut", "slideOutUp", "slideOutDown", "slideOutLeft", "slideOutRight", "popOut", "zoomOut", "blurOut", "flipOut", "wipeOut", "swingOut", "spin", "pulse", "heartbeat", "shake", "wobble", "jello", "glitchBurst", "turntable", "drawOn", "writeOn", "ripple", "typewriter", "textRise", "textPop", "textDrop", "textLines", "textOut", "decode", "textBlurIn", "textFocus"] },
             "start": { "type": "number" },
-            "duration": { "type": "number", "default": 0.6 },
+            "duration": { "type": "number", "default": 0.6, "description": "Seconds (default 0.6; ripple 1.4)." },
             "stagger": { "type": "number", "description": "Seconds between layers when several ids are given." }
           },
           "required": ["preset", "start"]

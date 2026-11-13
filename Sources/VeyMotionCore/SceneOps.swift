@@ -11,6 +11,9 @@ public enum Preset: String, CaseIterable, Codable, Sendable {
     case spin, pulse, heartbeat, shake, wobble, jello, glitchBurst, turntable
     // Shapes
     case drawOn, writeOn
+    /// A ring (rect/ellipse outline) spreading out like a shockwave: grows by its size (so the stroke stays thin),
+    /// thins its stroke and fades.
+    case ripple
     // Text
     case typewriter, textRise, textPop, textDrop, textLines, textOut, decode, textBlurIn, textFocus
 
@@ -51,6 +54,7 @@ public enum Preset: String, CaseIterable, Codable, Sendable {
         case .glitchBurst: return "Glitch"
         case .drawOn: return "Draw On"
         case .writeOn: return "Write On"
+        case .ripple: return "Ripple"
         case .typewriter: return "Typewriter"
         case .textRise: return "Letters Rise"
         case .textPop: return "Words Pop"
@@ -74,13 +78,17 @@ public enum Preset: String, CaseIterable, Codable, Sendable {
         case .fadeOut, .slideOutUp, .slideOutDown, .slideOutLeft, .slideOutRight, .popOut, .zoomOut, .blurOut,
              .flipOut, .wipeOut, .swingOut: return .exit
         case .spin, .pulse, .heartbeat, .shake, .wobble, .jello, .glitchBurst, .turntable: return .emphasis
-        case .drawOn, .writeOn: return .shape
+        case .drawOn, .writeOn, .ripple: return .shape
         case .typewriter, .textRise, .textPop, .textDrop, .textLines, .textOut, .decode, .textBlurIn, .textFocus: return .text
         }
     }
 
+    /// Duration used when none is given (a ripple needs time to spread).
+    public var defaultDuration: Double { self == .ripple ? 1.4 : 0.6 }
+
     /// Whether the preset can be applied to a layer of this type.
     public func applies(to type: LayerType) -> Bool {
+        if self == .ripple { return type == .rect || type == .ellipse }
         switch group {
         case .text: return type == .text
         case .shape: return type.isShape
@@ -379,7 +387,9 @@ extension MotionScene {
         guard d > 0 else { throw SceneError.invalid("duration must be > 0") }
         var l = try layer(id)
         guard preset.applies(to: l.type) else {
-            throw SceneError.invalid("\(preset.rawValue) only applies to \(preset.group == .text ? "text" : preset.group == .shape ? "rect/ellipse/path" : "visual") layers")
+            let kinds = preset == .ripple ? "rect/ellipse"
+                : preset.group == .text ? "text" : preset.group == .shape ? "rect/ellipse/path" : "visual"
+            throw SceneError.invalid("\(preset.rawValue) only applies to \(kinds) layers")
         }
         let e = s + d
         func put(_ p: AnimProperty, _ kfs: [MotionKeyframe]) {
@@ -516,6 +526,26 @@ extension MotionScene {
             }
             if l.strokeWidth.value(at: s) <= 0 { l.strokeWidth = .constant(6) }
             put(.trim, [kf(s, 0, .linear), kf(e, 1, .curve(.cubic, .inOut))])
+        case .ripple:
+            // Grows through width/height, not scale: scaling would widen the stroke with the ring, while a real
+            // shockwave thins as it spreads. Bright at first, then it fades out as it slows.
+            if l.stroke == nil {
+                let fill = l.fill.value(at: s)
+                l.stroke = .constant(fill.a > 0.05 ? fill : .white)
+                l.fill = .constant(.clear)
+            }
+            let sw = l.strokeWidth.value(at: s) > 0 ? l.strokeWidth.value(at: s) : 4
+            let w = l[.width].value(at: s), h = l[.height].value(at: s)
+            let grow: Easing = .curve(.quart, .out)
+            put(.width, [kf(s, w, .linear), kf(e, w * 3.2, grow)])
+            put(.height, [kf(s, h, .linear), kf(e, h * 3.2, grow)])
+            put(.strokeWidth, [kf(s, sw, .linear), kf(e, min(sw, 0.6), .curve(.quad, .out))])
+            put(.opacity, [kf(s, max(opacityOut, 0.01), .linear), kf(e, 0, .curve(.quad, .out))])
+            // A soft halo, unless the layer has its own glow.
+            if l[.glow].keyframeList.isEmpty && l[.glow].value(at: s) <= 0 {
+                l[.glow] = .constant(0.7)
+                if l[.glowRadius].keyframeList.isEmpty { l[.glowRadius] = .constant(16) }
+            }
         case .writeOn:
             // Handwriting: the outline writes piece by piece (letters one after another), then the fill fades in.
             let color = l.fill.value(at: e)
