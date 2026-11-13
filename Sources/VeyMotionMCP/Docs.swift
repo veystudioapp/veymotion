@@ -547,7 +547,8 @@ enum Docs {
       for the classic look. Everything else (position keyframes, effects, bones) applies to the layer as a whole.
     - Groups with "localTime": true count their children's times from the group's start: keyframes at t 0 inside
       the group happen when the group starts, so a section built once can be moved by changing the group's start
-      (and duplicated with timeOffset). Children's audioReact timing is not shifted in such groups.
+      (and duplicated with timeOffset). audioReact and spectrum/waveform generators inside still follow the music at
+      scene time, so they stay on the beat wherever the group starts.
 
     SECONDARY MOTION (automatic follow-through)
     - inertia (0…1): after a keyframed move, turn or scale stops (or changes speed abruptly), the layer overshoots and

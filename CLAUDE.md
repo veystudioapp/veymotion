@@ -89,7 +89,9 @@ Easy Ease F9 / ⇧F9 / ⌘⇧F9).
   caches per path (failures too) and is shared by `analyze_audio`, the timeline (`BeatCache` warms it) and the
   renderer. `audioReact` is evaluated inside `MotionLayer.value`, which has no scene: `MotionScene.layers`/`duration`
   `didSet` call `resolveAudioLinks`, which stores each reaction's source file and timing in `AudioReact.link`
-  (not saved). Renaming an audio layer repoints `source` in `updateLayer`. The canvas renders inside
+  (not saved). Children of `localTime` groups get links shifted by those groups' starts (they run on local time),
+  and a group's `subscene(of:)` is built with `resolving: false` (re-resolving there, with no audio layer in the
+  sub-scene, would cut every child's link). Renaming an audio layer repoints `source` in `updateLayer`. The canvas renders inside
   `AudioAnalysisCache.withoutWaiting` and the app's main thread never waits (`waitsOnMainThread = false`): reactions
   read 0 until the file is analyzed in the background, then `didAnalyze` triggers a redraw. Export and the CLI wait.
 - Video sound and transcription (`Transcribe.swift`): `MediaAudio.read` decodes any file's sound (AVAudioFile first,
@@ -226,7 +228,9 @@ Easy Ease F9 / ⇧F9 / ⌘⇧F9).
   axes; text animators carry `fontWeightAxis`/`fontWidth` per unit through `GlyphState.weightAxis/widthAxis`),
   `textHighlights` (`TextHighlight`, marker bands behind words from the CTLine offsets, swept by `start`/`duration`),
   `Gradient` `.conic` (wedges, `Gradient.color(at:)`), `Repeater` `colors` + `randomX/Y/Rotation/Scale` + `seed`,
-  and transition types `circle` / `shape` (a growing matte path, through copies of the layers for the span) and
+  and transition types `circle` / `shape` (a growing matte path, through copies of the layers for the span; the copies
+  and the entering original of a `localTime` group keep its clock: `keepClock` shifts the children back by the change
+  of start) and
   `match` (`shapeTransition` / `matchTransition` in `SceneOps.swift`).
   `Templates.swift` (`add_template`, groups whose parts are keyed with presets; text/ink colors and card style follow
   the background's luminance) are pure scene edits. `Looks.swift` (`apply_look` / `remove_look`, Add → Look in the app)

@@ -672,8 +672,17 @@ extension MotionScene {
             copy.id = uniqueId(base: id + (incoming ? "-in" : "-out"))
             copy.name = layers[i].name + (incoming ? " (entering)" : " (leaving)")
             copy.start = s; copy.end = e
+            // A localTime group's start is also its children's clock. Both the copy (start → s) and the entering
+            // original (start → e) keep the original clock, so the section neither replays nor jumps back.
+            Self.keepClock(&copy, from: layers[i].start)
             copy.matte = Matte(source: matteId, mode: mode)
-            if incoming { layers[i].start = max(layers[i].start, e) } else { layers[i].end = s }
+            if incoming {
+                let was = layers[i].start
+                layers[i].start = max(was, e)
+                Self.keepClock(&layers[i], from: was)
+            } else {
+                layers[i].end = s
+            }
             if copy.type == .group {
                 var seen = Set(allLayers.map(\.id)); seen.insert(copy.id)
                 Self.normalizeIds(&copy.children, seen: &seen)
@@ -686,6 +695,18 @@ extension MotionScene {
         if let mi = layers.firstIndex(where: { $0.id == matteId }) {
             let m = layers.remove(at: mi)
             layers.append(m)
+        }
+    }
+
+    /// After a localTime group's start moved away from `old`, shifts its children back by the same amount so they
+    /// still play on the old clock (a group's start is both when it shows and when its children's time 0 is).
+    static func keepClock(_ l: inout MotionLayer, from old: Double) {
+        guard l.type == .group, l.localTime, l.start != old else { return }
+        let delta = old - l.start
+        for c in l.children.indices {
+            l.children[c].start += delta
+            if let ce = l.children[c].end { l.children[c].end = ce + delta }
+            shiftTree(&l.children[c], by: delta)
         }
     }
 

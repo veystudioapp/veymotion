@@ -1223,11 +1223,19 @@ public struct MotionScene: Codable, Equatable, Sendable {
 
     public init(width: Int = 1920, height: Int = 1080, fps: Int = 30, duration: Double = 5,
                 background: RGBA = RGBA(hex: "#0E0E12")!, layers: [MotionLayer] = []) {
+        self.init(width: width, height: height, fps: fps, duration: duration, background: background, layers: layers,
+                  resolving: true)
+    }
+
+    /// `resolving: false` keeps the layers' audio and property links as they are: for a group's sub-scene, whose
+    /// children were already linked by the whole scene (the music and the link sources are outside the group, so
+    /// resolving again would cut every link).
+    init(width: Int, height: Int, fps: Int, duration: Double, background: RGBA, layers: [MotionLayer], resolving: Bool) {
         self.width = width; self.height = height; self.fps = fps
         self.duration = duration; self.background = background; self.layers = layers
         lights = []
         bones = []
-        resolveLinks()
+        if resolving { resolveLinks() }
     }
 
     /// The audio layer an `audioReact` follows when it names no source: the music, else the first audio layer.
@@ -1247,15 +1255,19 @@ public struct MotionScene: Codable, Equatable, Sendable {
         // once per reaction overflowed the 512 KB stacks of background threads (project thumbnails).
         var resolved = layers
         var changed = false
-        Self.resolve(&resolved, audio: audioLayers, fallback: defaultReactSource, duration: duration,
+        Self.resolve(&resolved, audio: audioLayers, fallback: defaultReactSource, duration: duration, offset: 0,
                      lookup: { id in Self.find(id, in: all) }, changed: &changed)
         if changed { layers = resolved }
     }
 
+    /// `offset`: how far the layers' clock runs behind scene time (the starts of the `localTime` groups they sit in),
+    /// so their audio links map their own time to the right moment of the sound.
     private static func resolve(_ resolved: inout [MotionLayer], audio: [MotionLayer], fallback: MotionLayer?,
-                                duration: Double, lookup: (String) -> MotionLayer?, changed: inout Bool) {
+                                duration: Double, offset: Double, lookup: (String) -> MotionLayer?, changed: inout Bool) {
         for i in resolved.indices where resolved[i].type == .group {
-            resolve(&resolved[i].children, audio: audio, fallback: fallback, duration: duration, lookup: lookup, changed: &changed)
+            let inner = offset + (resolved[i].localTime ? resolved[i].start : 0)
+            resolve(&resolved[i].children, audio: audio, fallback: fallback, duration: duration, offset: inner,
+                    lookup: lookup, changed: &changed)
         }
         for i in resolved.indices where !resolved[i].links.isEmpty {
             for key in Array(resolved[i].links.keys) {
@@ -1273,7 +1285,8 @@ public struct MotionScene: Codable, Equatable, Sendable {
                 guard let react = resolved[i].audioReact[key] else { continue }
                 let src = react.source.map { id in audio.first { $0.id == id } } ?? fallback
                 let link = src.flatMap { s in
-                    s.path.map { AudioLink(path: $0, start: s.start, trimIn: s.trimIn, end: s.effectiveEnd(sceneDuration: duration)) }
+                    s.path.map { AudioLink(path: $0, start: s.start - offset, trimIn: s.trimIn,
+                                       end: s.effectiveEnd(sceneDuration: duration) - offset) }
                 }
                 if react.link != link { resolved[i].audioReact[key]?.link = link; changed = true }
             }
@@ -1282,7 +1295,8 @@ public struct MotionScene: Codable, Equatable, Sendable {
             let g = resolved[i].generator
             let src = g.source.map { id in audio.first { $0.id == id } } ?? fallback
             let link = src.flatMap { s in
-                s.path.map { AudioLink(path: $0, start: s.start, trimIn: s.trimIn, end: s.effectiveEnd(sceneDuration: duration)) }
+                s.path.map { AudioLink(path: $0, start: s.start - offset, trimIn: s.trimIn,
+                                       end: s.effectiveEnd(sceneDuration: duration) - offset) }
             }
             if g.link != link { resolved[i].generator.link = link; changed = true }
         }

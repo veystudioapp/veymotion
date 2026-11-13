@@ -138,7 +138,7 @@ extension MotionScene {
         let w = group.width.map { Int($0.value(at: t).rounded()) } ?? width
         let h = group.height.map { Int($0.value(at: t).rounded()) } ?? height
         var s = MotionScene(width: max(w, 1), height: max(h, 1), fps: fps, duration: duration, background: .clear,
-                            layers: group.children)
+                            layers: group.children, resolving: false)
         s.camera = nil
         s.lights = lights
         s.bones = bones
