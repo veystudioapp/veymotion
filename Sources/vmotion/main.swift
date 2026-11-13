@@ -21,6 +21,9 @@ FILES
 
 AGENT
   vmotion chat [--model m] "prompt"               One Claude Code turn in the terminal (edits the app's scene)
+  vmotion review <scene.json>... [--model m] [--brief "what was asked"] [--lint-only] [--json]
+                                                  Design lint + a Claude Code art-director review of rendered frames
+                                                  (scores 1–5); several files end with a table, to compare versions
 
 SERVERS
   vmotion mcp    [scene.json]                     MCP over stdio, editing the file (without one: the running app)
@@ -290,6 +293,67 @@ case "chat":
     }
     do { try agent.send(prompt) } catch { fail(error.localizedDescription) }
     dispatchMain()
+
+case "review":
+    // The lint and the critic the app runs after a turn, for scene files: a score sheet to compare prompt versions.
+    var model: String?, brief: String?, lintOnly = false, asJSON = false
+    var files: [String] = []
+    var j = 0
+    while j < args.count {
+        switch args[j] {
+        case "--model" where j + 1 < args.count: model = args[j + 1]; j += 2
+        case "--brief" where j + 1 < args.count: brief = args[j + 1]; j += 2
+        case "--lint-only": lintOnly = true; j += 1
+        case "--json": asJSON = true; j += 1
+        default: files.append(args[j]); j += 1
+        }
+    }
+    guard !files.isEmpty else { fail(usage) }
+    var claude: String?
+    if !lintOnly {
+        guard let found = ClaudeCodeAgent.locateClaude() else {
+            fail("Claude Code (`claude`) not found. Install it and run `claude` once to log in, or pass --lint-only.")
+        }
+        claude = found
+    }
+    var results: [[String: Any]] = []
+    var table: [String] = []
+    var failed = false
+    for file in files {
+        let scene = loadScene(file)
+        let issues = scene.designIssues(renderer: FrameRenderer())
+        let real = issues.filter { $0.severity >= .warning }
+        var entry: [String: Any] = ["file": file, "lint": issues.map { ["severity": $0.severity.rawValue, "code": $0.code, "message": $0.message, "layers": $0.layers] }]
+        if !asJSON {
+            print("== \(file)")
+            print(MotionScene.designReport(issues))
+        }
+        var scores = "-"
+        if let claude {
+            do {
+                let workDir = ProcessInfo.processInfo.environment["VEYMOTION_AGENT_DIR"].map { URL(fileURLWithPath: $0, isDirectory: true) }
+                    ?? ClaudeCodeAgent.Config.defaultWorkingDirectory
+                let c = try DesignCritic.review(scene: scene, brief: brief, known: real, claudePath: claude, model: model,
+                                                workingDirectory: workDir)
+                entry["review"] = c.json
+                scores = c.scoreLine
+                if !asJSON { print("Review\n" + c.report()) }
+            } catch {
+                failed = true
+                entry["reviewError"] = error.localizedDescription
+                if !asJSON { print("Review failed: \(error.localizedDescription)") }
+            }
+        }
+        results.append(entry)
+        table.append("\(real.count) lint finding\(real.count == 1 ? "" : "s") · \(scores) · \(file)")
+    }
+    if asJSON {
+        let data = (try? JSONSerialization.data(withJSONObject: results, options: [.prettyPrinted, .sortedKeys])) ?? Data("[]".utf8)
+        print(String(data: data, encoding: .utf8) ?? "[]")
+    } else if files.count > 1 {
+        print("\n" + table.joined(separator: "\n"))
+    }
+    exit(failed ? 1 : 0)
 
 default:
     if let tool = ToolCatalog.toolName(for: command) {

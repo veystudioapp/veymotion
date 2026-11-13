@@ -236,8 +236,20 @@ private struct StylePicker: View {
             Toggle(isOn: $chat.designCheckEnabled) {
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Check design after each change")
-                    Text("Flat background, system font, unlit layers, static stretches… are sent back to fix once.")
+                    Text("Flat background, weak contrast, one entrance for everything, static stretches… are sent back to fix once.")
+                        .fixedSize(horizontal: false, vertical: true)
                         .font(.system(size: 11)).foregroundStyle(.secondary)
+                }
+            }
+            .toggleStyle(.checkbox)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            Toggle(isOn: $chat.criticEnabled) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Second look at the frames")
+                    Text("A separate Claude Code review of rendered frames scores the piece and sends back what a viewer would notice, once per message.")
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             .toggleStyle(.checkbox)

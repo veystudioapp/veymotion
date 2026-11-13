@@ -5,7 +5,9 @@ import Foundation
 // It cannot judge taste, only the things that reliably make a piece look like a draft: a flat background, nothing
 // lighting the subject, no type hierarchy, the system font, frozen stretches, text on the edge, linear entrances,
 // text melted by goo, long shadows that stop mid-frame, illustrations made of bare polygons, a bounce on everything
-// and stretches with no subject. What it cannot see (does a drawing look right?) goes to `reviewNote`: one frame
+// and stretches with no subject; `DesignCraft.swift` adds sameness (one entrance for everything, no stagger, too
+// many fonts and hues), reading time and what it measures in small renders (contrast, busy pictures, overlapping
+// or almost-aligned text, phone UI zones). What it cannot see (does a drawing look right?) goes to `reviewNote`: one frame
 // per section for the agent to look at.
 // Everything is computed from the scene, so the same report comes out of the CLI, the MCP server and the app.
 
@@ -82,9 +84,11 @@ extension MotionScene {
         return kind
     }
 
-    /// Runs every rule. `renderer` is needed for the text-edge rule (it measures the glyphs); without one that
-    /// rule uses a rough estimate from fontSize.
-    public func designIssues(renderer: FrameRenderer? = nil) -> [DesignIssue] {
+    /// Runs every rule. `renderer` is needed for the text-edge rule (it measures the glyphs; without one that
+    /// rule uses a rough estimate from fontSize) and for the rules that look at where texts are (`craftIssues`).
+    /// `pixels: false` skips the ones that render frames (contrast, busy pictures): for callers that only want a
+    /// quick summary on the main thread.
+    public func designIssues(renderer: FrameRenderer? = nil, pixels: Bool = true) -> [DesignIssue] {
         var out: [DesignIssue] = []
         let w = Double(width), h = Double(height), area = w * h
         let lookIds: Set<String> = [Self.lookGroupId, Self.lookFinishId]
@@ -464,6 +468,7 @@ extension MotionScene {
                                        fix: "bring the next subject in earlier, hold the previous one longer, or give the section a real subject that fills ⅓ of the frame", layers: []))
             }
         }
+        out += craftIssues(renderer: renderer, pixels: pixels)
         return out.sorted { $0.severity > $1.severity }
     }
 
@@ -504,7 +509,7 @@ extension MotionScene {
 
     /// One text block for the agent.
     public static func designReport(_ issues: [DesignIssue]) -> String {
-        guard !issues.isEmpty else { return "Design check passed: nothing flat, static, unlit or on the edge." }
+        guard !issues.isEmpty else { return "Design check passed: nothing flat, static, unlit, unreadable or on the edge." }
         let errors = issues.filter { $0.severity == .error }.count, warnings = issues.filter { $0.severity == .warning }.count
         let head = "Design check: \(issues.count) finding\(issues.count == 1 ? "" : "s") (\(errors) error, \(warnings) warning, \(issues.count - errors - warnings) hint)"
         return ([head] + issues.map { "- " + $0.line }).joined(separator: "\n")

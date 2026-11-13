@@ -373,11 +373,15 @@ public struct AudioAnalysis: Sendable {
         var acc: Float = 0
         var inAcc = 0
         let scale = 1 / Float(channels * factor)
-        while file.framePosition < file.length {
-            // read(into:) throws on files it cannot decode (rather than crashing like a seek would).
+        // Frames are counted here: asking the file for `framePosition` raises an Objective-C exception (a crash) on
+        // files it cannot decode, where read(into:) throws.
+        let total = file.length
+        var done: AVAudioFramePosition = 0
+        while done < total {
             do { try file.read(into: buf, frameCount: chunk) } catch { throw AudioError.cannotRead(url.path) }
             let count = Int(buf.frameLength)
             if count == 0 { break }
+            done += AVAudioFramePosition(count)
             guard let data = buf.floatChannelData else { throw AudioError.cannotRead(url.path) }
             for i in 0..<count {
                 for c in 0..<channels { acc += data[c][i] }

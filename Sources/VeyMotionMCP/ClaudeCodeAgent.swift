@@ -454,10 +454,12 @@ public final class ClaudeCodeAgent {
         return (result?.isEmpty ?? true) ? nil : result
     }
 
-    /// One tool-less `claude -p` turn whose answer must match `schema` (JSON Schema), e.g. to draft
-    /// publishing copy. The prompt goes in on stdin. Blocking; call it off the main thread.
+    /// One `claude -p` turn whose answer must match `schema` (JSON Schema), e.g. to draft publishing copy.
+    /// Tool-less unless `readsFiles`: then it may Read files in `workingDirectory` (the design critic's frames).
+    /// The prompt goes in on stdin. Blocking; call it off the main thread.
     public static func structured(prompt: String, schema: [String: Any], claudePath: String, model: String? = nil,
                                   workingDirectory: URL = Config.defaultWorkingDirectory,
+                                  readsFiles: Bool = false,
                                   timeout: TimeInterval = 120,
                                   isCancelled: @escaping () -> Bool = { false }) throws -> [String: Any] {
         struct Failure: LocalizedError {
@@ -467,8 +469,9 @@ public final class ClaudeCodeAgent {
         let schemaJSON = String(data: try JSONSerialization.data(withJSONObject: schema), encoding: .utf8) ?? "{}"
         let p = Process()
         p.executableURL = URL(fileURLWithPath: claudePath)
-        var args = ["-p", "--output-format", "json", "--tools", "", "--strict-mcp-config", "--setting-sources", "",
-                    "--no-session-persistence", "--json-schema", schemaJSON]
+        var args = ["-p", "--output-format", "json", "--tools", readsFiles ? "Read" : "", "--strict-mcp-config",
+                    "--setting-sources", "", "--no-session-persistence", "--json-schema", schemaJSON]
+        if readsFiles { args += ["--allowedTools", "Read"] }
         if let model, !model.isEmpty { args += ["--model", model] }
         p.arguments = args
         p.currentDirectoryURL = workingDirectory

@@ -77,6 +77,13 @@ enum Docs {
        - Are there frames where nothing moves? → ambient motion, camera drift.
        - Do entrances just fade or slide linearly? → overshoot easings, stagger, motionBlur on fast moves.
        - Anything overlapping, clipped, or closer than 80 px to the edge? → fix layout.
+       - Can every text be told from what is behind it (4.5:1; display type can go lower), with no photo detail
+         crossing the letters? → change the color, add a plate or a dim layer.
+       - Does everything arrive the same way, or five things at the same instant? → one entrance per role (hero,
+         supporting, decoration), 0.06–0.12 s stagger in reading order.
+       - More than two font families or more than two hues besides neutrals? → cut down to the palette.
+       - Does each text stay about 1 s per 4 words? Do stacked texts share an edge exactly (not 5 px off)?
+       - Vertical video: is text clear of the bottom 14% and the right 12% of the lower half (app buttons)?
 
     LAYER
     Common: id, name, type ("rect" | "ellipse" | "path" | "text" | "image" | "video" | "audio" | "particles" | "generator" | "group" | "model" | "drawing"), start, end (seconds, end optional = scene end),
@@ -711,7 +718,7 @@ enum Docs {
       },
       {
         "name": "check_design",
-        "description": "Lints the scene for what makes a video look like a draft: flat background, pure white on pure black, system font, no type hierarchy, layers without shadow/glow/gradient, stretches where nothing moves or nothing but the background is on screen, text within 80 px of the edge or melted by a goo group, long shadows that stop inside the frame, illustrations made of bare polygons, overshoot easing on most layers, linear entrances, and (hint) only text and boxes. Returns findings with a fix for each, then one time per section: render_frame each of them at full size and look, because the lint cannot see whether a drawing looks right. Run it before you say you are done; fix errors and warnings (or tell the user why one is intended).",
+        "description": "Lints the scene for what makes a video look like a draft: flat background, pure white on pure black, system font, no type hierarchy, layers without shadow/glow/gradient, stretches where nothing moves or nothing but the background is on screen, text within 80 px of the edge or melted by a goo group, long shadows that stop inside the frame, illustrations made of bare polygons, overshoot easing on most layers, linear entrances, and (hint) only text and boxes; and for what makes it look machine-made: one entrance used on nearly every layer, five or more layers making the same move at the same instant, more than 3 font families, 6+ unrelated hues, text shown under 0.2 s per word, text with too little contrast against the pixels behind it or over a busy picture (measured in small renders), texts overlapping, stacked texts 3–8 px off each other's edge, and text under the app buttons of a vertical video. Returns findings with a fix for each, then one time per section: render_frame each of them at full size and look, because the lint cannot see whether a drawing looks right. Run it before you say you are done; fix errors and warnings (or tell the user why one is intended).",
         "inputSchema": { "type": "object", "properties": {} }
       },
       {

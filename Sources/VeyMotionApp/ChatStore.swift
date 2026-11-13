@@ -130,6 +130,10 @@ final class ChatStore {
         @ObservationIgnored fileprivate var turnStart: (prompt: String, scene: MotionScene)?
         /// Design checks sent back to the agent since the last user message.
         @ObservationIgnored fileprivate var autoChecks = 0
+        /// Frame reviews (`DesignCritic`) since the last user message.
+        @ObservationIgnored fileprivate var critiques = 0
+        /// The review after a turn (lint, then the frame review) while it runs.
+        @ObservationIgnored fileprivate var review: ReviewRun?
         @ObservationIgnored fileprivate var stoppedByUser = false
         @ObservationIgnored fileprivate var stderrTail = ""
         @ObservationIgnored fileprivate var pendingRenderTime: Double?
@@ -253,6 +257,20 @@ final class ChatStore {
     /// back to the agent to fix.
     var designCheckEnabled: Bool = UserDefaults.standard.object(forKey: "agent.designCheck") as? Bool ?? true {
         didSet { UserDefaults.standard.set(designCheckEnabled, forKey: "agent.designCheck") }
+    }
+
+    /// After the lint, a separate Claude Code turn looks at rendered frames (it has not seen the agent's work) and
+    /// its major findings go back to the agent, once per message. Uses the user's Claude Code, whichever CLI chats.
+    var criticEnabled: Bool = UserDefaults.standard.object(forKey: "agent.critic") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(criticEnabled, forKey: "agent.critic") }
+    }
+
+    /// The review after a turn, in flight; cancelled when the user stops or starts over.
+    fileprivate final class ReviewRun: @unchecked Sendable {
+        private let lock = NSLock()
+        private var cancelled = false
+        var isCancelled: Bool { lock.lock(); defer { lock.unlock() }; return cancelled }
+        func cancel() { lock.lock(); cancelled = true; lock.unlock() }
     }
 
     /// Conversations of the projects opened earlier in this run, by project path ("" = loose scene).
@@ -555,6 +573,7 @@ final class ChatStore {
         s.lastContext = contextLine()
         s.stderrTail = ""
         s.autoChecks = 0
+        s.critiques = 0
         s.setActivity("Thinking…")
         s.turnStart = (text, scene.scene)
         do {
@@ -705,7 +724,8 @@ final class ChatStore {
         let s = current
         guard s.isBusy else { return }
         s.stoppedByUser = true
-        s.agent?.stop()
+        // During the review after a turn the agent is idle: only the review stops.
+        if let run = s.review { run.cancel(); s.review = nil } else { s.agent?.stop() }
         recordVersion(s)
         s.isBusy = false
         s.activity = nil
@@ -716,6 +736,8 @@ final class ChatStore {
         let s = current
         recordVersion(s)
         s.stoppedByUser = true
+        s.review?.cancel()
+        s.review = nil
         s.agent?.reset()
         s.agent = nil
         s.sessionIds = [:]
@@ -775,6 +797,8 @@ final class ChatStore {
             scene.message = "\(s.agentProvider.displayName) keeps working on \(project.lastPathComponent) in the background"
         } else {
             let wasBusy = s.isBusy
+            s.review?.cancel()
+            s.review = nil
             dropAgent(s)
             recordVersion(s, scene: scene.scene) // the old document is still loaded
             if wasBusy {
@@ -942,30 +966,110 @@ final class ChatStore {
             if folders.count > 40 { folders = Array(folders.prefix(40)) + ["…"] }
             project = "; project=\(p.lastPathComponent) (assets go in its folders: \(folders.joined(separator: ", ")))"
         }
-        let design = s.layers.isEmpty ? "empty scene" : MotionScene.designSummary(s.designIssues(renderer: FrameRenderer()))
+        let design = s.layers.isEmpty ? "empty scene" : MotionScene.designSummary(s.designIssues(renderer: FrameRenderer(), pixels: false))
         let style = styleLine.map { "; style=\($0)" } ?? ""
         return String(format: "[VeyMotion context: playhead=%.2fs; selected=%@; scene=%dx%d %dfps %.2fs; layers (bottom→top)=%@%@; design=%@%@]",
                       scene.time, selected, s.width, s.height, s.fps, s.duration, ids.joined(separator: ", "), project, design, style)
     }
 
-    /// After a turn that changed the scene: lint it and, once per user message, hand the findings back.
-    /// Returns true when a follow-up was sent (the turn goes on). Only for the shown conversation: the context line
-    /// describes the open editor.
-    private func autoDesignCheck(_ s: Session) -> Bool {
-        guard designCheckEnabled, s === current, s.autoChecks < 1, let start = s.turnStart, let agent = s.agent,
-              !s.stoppedByUser else { return false }
+    /// After a turn that changed the scene, off the main thread (the lint renders small frames to measure contrast,
+    /// which takes seconds on 3D scenes): first the design lint, whose findings go back to the agent once per user
+    /// message; when it has nothing (or has had its turn), a reviewer that has not seen the agent's work looks at
+    /// rendered frames (`DesignCritic`), also once. Only for the shown conversation: the context line describes the
+    /// open editor. Returns true when a review started: the turn then ends in `sendFollowUp` or `finishTurn`.
+    private func startReview(_ s: Session, cost: Double?, ms: Int?) -> Bool {
+        guard s === current, let start = s.turnStart, s.agent != nil, !s.stoppedByUser else { return false }
+        let lint = designCheckEnabled && s.autoChecks < 1
+        let claude = criticEnabled && s.critiques < 1 && agentStates[.claude] == .ready ? claudePath : nil
+        guard lint || claude != nil else { return false }
         let now = scene.scene
         guard now != start.scene, !now.layers.isEmpty else { return false }
-        let issues = now.designIssues(renderer: FrameRenderer()).filter { $0.severity >= .warning }
-        guard !issues.isEmpty else { return false }
+        let run = ReviewRun()
+        s.review = run
+        s.isBusy = true
+        s.setActivity("Checking the design…")
+        let model = s.agentProvider == .claude ? self.model : nil
+        let brief = start.prompt
+        DispatchQueue.global(qos: .userInitiated).async {
+            let issues = now.designIssues(renderer: FrameRenderer()).filter { $0.severity >= .warning }
+            if lint, !issues.isEmpty {
+                DispatchQueue.main.async { self.lintFinished(s, run, issues, cost: cost, ms: ms) }
+                return
+            }
+            guard let claude, !run.isCancelled else {
+                DispatchQueue.main.async { self.endReview(s, run, cost: cost, ms: ms) }
+                return
+            }
+            DispatchQueue.main.async {
+                guard s.review === run else { return }
+                s.critiques += 1
+                s.setActivity("A second look at the frames…")
+            }
+            let result = Result {
+                try DesignCritic.review(scene: now, brief: brief, known: issues, claudePath: claude, model: model,
+                                        isCancelled: { run.isCancelled })
+            }
+            DispatchQueue.main.async { self.critiqueFinished(s, run, result, cost: cost, ms: ms) }
+        }
+        return true
+    }
+
+    /// The review found nothing to send: the turn is over.
+    private func endReview(_ s: Session, _ run: ReviewRun, cost: Double?, ms: Int?) {
+        guard s.review === run else { return } // stopped, or the conversation started over
+        s.review = nil
+        s.isBusy = false
+        s.activity = nil
+        finishTurn(s, isError: false, result: nil, cost: cost, ms: ms)
+    }
+
+    private func lintFinished(_ s: Session, _ run: ReviewRun, _ issues: [DesignIssue], cost: Double?, ms: Int?) {
+        guard s.review === run else { return }
+        guard s === current else { endReview(s, run, cost: cost, ms: ms); return }
         s.autoChecks += 1
         let codes = issues.map(\.code).joined(separator: ", ")
         s.append(.notice("Design check: \(issues.count) finding\(issues.count == 1 ? "" : "s") (\(codes)). Asking \(s.agentProvider.displayName) to fix them.",
                          isError: false))
         let text = "[Design check after your changes]\n" + MotionScene.designReport(issues)
             + "\nFix these now (or say in one line why a finding is intended for this piece), render_frame each section you changed at full size to confirm, then reply briefly."
+        sendFollowUp(s, run, text, activity: "Fixing design…", cost: cost, ms: ms)
+    }
+
+    private func critiqueFinished(_ s: Session, _ run: ReviewRun, _ result: Result<DesignCritique, Error>,
+                                  cost: Double?, ms: Int?) {
+        guard s.review === run else { return }
+        switch result {
+        case let .failure(error):
+            s.append(.notice("The second look at the frames did not run: \(error.localizedDescription)", isError: false))
+        case let .success(review):
+            let fixes = review.fixes
+            // Changes of concept or palette are the user's call: shown, not sent.
+            let ideas = review.directions.prefix(2).map { "\n• " + $0.problem + " → " + $0.fix }.joined()
+            let forYou = ideas.isEmpty ? "" : "\nFor you to decide:" + ideas
+            guard !fixes.isEmpty, s === current else {
+                s.append(.notice("Second look: \(review.scoreLine). \(fixes.isEmpty ? "Nothing to repair." : review.report(fixesOnly: true))" + forYou,
+                                 isError: false))
+                break
+            }
+            s.append(.notice("Second look: \(review.scoreLine). Asking \(s.agentProvider.displayName) to fix \(fixes.count) thing\(fixes.count == 1 ? "" : "s")." + forYou,
+                             isError: false))
+            let text = "[A second look at the rendered frames, by a reviewer who has not seen how you built them]\n"
+                + review.report(fixesOnly: true)
+                + "\nFor each finding: render_frame at its time and look for yourself. Fix the ones that are real (say in one line why you "
+                + "leave one), render the fixed time again to confirm, then reply briefly. Keep the design as it is otherwise: no new "
+                + "effects, no change of concept or palette."
+            sendFollowUp(s, run, text, activity: "Fixing what the review found…", cost: cost, ms: ms)
+            return
+        }
+        endReview(s, run, cost: cost, ms: ms)
+    }
+
+    /// Hands a review's findings to the agent: the turn goes on.
+    private func sendFollowUp(_ s: Session, _ run: ReviewRun, _ text: String, activity: String, cost: Double?, ms: Int?) {
+        guard let agent = s.agent else { endReview(s, run, cost: cost, ms: ms); return }
+        s.review = nil
         s.isBusy = true
-        s.setActivity("Fixing design…")
+        s.setActivity(activity)
         s.lastSentText = text
         s.lastSentImages = []
         s.lastContext = contextLine()
@@ -973,10 +1077,27 @@ final class ChatStore {
         do { try agent.send(s.lastContext + "\n" + text, images: []) } catch {
             s.isBusy = false
             s.activity = nil
-            s.append(.notice("Could not send the design check: \(error.localizedDescription)", isError: true))
-            return false
+            s.append(.notice("Could not send the review: \(error.localizedDescription)", isError: true))
+            finishTurn(s, isError: false, result: nil, cost: cost, ms: ms)
         }
-        return true
+    }
+
+    /// The end of a turn with nothing more to send: keep the version, say what went wrong, show time and cost.
+    private func finishTurn(_ s: Session, isError: Bool, result: String?, cost: Double?, ms: Int?) {
+        let p = s.agentProvider
+        recordVersion(s)
+        if isError {
+            s.append(.notice(explainFailure(result ?? "\(p.cliName) reported an error.", details: s.stderrTail, p),
+                             isError: true))
+        } else if case .authFailed = agentStates[p] {
+            agentStates[p] = .ready // signed in again
+        }
+        var parts: [String] = []
+        if let ms { parts.append(String(format: "%.1fs", Double(ms) / 1000)) }
+        if let cost, cost > 0 { parts.append(String(format: "$%.3f", cost)) }
+        if !parts.isEmpty { s.append(.summary(parts.joined(separator: " · "))) }
+        saveConversation(s)
+        if s !== current { finishedInBackground(s) }
     }
 
     // MARK: - Events
@@ -1040,20 +1161,8 @@ final class ChatStore {
             s.isBusy = false
             s.activity = nil
             s.retriedFresh = false
-            if !isError, autoDesignCheck(s) { return }
-            recordVersion(s)
-            if isError {
-                s.append(.notice(explainFailure(result ?? "\(p.cliName) reported an error.", details: s.stderrTail, p),
-                                 isError: true))
-            } else if case .authFailed = agentStates[p] {
-                agentStates[p] = .ready // signed in again
-            }
-            var parts: [String] = []
-            if let ms { parts.append(String(format: "%.1fs", Double(ms) / 1000)) }
-            if let cost, cost > 0 { parts.append(String(format: "$%.3f", cost)) }
-            if !parts.isEmpty { s.append(.summary(parts.joined(separator: " · "))) }
-            saveConversation(s)
-            if s !== current { finishedInBackground(s) }
+            if !isError, startReview(s, cost: cost, ms: ms) { return }
+            finishTurn(s, isError: isError, result: result, cost: cost, ms: ms)
 
         case let .stderr(text):
             s.stderrTail = String((s.stderrTail + text).suffix(2000))
@@ -1062,6 +1171,12 @@ final class ChatStore {
             s.resumeFailed = true
 
         case let .exited(code):
+            if let run = s.review {
+                // Codex ends its process after every turn; the review is still running and ends the turn.
+                if code == 0 { return }
+                run.cancel()
+                s.review = nil
+            }
             let wasBusy = s.isBusy
             s.isBusy = false
             s.activity = nil

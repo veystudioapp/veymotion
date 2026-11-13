@@ -2248,6 +2248,12 @@ extension FrameRenderer {
         return outline
     }
 
+    /// The box a text layer is laid out in (maxWidth, or the width of its longest line), centered on its origin.
+    public func textBoxSize(_ layer: MotionLayer, at t: Double) -> CGSize? {
+        guard layer.type == .text else { return nil }
+        return textLayout(layer, at: t)?.box
+    }
+
     /// A text layer's glyphs as outlines in layer px (around its center, y down), one path per glyph with its
     /// center, in reading order. Used to turn text into paths.
     public func glyphPaths(_ layer: MotionLayer, at t: Double) -> [(path: CGPath, center: CGPoint)] {

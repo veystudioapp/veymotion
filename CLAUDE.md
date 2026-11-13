@@ -248,9 +248,25 @@ Easy Ease F9 / ⇧F9 / ⌘⇧F9).
   to `render_frame` at full size, since the lint cannot see drawings); `set_scene` runs it and, unless `look` is "none", `applyAutoLook` adds a look to a scene whose
   background is flat (`hasBackgroundDepth`), picking the kind from the background's luminance. In the app,
   `ChatStore` puts `design=` (the lint summary) and `style=` (the project's `ChatStyle`: look + font pairing,
-  chosen in the composer's Style popover, saved in `.chat.json`) on every context line, and `autoDesignCheck`
-  sends warnings back to the agent once per user message after a turn that changed the scene
-  (`agent.designCheck` default off switch in the same popover).
+  chosen in the composer's Style popover, saved in `.chat.json`) on every context line (lint with `pixels: false`:
+  no renders on the main thread), and after a turn that changed the scene `startReview` runs off the main thread:
+  the full lint, whose warnings go back to the agent once per user message (`agent.designCheck`), then, when the lint
+  has nothing left to send, the critic, also once (`agent.critic`; both switches are in the same popover).
+  `DesignCraft.swift` is the lint's second half (`craftIssues`): sameness (`same-entrance`: one entrance signature on
+  ≥ 80% of ≥ 12 entering layers; `no-stagger`: ≥ 5 layers making the same move with the same start and end;
+  `too-many-fonts`, `too-many-hues`), `reading-time`, and what it measures where the texts are: each text is judged
+  once, at 60% of its life (texts on screen together share a time), in a 400 px render of the frame without its text
+  layers (`low-contrast`: WCAG ratio under 2.5, 1.5 for display sizes; `busy-behind-text`), plus `text-overlap`,
+  `misaligned` (stacked texts 3–8 px off the edge their alignment hangs on) and `platform-ui` (vertical pieces).
+  Texts behind a matte (reveals, transition copies) and stacked copies of one text (echo, extrusion) are skipped;
+  `frameTransform(of:at:)` places a layer through its groups (`worldTransform` alone ignores them).
+  `DesignCritic` (MCP target) is the eye the lint lacks: one `ClaudeCodeAgent.structured` turn with `readsFiles`
+  (Read only, in a temp folder holding a contact sheet + up to 5 full frames) that has the user's request and the
+  on-screen text but nothing of the builder's reasoning, and answers with six 1–5 scores and ≤ 6 findings, each
+  major/minor and `fix` (a repair at one frame) or `direction` (concept, palette, structure). Only major fixes are
+  sent back to the agent; directions are shown to the user, who decides. It needs the user's Claude Code even when
+  Codex chats. `vmotion review <scene.json>… [--lint-only] [--json]` runs both for files and ends with a table, to
+  compare versions of `Docs.instructions` (scores vary by a few tenths between runs: average several).
 - `VideoML.swift`: background removal (Vision person segmentation / foreground instance mask, cached per frame in
   `FrameRenderer.cutoutCache`), `frameBlend` in-betweens (cross-fade or Vision optical flow) and `stabilize`
   (translational registration). Like saliency, the neural requests fail in sandboxed processes; they fall back to
