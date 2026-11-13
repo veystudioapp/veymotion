@@ -2,15 +2,47 @@ import AppKit
 import SwiftUI
 import VeyMotionCore
 
-/// New Project (File menu or the Projects screen): name, location and whether to start from the current scene.
+/// Frame sizes a new project can start with.
+struct ProjectSize: Hashable, Identifiable {
+    let id: String
+    let title: String
+    let width: Int, height: Int
+
+    static let all: [ProjectSize] = [
+        ProjectSize(id: "landscape", title: "YouTube · 16:9", width: 1920, height: 1080),
+        ProjectSize(id: "portrait", title: "TikTok · Shorts · Reels · 9:16", width: 1080, height: 1920),
+        ProjectSize(id: "square", title: "Square · 1:1", width: 1080, height: 1080),
+        ProjectSize(id: "feed", title: "Facebook feed · 4:5", width: 1080, height: 1350),
+        ProjectSize(id: "uhd", title: "4K · 16:9", width: 3840, height: 2160),
+    ]
+}
+
+/// New Project (File menu or the Projects screen): name, location and what to start with (an empty scene of a
+/// chosen size, the sample scene, or the scene being edited).
 struct NewProjectSheet: View {
+    private enum Start: String, CaseIterable, Identifiable {
+        case blank, sample, current
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .blank: return "Empty scene"
+            case .sample: return "Sample scene"
+            case .current: return "Current scene"
+            }
+        }
+    }
+
     @Environment(SceneStore.self) private var store
     @Environment(\.dismiss) private var dismiss
     @AppStorage("projects.location") private var location = ProjectStore.projectsDirectory.path
+    @AppStorage("projects.lastSize") private var sizeId = ProjectSize.all[0].id
     @State private var name = "Untitled Project"
-    @State private var keepScene = false
+    @State private var start = Start.blank
+    @State private var duration = 10.0
     /// Called after a project was created (e.g. to close the Projects screen too).
     var onCreated: (() -> Void)?
+
+    private var size: ProjectSize { ProjectSize.all.first { $0.id == sizeId } ?? ProjectSize.all[0] }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -26,8 +58,32 @@ struct NewProjectSheet: View {
                         Button("Choose…", action: chooseLocation)
                     }
                 }
-                Toggle("Start with the current scene", isOn: $keepScene)
-                    .help("Moves the scene you are editing into the project and copies the files it uses into the project's assets.")
+                Picker("Start with", selection: $start) {
+                    ForEach(Start.allCases) { s in Text(s.title).tag(s) }
+                }
+                .pickerStyle(.segmented)
+                switch start {
+                case .blank:
+                    Picker("Size", selection: $sizeId) {
+                        ForEach(ProjectSize.all) { s in Text("\(s.title)  \(s.width)×\(s.height)").tag(s.id) }
+                    }
+                    LabeledContent("Length") {
+                        HStack {
+                            TextField("seconds", value: $duration, format: .number.precision(.fractionLength(0...1)))
+                                .frame(width: 60)
+                            Text("seconds").foregroundStyle(.secondary)
+                            Spacer()
+                        }
+                    }
+                case .sample:
+                    Text("A short demo (a title, a chart, a finished look) to play with, re-style or ask Claude to change.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                case .current:
+                    Text("Moves the scene you are editing into the project and copies the files it uses into the project's assets.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             Text("Creates a folder with scene.json and assets/ (images, icons, music, sfx, voice). New files — yours and Claude's — are filed by type automatically.")
                 .font(.caption).foregroundStyle(.secondary)
@@ -37,7 +93,13 @@ struct NewProjectSheet: View {
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button("Create") {
                     let before = store.project
-                    store.createProject(name: name, in: URL(fileURLWithPath: location, isDirectory: true), keepScene: keepScene)
+                    let how: SceneStore.ProjectStart
+                    switch start {
+                    case .blank: how = .blank(width: size.width, height: size.height, duration: max(1, duration))
+                    case .sample: how = .sample
+                    case .current: how = .currentScene
+                    }
+                    store.createProject(name: name, in: URL(fileURLWithPath: location, isDirectory: true), start: how)
                     dismiss()
                     if store.project != before, store.project != nil { onCreated?() }
                 }
@@ -46,8 +108,10 @@ struct NewProjectSheet: View {
             }
         }
         .padding(20)
-        .frame(width: 460)
-        .onAppear { keepScene = store.project == nil && store.fileURL == nil && store.isDirty }
+        .frame(width: 480)
+        .onAppear {
+            if store.project == nil && store.fileURL == nil && store.isDirty { start = .current }
+        }
     }
 
     private func chooseLocation() {
@@ -104,9 +168,15 @@ struct ProjectsScreen: View {
                     ContentUnavailableView {
                         Label("No projects yet", systemImage: "folder.badge.plus")
                     } description: {
-                        Text("A project keeps a video's scene and all its files together in one folder.")
+                        Text("A project keeps a video's scene and all its files together in one folder.\nStart with the sample to see what a finished piece is made of, then describe your own video in the chat.")
                     } actions: {
-                        Button("New Project") { creating = true }.buttonStyle(.borderedProminent)
+                        HStack {
+                            Button("Open the Sample Project") {
+                                store.createProject(name: "Sample", in: ProjectStore.projectsDirectory, start: .sample)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            Button("New Project") { creating = true }
+                        }
                     }
                 } else if shown.isEmpty {
                     ContentUnavailableView.search(text: search)

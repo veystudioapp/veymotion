@@ -205,16 +205,43 @@ private struct AgentSetupCard: View {
 private struct EmptyChatHint: View {
     @Environment(ChatStore.self) private var chat
 
+    @Environment(SceneStore.self) private var store
+
+    /// Prompts to click: the first ones build something from nothing, the last ones change what is there.
+    private var examples: [String] {
+        let w = store.scene.width, h = store.scene.height
+        let vertical = h > w
+        return store.scene.layers.isEmpty
+            ? [vertical ? "Make a 15-second TikTok ad for a coffee brand: three selling points, one per beat, price at the end"
+                        : "Make a 6-second logo intro for a coffee brand called Nắng Coffee, warm and premium",
+               "A 20-second explainer with three statistics that count up, then a bar chart comparing them",
+               "A lyric video section: four lines, each on screen about 4 seconds, dreamy night-city mood"]
+            : ["Add a lower third with my name and title at 1 s",
+               "Make the title arrive with more weight and add a whoosh on it",
+               "Make everything 20% faster and end on a clean hold"]
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Describe the animation you want.").font(.callout)
-            Group {
-                Text("• “Make a 6s explainer: title, 3 stats popping in, end card”")
-                Text("• “Slide this in from the left at the playhead”")
-                Text("• “Make everything 20% faster”")
+            Text(store.scene.layers.isEmpty ? "Describe the video you want, or try one of these:" : "Describe a change, or try one of these:")
+                .font(.callout)
+            ForEach(examples, id: \.self) { prompt in
+                Button {
+                    chat.input = prompt
+                } label: {
+                    HStack(alignment: .top, spacing: 6) {
+                        Image(systemName: "arrow.turn.down.right").font(.caption2).padding(.top, 2)
+                        Text(prompt).multilineTextAlignment(.leading)
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 5).padding(.horizontal, 8)
+                    .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
+                }
+                .buttonStyle(.plain)
+                .help("Puts this in the composer; press Return to send it")
             }
-            .font(.caption)
-            .foregroundStyle(.secondary)
             Text(chat.provider == .claude
                  ? "Claude uses your Claude Code login and can only run `vmotion` commands."
                  : "Codex uses your Codex CLI login, edits only through VeyMotion's tools, and its shell is read-only.")

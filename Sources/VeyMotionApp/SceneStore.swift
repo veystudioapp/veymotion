@@ -898,19 +898,31 @@ final class SceneStore: SceneHost {
 
     // MARK: - Projects
 
-    /// Creates a project folder and opens it. With `keepScene`, the current scene moves into it (its files are
-    /// copied into the project); otherwise the project starts empty.
-    func createProject(name: String, in directory: URL, keepScene: Bool) {
+    /// What a new project opens with.
+    enum ProjectStart: Equatable {
+        /// An empty scene of this size and length.
+        case blank(width: Int, height: Int, duration: Double)
+        /// The demo scene (a title, a chart, a look), to see the pieces and play with them.
+        case sample
+        /// The scene being edited moves into the project (its files are copied into the project's assets).
+        case currentScene
+    }
+
+    /// Creates a project folder and opens it with `start`.
+    func createProject(name: String, in directory: URL, start: ProjectStart) {
         // A loose scene moving into the project takes its chat along; a scene from another project does not.
-        let adopt = keepScene && project == nil
+        let adopt = start == .currentScene && project == nil
         leaveProject()
         do {
             let url = try ProjectStore.create(name: name, in: directory)
             activate(project: url, adopting: adopt)
-            if keepScene {
+            switch start {
+            case .currentScene:
                 collectAssets()
-            } else {
-                replaceDocument(with: MotionScene(), fileURL: nil)
+            case .sample:
+                replaceDocument(with: .sample, fileURL: nil)
+            case let .blank(width, height, duration):
+                replaceDocument(with: MotionScene(width: width, height: height, duration: duration), fileURL: nil)
             }
             try ProjectStore.save(scene, to: url)
             fileURL = ProjectStore.sceneURL(url)
