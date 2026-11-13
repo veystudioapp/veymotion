@@ -120,7 +120,7 @@ public final class MCPServer {
         case "check_design":
             let scene = host.currentScene()
             let issues = scene.designIssues(renderer: FrameRenderer())
-            return text(MotionScene.designReport(issues))
+            return text(MotionScene.designReport(issues) + (scene.layers.isEmpty ? "" : "\n" + scene.reviewNote))
 
         case "update_scene":
             guard let changes = a["changes"] as? [String: Any] else { throw ToolError("`changes` must be an object") }
@@ -234,7 +234,9 @@ public final class MCPServer {
             if lines.count > 60 { lines = Array(lines.prefix(60)) + ["  … (\(sum.shapes) shapes in all)"] }
             let skipped = Set(sum.skipped)
             return text("Imported '\(sum.group.id)': \(sum.shapes) path layer\(sum.shapes == 1 ? "" : "s") in \(sum.groups + 1) group\(sum.groups == 0 ? "" : "s"), centered on \(Int(o.x)),\(Int(o.y)). "
-                + "Every part is a normal layer: animate, recolor or re-parent it by id (children use scene coordinates).\n"
+                + "Every part is a normal layer: animate, recolor or re-parent it by id (children use scene coordinates). "
+                + "Each group sits at the frame center (x \(scene0.width / 2), y \(scene0.height / 2)) with its pivot (anchorX/anchorY) on the drawing: "
+                + "to move a group, offset its x/y from those values (e.g. y \(scene0.height / 2 + 80) → \(scene0.height / 2) slides it up 80 px); scale and rotation turn around the drawing.\n"
                 + lines.joined(separator: "\n")
                 + (skipped.isEmpty ? "" : "\nSkipped elements: \(skipped.sorted().joined(separator: ", ")) (text, images, clip paths and CSS are not imported)."))
 

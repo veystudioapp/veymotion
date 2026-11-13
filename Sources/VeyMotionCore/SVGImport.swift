@@ -5,7 +5,7 @@ import Foundation
 // becomes a path layer (d, fill, stroke, opacity, fill rule, caps/joins, gradients), every <g> a group, so the
 // parts of an illustration can be animated on their own. Transforms are baked into the points; the whole
 // drawing is scaled to `width`/`height` (or 1:1 in scene px) and centered on x/y. Children use scene coordinates
-// like every group in VeyMotion. Not handled: <text>, <image>, <use>, clip paths, masks, filters, CSS <style>.
+// like every group in VeyMotion, so `importVector` puts each group at the frame center with its anchor on the drawing. Not handled: <text>, <image>, <use>, clip paths, masks, filters, CSS <style>.
 
 public struct SVGImportOptions: Sendable {
     public var id = "vector"
@@ -26,6 +26,18 @@ public enum SVGImport {
         public var shapes: Int
         public var groups: Int
         public var skipped: [String]
+    }
+
+    /// Moves a group and its nested groups to `center` and keeps where they were as the anchor (pivot of
+    /// rotation and scale), which does not move what is drawn.
+    static func centerGroups(_ layer: inout MotionLayer, on center: CGPoint) {
+        guard layer.type == .group else { return }
+        let was = CGPoint(x: layer.x.value(at: 0), y: layer.y.value(at: 0))
+        layer.x = .constant(center.x)
+        layer.y = .constant(center.y)
+        layer[.anchorX] = .constant(was.x - center.x)
+        layer[.anchorY] = .constant(was.y - center.y)
+        for i in layer.children.indices { centerGroups(&layer.children[i], on: center) }
     }
 
     /// Builds a group layer from SVG data. Throws when the file is not SVG.
@@ -541,6 +553,10 @@ extension MotionScene {
     public mutating func importVector(at url: URL, options: SVGImportOptions) throws -> SVGImport.Summary {
         let data = try Data(contentsOf: url)
         var summary = try SVGImport.group(from: data, options: options)
+        // A group's box is the frame, centered on the group's x/y, and its children use that box's coordinates.
+        // The parts are in scene coordinates, so every group must sit at the frame center or the drawing lands
+        // somewhere else (and is cut by the box). The drawing's own center becomes the pivot instead.
+        SVGImport.centerGroups(&summary.group, on: CGPoint(x: Double(width) / 2, y: Double(height) / 2))
         let id = addLayer(summary.group)
         summary.group = try layer(id)
         return summary

@@ -49,8 +49,28 @@ enum Docs {
     Timing and rhythm: entrances 0.5–0.8 s staggered 0.08–0.15 s, exits shorter (0.3–0.5 s, easeIn), hold readable
        text ~1 s per 4 words, transitions between sections with a wipe, a shape morph or a camera move (not just a
        cut), and sound: a whoosh on moves, a soft hit on landings, music ducked under voice (see AUDIO).
-    Before you say you are done, run check_design (it finds the items below automatically; set_scene runs it too) and
-    render 2–3 frames; fix everything it lists and anything you see that fails this list:
+    Illustrations: an object the viewer must recognize (a tree, a hand, a phone, a plane, a person, an animal) is never
+       a triangle, a box or a stack of ellipses: that is a placeholder. Get a real drawing first: search_stock kind
+       "icon" with palette=true in the query (e.g. "christmas tree palette=true": only multi-color illustration
+       sets; without it the results are mostly one-color line icons) → import_stock → import_vector, which gives you one path
+       layer per part to animate (pop the parts in, swing a limb with bones, trim the outlines on). Draw a shape
+       yourself only when it is simple by nature (a card, a ring, a chart, an abstract pattern) or after the search
+       found nothing, and then with curves (C/Q/A in d), a consistent stroke, and corners softened by a stroke in the
+       fill color (strokeWidth 8–16; path joins are round). Keep one drawing style per piece (all flat-color, or all
+       line art), parts that touch where they join, and the subject at about a third of the frame.
+    Easing: overshoot (easeOutBack / spring / elastic) is an accent for one or two hero elements per section. The
+       rest arrive with easeOutExpo / easeOutCubic and travel with easeInOutCubic; fast moves get motionBlur.
+    Before you say you are done, run check_design (it finds the items below automatically; set_scene runs it too),
+    then look at EVERY section at full size: check_design ends with the list of times; render_frame each one (one
+    call per time, default scale) and Read it. A contact sheet (render_frames) is for pacing only: at that size a
+    broken drawing, melted text or a detached limb is invisible. Fix everything listed and anything you see that
+    fails this list, and render the fixed time again:
+       - Does every object look like what it is, with parts that join? → a real illustration (see Illustrations).
+       - Is every word readable: not inside a goo group, not over a busy photo without a dim layer, not overlapping
+         other text? → move it out, dim the picture, separate the lines.
+       - Does a long shadow stop in the middle of the frame? → longShadow long enough to leave the frame.
+       - Is a section empty or its subject tiny? → a subject at about a third of the frame.
+       - Does everything bounce? → overshoot only on the hero.
        - Is the background flat? → look layers (gradient, blobs, grain, vignette).
        - Does the subject sit on the background without a shadow or glow? → add one.
        - Is any text pure white on pure black, the system font, or all the same size? → palette, font, hierarchy.
@@ -649,15 +669,18 @@ enum Docs {
     - For a longer piece, plan it as time sections (e.g. 0–8s intro, 8–20s concept 1, …). Call set_scene with the
       settings and the first section, then add_layers once per section. Give each section's layers start/end so the
       scene stays light. Keep every call's arguments under ~6 KB: very large calls are slow to write and may be rejected.
-    - ALWAYS call render_frame at a few key times to check layout and timing visually before saying you are done.
+    - ALWAYS check visually before saying you are done: check_design, then render_frame at each time it lists (one per
+      section, full size) and fix what looks wrong. After a small edit, the frames of the sections you touched are enough.
     - Stagger entrances by 0.1–0.2s, use easeOut for entrances and easeIn for exits, keep text inside a safe margin
       (~80px from edges), and give the viewer time to read (about 1s per 4 words).
     - duplicate_layer makes rows/rings/copies (with offsets and a time offset per copy) in one call; shift_time makes
       room in the timeline when a section gets longer (everything after `from` moves, later keyframes included);
       remove_layer / add_layer {group} / reorder_layer work on a group's children by id.
-    - render_frames {times:[…]} shows up to 24 frames in one contact sheet: check pacing of a whole piece in one look.
+    - render_frames {times:[…]} shows up to 24 frames in one contact sheet: check pacing of a whole piece in one look
+      (not detail: use render_frame for that).
     - import_vector turns an SVG (asset or file) into a group of path layers, one per shape: animate the parts of an
-      illustration or character separately (set_parent them to a body part, or rig them with bones).
+      illustration or character separately (set_parent them to a body part, or rig them with bones). It is the
+      default way to put a recognizable object on screen (see Illustrations in LOOK & DESIGN).
     - apply_preset is a quick way to add common entrances/exits/emphasis; pass `ids` + `stagger` to cascade one preset
       over several layers (e.g. list items 0.12s apart). Combine with easings like easeOutBack / easeOutExpo for polish,
       and use loop/wiggle for ambient motion (floating shapes, subtle drift).
@@ -687,7 +710,7 @@ enum Docs {
       },
       {
         "name": "check_design",
-        "description": "Lints the scene for what makes a video look like a draft: flat background, pure white on pure black, system font, no type hierarchy, layers without shadow/glow/gradient, stretches where nothing moves, text within 80 px of the edge, linear entrances, and (hint) only text and boxes. Returns findings with a fix for each. Run it before you say you are done; fix errors and warnings (or tell the user why one is intended).",
+        "description": "Lints the scene for what makes a video look like a draft: flat background, pure white on pure black, system font, no type hierarchy, layers without shadow/glow/gradient, stretches where nothing moves or nothing but the background is on screen, text within 80 px of the edge or melted by a goo group, long shadows that stop inside the frame, illustrations made of bare polygons, overshoot easing on most layers, linear entrances, and (hint) only text and boxes. Returns findings with a fix for each, then one time per section: render_frame each of them at full size and look, because the lint cannot see whether a drawing looks right. Run it before you say you are done; fix errors and warnings (or tell the user why one is intended).",
         "inputSchema": { "type": "object", "properties": {} }
       },
       {
@@ -1393,7 +1416,7 @@ enum Docs {
       },
       {
         "name": "import_vector",
-        "description": "Turns an SVG into editable layers: a group (`id`) whose children are one path layer per <path>/<rect>/<circle>/<ellipse>/<line>/<polyline>/<polygon> (d, fill, stroke, opacity, gradients, fill rule, caps, dashes kept; transforms baked in) and one group per <g> (flatten true puts every shape in the top group). Scaled to width/height (one keeps the aspect; none = SVG units as px) and centered on x/y (default: the frame center). Use it for illustrations, icons and characters whose parts must move separately (then set_parent / keyframes on the parts, or bones). `source` is an asset-library name (e.g. icons/hand.svg, after import_asset / import_stock) or an absolute path. Not imported: <text>, <image>, <use>, clip paths, masks, CSS <style>.",
+        "description": "Turns an SVG into editable layers: a group (`id`) whose children are one path layer per <path>/<rect>/<circle>/<ellipse>/<line>/<polyline>/<polygon> (d, fill, stroke, opacity, gradients, fill rule, caps, dashes kept; transforms baked in) and one group per <g> (flatten true puts every shape in the top group). Scaled to width/height (one keeps the aspect; none = SVG units as px) and centered on x/y (default: the frame center). The groups themselves sit at the frame center with anchorX/anchorY on the drawing, so rotation and scale pivot on it; move a group by offsetting its x/y from the frame center, not by writing the target position. Use it for illustrations, icons and characters whose parts must move separately (then set_parent / keyframes on the parts, or bones). `source` is an asset-library name (e.g. icons/hand.svg, after import_asset / import_stock) or an absolute path. Not imported: <text>, <image>, <use>, clip paths, masks, CSS <style>.",
         "inputSchema": {
           "type": "object",
           "properties": {

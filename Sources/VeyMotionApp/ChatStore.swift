@@ -963,7 +963,7 @@ final class ChatStore {
         s.append(.notice("Design check: \(issues.count) finding\(issues.count == 1 ? "" : "s") (\(codes)). Asking \(s.agentProvider.displayName) to fix them.",
                          isError: false))
         let text = "[Design check after your changes]\n" + MotionScene.designReport(issues)
-            + "\nFix these now (or say in one line why a finding is intended for this piece), render a frame to confirm, then reply briefly."
+            + "\nFix these now (or say in one line why a finding is intended for this piece), render_frame each section you changed at full size to confirm, then reply briefly."
         s.isBusy = true
         s.setActivity("Fixing design…")
         s.lastSentText = text

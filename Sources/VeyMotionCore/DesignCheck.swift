@@ -3,7 +3,10 @@ import Foundation
 
 // A deterministic design lint for the agent (check_design, the chat's auto-check after each turn) and the app.
 // It cannot judge taste, only the things that reliably make a piece look like a draft: a flat background, nothing
-// lighting the subject, no type hierarchy, the system font, frozen stretches, text on the edge, linear entrances.
+// lighting the subject, no type hierarchy, the system font, frozen stretches, text on the edge, linear entrances,
+// text melted by goo, long shadows that stop mid-frame, illustrations made of bare polygons, a bounce on everything
+// and stretches with no subject. What it cannot see (does a drawing look right?) goes to `reviewNote`: one frame
+// per section for the agent to look at.
 // Everything is computed from the scene, so the same report comes out of the CLI, the MCP server and the app.
 
 public struct DesignIssue: Codable, Equatable, Sendable {
@@ -273,7 +276,230 @@ extension MotionScene {
                                    message: "Only text and boxes; nothing makes it memorable",
                                    fix: tips, layers: []))
         }
+
+        // Rules 10–14 look at every layer, however deep it sits in groups. `offset` turns a layer's own clock into
+        // scene time (groups with localTime); `chain` is its groups, outermost first, each with its own offset.
+        struct Deep {
+            var layer: MotionLayer
+            var offset: Double
+            var chain: [(group: MotionLayer, offset: Double)]
+        }
+        var deep: [Deep] = []
+        func collect(_ list: [MotionLayer], _ chain: [(group: MotionLayer, offset: Double)], _ offset: Double) {
+            for l in list where !lookIds.contains(l.id) && l.type != .audio {
+                if l.type == .group {
+                    collect(l.children, chain + [(l, offset)], l.localTime ? offset + l.start : offset)
+                } else {
+                    deep.append(Deep(layer: l, offset: offset, chain: chain))
+                }
+            }
+        }
+        collect(layers, [], 0)
+        /// Largest value a track reaches (its keys, or the constant).
+        func peak(_ l: MotionLayer, _ p: AnimProperty) -> Double {
+            l[p].keyframeList.map(\.v).max() ?? l[p].value(at: l.start)
+        }
+
+        // 10. Text inside a goo group melts with its neighbors.
+        let melted = deep.filter { d in
+            d.layer.type == .text && !d.layer.text.isEmpty
+                && (peak(d.layer, .goo) >= 1 || d.chain.contains { peak($0.group, .goo) >= 1 })
+        }.map(\.layer.id)
+        if !melted.isEmpty {
+            out.append(DesignIssue(severity: .warning, code: "goo-text",
+                                   message: "Text inside a goo group: its letters fuse and stop being readable",
+                                   fix: "move the text out of the goo group (keep only the blobs/drips in it), or lower goo below ~1/8 of the letter stroke",
+                                   layers: melted))
+        }
+
+        // 11. A long shadow that stops inside the frame reads as a stray shape.
+        var shortShadows: [String] = []
+        var shadowLength = 0.0
+        for d in deep {
+            let l = d.layer, length = peak(l, .longShadow)
+            guard length >= 1 else { continue }
+            let t = mid(l)
+            let angle = l.value(.longShadowAngle, at: t) * .pi / 180
+            let dx = cos(angle), dy = sin(angle)
+            let c = CGPoint.zero.applying(worldTransform(of: l, at: t))
+            let end = CGPoint(x: c.x + dx * length, y: c.y + dy * length)
+            guard CGRect(x: 40, y: 40, width: w - 80, height: h - 80).contains(end) else { continue }
+            let tx = dx > 1e-6 ? (w - c.x) / dx : dx < -1e-6 ? -c.x / dx : .infinity
+            let ty = dy > 1e-6 ? (h - c.y) / dy : dy < -1e-6 ? -c.y / dy : .infinity
+            let exit = min(tx, ty)
+            if exit.isFinite { shadowLength = max(shadowLength, ((exit + 300) / 50).rounded(.up) * 50) }
+            shortShadows.append(l.id)
+        }
+        if !shortShadows.isEmpty {
+            out.append(DesignIssue(severity: .warning, code: "short-long-shadow",
+                                   message: "Long shadows end inside the frame, as a blob with the shape's outline",
+                                   fix: "let them run off the frame (longShadow ≥ \(Int(shadowLength > 0 ? shadowLength : 1500))) or clip them with the card/section they fall on",
+                                   layers: shortShadows))
+        }
+
+        // 12. Illustrations made of bare polygons.
+        func isStraight(_ a: PathPoint, _ s: CubicSegment) -> Bool {
+            let vx = s.p.x - a.x, vy = s.p.y - a.y
+            let tol = 0.02 * max(1, vx * vx + vy * vy).squareRoot()
+            func off(_ c: PathPoint) -> Double { abs((c.x - a.x) * vy - (c.y - a.y) * vx) / max(1e-9, (vx * vx + vy * vy).squareRoot()) }
+            return off(s.c1) <= tol && off(s.c2) <= tol
+        }
+        let pathLayers = deep.filter { $0.layer.type == .path && !matteSources.contains($0.layer.id) }
+        let polygons = pathLayers.filter { d in
+            let l = d.layer
+            // Light beams, sunbursts and soft overlays are polygons on purpose.
+            guard l.fill.value(at: mid(l)).a > 0.05, l.textPath == nil, l.repeater == nil, l.blendMode == .normal,
+                  peak(l, .blur) < 4, l.value(.opacity, at: mid(l)) >= 0.5 else { return false }
+            let shape = l.d.value(at: mid(l))
+            // A star is meant to be pointy.
+            if shape.source?.hasPrefix("star(") == true { return false }
+            let subs = shape.subpaths.filter { !$0.segments.isEmpty }
+            let count = subs.reduce(0) { $0 + $1.segments.count }
+            guard !subs.isEmpty, count >= 3, count <= 10 else { return false }
+            for s in subs {
+                var from = s.start
+                for seg in s.segments {
+                    if !isStraight(from, seg) { return false }
+                    from = seg.p
+                }
+            }
+            let box = shape.cgPath.boundingBoxOfPath
+            let k = abs(l.value(.scale, at: mid(l)))
+            return max(box.width, box.height) * k >= 60
+        }.map(\.layer.id)
+        if polygons.count >= 3 {
+            out.append(DesignIssue(severity: .warning, code: "crude-shapes",
+                                   message: "\(polygons.count) illustration parts are bare straight-edged polygons (a triangle for a tree, a kite for a plane): they read as placeholders",
+                                   fix: "use a real illustration (search_stock kind icon → import_stock → import_vector, then animate its parts), or redraw with curves (C/Q/A in d) and soften corners with a stroke in the fill color (strokeWidth 8–16, round joins)",
+                                   layers: polygons))
+        }
+
+        // 13. Everything bounces the same way.
+        var animated = 0
+        var bouncing: [String] = []
+        for d in deep {
+            var moves = false, overshoots = false
+            for p in AnimProperty.allCases {
+                let k = d.layer[p].keyframeList
+                guard k.count >= 2 else { continue }
+                moves = true
+                for key in k.dropFirst() {
+                    switch key.easing {
+                    case .spring, .springWith, .curve(.back, _), .curve(.elastic, _), .curve(.bounce, _): overshoots = true
+                    default: break
+                    }
+                }
+            }
+            if moves { animated += 1 }
+            if overshoots { bouncing.append(d.layer.id) }
+        }
+        if animated >= 12, Double(bouncing.count) >= Double(animated) * 0.4 {
+            out.append(DesignIssue(severity: .warning, code: "overshoot-everywhere",
+                                   message: "\(bouncing.count) of \(animated) animated layers overshoot (back/elastic/bounce/spring), so every move feels the same",
+                                   fix: "keep the bounce for one or two hero elements per section; give the rest easeOutExpo / easeOutCubic / easeInOutCubic, and motionBlur on fast moves",
+                                   layers: bouncing))
+        }
+
+        // 14. Stretches where only the background is on screen.
+        if duration >= 2 {
+            func size(_ l: MotionLayer, at t: Double) -> Double {
+                let k = l.value(.scale, at: t), kk = k * k * abs(l.value(.scaleX, at: t) * l.value(.scaleY, at: t))
+                switch l.type {
+                case .rect, .ellipse, .generator:
+                    return l.value(.width, at: t) * l.value(.height, at: t) * kk
+                case .image, .video:
+                    let lw = l.width.map { $0.value(at: t) } ?? w, lh = l.height.map { $0.value(at: t) } ?? h
+                    return lw * lh * kk
+                case .path:
+                    let box = l.d.value(at: t).cgPath.boundingBoxOfPath
+                    return box.isNull ? 0 : max(box.width, 4) * max(box.height, 4) * kk
+                case .text:
+                    let lines = l.text.split(separator: "\n", omittingEmptySubsequences: false)
+                    let chars = Double(lines.map(\.count).max() ?? 0)
+                    return chars * l.fontSize * 0.55 * l.fontSize * 1.2 * Double(lines.count) * kk
+                case .particles:
+                    return 0
+                default:
+                    return area * 0.1
+                }
+            }
+            func subject(at time: Double) -> Double {
+                var sum = 0.0
+                for d in deep {
+                    let l = d.layer, t = time - d.offset
+                    guard t >= l.start, t < l.effectiveEnd(sceneDuration: duration), !matteSources.contains(l.id) else { continue }
+                    var alpha = l.value(.opacity, at: t), grow = 1.0, alive = true
+                    for (g, o) in d.chain {
+                        let gt = time - o
+                        if gt < g.start || gt >= g.effectiveEnd(sceneDuration: duration) { alive = false; break }
+                        alpha *= g.value(.opacity, at: gt)
+                        let k = g.value(.scale, at: gt)
+                        grow *= k * k * abs(g.value(.scaleX, at: gt) * g.value(.scaleY, at: gt))
+                    }
+                    guard alive, alpha > 0.05 else { continue }
+                    let s = size(l, at: t) * grow
+                    // A shape over half the frame is a backdrop, not a subject.
+                    if [.rect, .ellipse, .generator].contains(l.type), s >= area * 0.5 { continue }
+                    sum += s
+                    if sum >= area * 0.01 { break }
+                }
+                return sum
+            }
+            var empty: [String] = []
+            var from: Double?
+            var time = 0.25
+            while time < duration + 0.5 {
+                let bare = time < duration && subject(at: time) < area * 0.01
+                if bare {
+                    if from == nil { from = time }
+                } else if let f = from {
+                    if time - f >= 1 { empty.append(String(format: "%.1f–%.1fs", f - 0.25, min(duration, time - 0.25))) }
+                    from = nil
+                }
+                time += 0.5
+            }
+            if !empty.isEmpty {
+                out.append(DesignIssue(severity: .warning, code: "empty-frame",
+                                       message: "Nothing but the background (or a hairline) on screen during \(empty.prefix(4).joined(separator: ", "))",
+                                       fix: "bring the next subject in earlier, hold the previous one longer, or give the section a real subject that fills ⅓ of the frame", layers: []))
+            }
+        }
         return out.sorted { $0.severity > $1.severity }
+    }
+
+    /// One time per section for a look at full size: the 60% point of every top-level group (or of every ~3 s
+    /// when the piece is not built from groups), at most `limit`.
+    public func reviewTimes(limit: Int = 24) -> [Double] {
+        let lookIds: Set<String> = [Self.lookGroupId, Self.lookFinishId]
+        let matteSources = Set(allLayers.compactMap { $0.matte?.source })
+        var times = layers.filter { $0.type == .group && !lookIds.contains($0.id) && !matteSources.contains($0.id) }.compactMap { g -> Double? in
+            let a = max(0, g.start), b = min(duration, g.effectiveEnd(sceneDuration: duration))
+            return b > a ? a + (b - a) * 0.6 : nil
+        }
+        if times.count < 2 {
+            let n = max(1, min(limit, Int((duration / 3).rounded(.up))))
+            times = (0..<n).map { (Double($0) + 0.6) * duration / Double(n) }
+        }
+        times = times.map { ($0 * 10).rounded() / 10 }.sorted()
+        var out: [Double] = []
+        for t in times where out.last.map({ t - $0 >= 0.4 }) ?? true { out.append(t) }
+        if out.count > limit {
+            let step = Double(out.count) / Double(limit)
+            out = (0..<limit).map { out[Int(Double($0) * step)] }
+        }
+        return out
+    }
+
+    /// What the agent must do after the lint: look at each section at full size, and what to look for.
+    public var reviewNote: String {
+        let times = reviewTimes().map { String(format: "%g", $0) }.joined(separator: ", ")
+        return """
+            Close look (the lint cannot see pictures): render_frame at full size, one call per time, and Read each PNG: \(times).
+            In every frame check: does each object look like what it is, or like a placeholder made of boxes and triangles? \
+            Do parts join (limbs meet the body, shadows touch their object)? Is every word readable (not melted, not over a busy \
+            picture, not overlapping other text)? Is the subject big enough (about ⅓ of the frame) and is the frame not empty? \
+            Fix what fails, then render that time again.
+            """
     }
 
     /// One text block for the agent.
