@@ -1,10 +1,15 @@
 import Foundation
 
-/// Built-in sound effects, synthesized (no network, no license): whooshes, pops, clicks, dings, risers, impacts…
+/// Built-in sound effects, synthesized (no network, no license): whooshes, pops, clicks, dings, risers, impacts,
+/// game and interface sounds, cinematic hits and a few beds (wind, drone).
 /// Each one is made to measure (duration, pitch, direction) and knows exactly where its hit is, so it can be placed
 /// on the frame where the picture moves. The same settings always give the same file.
 public enum SynthKind: String, CaseIterable, Codable, Sendable {
     case whoosh, swoosh, pop, blip, click, tick, ding, chime, sparkle, riser, impact, thud, drop, glitch, typing
+    case swell, braam, explosion, subdrop, laser
+    case notification, error, beep, coin, powerup, tada
+    case shutter, clap, droplet, boing, heartbeat, scribble
+    case `static`, wind, drone
 
     public var title: String { rawValue.capitalized }
 
@@ -26,6 +31,26 @@ public enum SynthKind: String, CaseIterable, Codable, Sendable {
         case .drop: return "falling tone; exits, errors, things falling away"
         case .glitch: return "digital stutter; glitch transitions, tech/error moments"
         case .typing: return "keyboard typing; typewriter text (set duration to the typing time, or count = keystrokes)"
+        case .swell: return "reverse cymbal: airy shimmer that swells and cuts off at its end; soft lead-in to a cut or title (hit = the end)"
+        case .braam: return "trailer brass blast, low and distorted; cinematic titles, dramatic reveals, chapter cards"
+        case .explosion: return "blast with a long rumble; explosions, things bursting apart, heavy destruction"
+        case .subdrop: return "sub-bass dive; slow-motion moments, a beat drop, weight under a big title"
+        case .laser: return "sci-fi zap; shots, beams, fast streaks, energy lines (use count for a burst)"
+        case .notification: return "two soft rising notes; message bubbles, alerts, toasts, phone UI"
+        case .error: return "two low buzzy notes; wrong answers, declined, crossed-out items"
+        case .beep: return "plain tone; countdowns (count over the seconds), timers, censoring, machine UI"
+        case .coin: return "game coin: two bright square notes; points, rewards, prices, counters reaching a goal"
+        case .powerup: return "rising arcade arpeggio; level up, upgrades, growth, progress bars filling (hit = the top note)"
+        case .tada: return "short brass fanfare, ta-DA; winners, the final result, product reveals (hit = the second chord)"
+        case .shutter: return "camera shutter; photos snapping in, screenshots, freeze frames"
+        case .clap: return "single hand clap; beat accents, slate/cut marks, snappy appearances (use count for a rhythm)"
+        case .droplet: return "water drip; liquid shapes, ripples, calm minimal accents"
+        case .boing: return "cartoon spring; bounces, overshoots, playful characters"
+        case .heartbeat: return "lub-dub; tension, health, love, slow reveals (count = beats over duration)"
+        case .scribble: return "pencil strokes on paper; draw-on lines, handwriting, sketches (duration = the drawing time)"
+        case .static: return "TV/radio static burst; channel-change cuts, signal loss, retro screens"
+        case .wind: return "wind bed with slow gusts; outdoor scenes, emptiness, air under a quiet moment (a bed, not a hit)"
+        case .drone: return "dark sustained pad; suspense under a scene without music (a bed, not a hit)"
         }
     }
 
@@ -47,6 +72,56 @@ public enum SynthKind: String, CaseIterable, Codable, Sendable {
         case .drop: return 0.7
         case .glitch: return 0.45
         case .typing: return 1.5
+        case .swell: return 1.5
+        case .braam: return 2.8
+        case .explosion: return 2.2
+        case .subdrop: return 1.6
+        case .laser: return 0.3
+        case .notification: return 0.6
+        case .error: return 0.4
+        case .beep: return 0.14
+        case .coin: return 0.5
+        case .powerup: return 0.7
+        case .tada: return 1.6
+        case .shutter: return 0.2
+        case .clap: return 0.3
+        case .droplet: return 0.3
+        case .boing: return 0.7
+        case .heartbeat: return 0.5
+        case .scribble: return 1.2
+        case .static: return 0.5
+        case .wind: return 4
+        case .drone: return 6
+        }
+    }
+
+    /// Lengths that make sense for a stretching kind (the UI's slider).
+    public var durationRange: ClosedRange<Double> {
+        switch self {
+        case .riser, .swell: return 0.5...6
+        case .braam, .explosion, .subdrop, .tada: return 0.8...6
+        case .wind, .drone: return 1...30
+        case .scribble, .typing: return 0.2...10
+        default: return 0.1...3
+        }
+    }
+
+    /// Peak level, 1 = -1 dBFS. Steady tones and beds are louder than a click at the same peak, so they sit lower.
+    var level: Double {
+        switch self {
+        case .error, .beep: return 0.6
+        case .coin, .powerup, .wind, .drone: return 0.7
+        default: return 1
+        }
+    }
+
+    /// Time between repeats when `count` is given without a duration.
+    var repeatGap: Double {
+        switch self {
+        case .heartbeat: return 0.85
+        case .beep: return 1
+        case .clap, .droplet, .laser, .coin: return 0.18
+        default: return 0.12
         }
     }
 
@@ -54,10 +129,30 @@ public enum SynthKind: String, CaseIterable, Codable, Sendable {
     public static func matching(_ query: String) -> SynthKind? {
         let words = query.lowercased().split { !$0.isLetter }.map(String.init)
         let table: [(SynthKind, [String])] = [
+            (.swell, ["swell", "reverse", "cymbal"]),
             (.riser, ["riser", "risers", "buildup", "build-up", "uplifter", "tension"]),
+            (.braam, ["braam", "braams", "trailer", "horn"]),
+            (.explosion, ["explosion", "explode", "blast", "bang"]),
+            (.subdrop, ["subdrop", "sub", "808", "bass"]),
+            (.laser, ["laser", "zap", "pew"]),
+            (.notification, ["notification", "notify", "alert", "message"]),
+            (.error, ["error", "wrong", "buzzer", "denied", "fail"]),
+            (.beep, ["beep", "beeps", "countdown", "censor"]),
+            (.coin, ["coin", "coins", "pickup", "collect", "reward"]),
+            (.powerup, ["powerup", "levelup", "upgrade", "arcade"]),
+            (.tada, ["tada", "fanfare", "victory", "winner"]),
+            (.shutter, ["shutter", "camera", "snapshot"]),
+            (.clap, ["clap", "claps"]),
+            (.droplet, ["droplet", "drip", "drips"]),
+            (.boing, ["boing", "spring", "bounce"]),
+            (.heartbeat, ["heartbeat", "heart"]),
+            (.scribble, ["scribble", "pencil", "writing", "sketch", "chalk"]),
+            (.static, ["static", "interference"]),
+            (.wind, ["wind", "gust", "breeze"]),
+            (.drone, ["drone", "suspense", "ominous"]),
             (.whoosh, ["whoosh", "woosh", "swoosh", "swish", "swipe", "swosh", "transition"]),
             (.pop, ["pop", "pops", "bubble", "plop"]),
-            (.blip, ["blip", "beep", "notification"]),
+            (.blip, ["blip", "blips", "toggle"]),
             (.click, ["click", "clicks", "button", "snap"]),
             (.tick, ["tick", "ticks", "counter"]),
             (.chime, ["chime", "chimes"]),
@@ -73,15 +168,25 @@ public enum SynthKind: String, CaseIterable, Codable, Sendable {
     }
 
     /// Kinds whose length follows `duration` (others have a natural length and only repeat to fill it).
-    public var stretches: Bool { [.whoosh, .swoosh, .riser, .drop, .glitch, .typing, .sparkle].contains(self) }
+    public var stretches: Bool {
+        [.whoosh, .swoosh, .riser, .drop, .glitch, .typing, .sparkle, .swell, .braam, .explosion, .subdrop, .powerup, .tada,
+         .boing, .scribble, .static, .wind, .drone].contains(self)
+    }
     /// Kinds that can repeat `count` times over `duration`.
-    public var repeats: Bool { [.pop, .blip, .click, .tick, .thud, .ding].contains(self) }
+    public var repeats: Bool {
+        [.pop, .blip, .click, .tick, .thud, .ding, .laser, .beep, .coin, .clap, .droplet, .heartbeat].contains(self)
+    }
+    /// Kinds that `direction` pans across the stereo field.
+    public var pans: Bool { [.whoosh, .swoosh, .riser, .swell].contains(self) }
 
     public var defaultReverb: Double {
         switch self {
         case .ding, .chime: return 0.3
         case .impact: return 0.25
-        case .sparkle: return 0.2
+        case .sparkle, .swell: return 0.2
+        case .braam: return 0.4
+        case .explosion, .tada, .droplet: return 0.3
+        case .clap, .notification: return 0.15
         default: return 0
         }
     }
@@ -97,9 +202,9 @@ public struct SynthSettings: Hashable, Codable, Sendable {
     public var variant: Int = 0
     /// 0…1; nil = the kind's default.
     public var reverb: Double?
-    /// Whoosh/swoosh/riser: moves "left" (right → left) or "right" (left → right); nil = centered.
+    /// Whoosh/swoosh/riser/swell: moves "left" (right → left) or "right" (left → right); nil = centered.
     public var direction: String?
-    /// Repeat a short sound this many times over `duration` (tick, click, pop, blip, thud, ding); typing keystrokes.
+    /// Repeat a short sound this many times over `duration` (see `SynthKind.repeats`); typing keystrokes.
     public var count: Int?
 
     public init(kind: SynthKind, duration: Double? = nil, pitch: Double = 1, variant: Int = 0, reverb: Double? = nil,
@@ -284,7 +389,7 @@ public enum SoundSynth {
         mutating func run() {
             let k = s.kind
             if k.repeats, let c = s.count, c > 1 {
-                let span = s.duration ?? Double(c) * 0.12
+                let span = s.duration ?? Double(c) * k.repeatGap
                 for j in 0..<c {
                     let t = span * Double(j) / Double(c)
                     let jitter = 1 + rng.range(-0.03, 0.03)
@@ -307,6 +412,17 @@ public enum SoundSynth {
             case .typing: typing(p)
             case .sparkle: sparkle(p)
             case .chime: chime(p)
+            case .swell: swell(p)
+            case .braam: braam(p)
+            case .explosion: explosion(p)
+            case .subdrop: subdrop(p)
+            case .powerup: powerup(p)
+            case .tada: tada(p)
+            case .boing: boing(p)
+            case .scribble: scribble(p)
+            case .static: staticBurst(p)
+            case .wind: wind(p)
+            case .drone: drone(p)
             default:
                 let (mono, hit) = shortSound(k, pitch: p)
                 add(mono.map { $0 * gain }, at: t0)
@@ -490,6 +606,293 @@ public enum SoundSynth {
             hits.append(0.002)
         }
 
+        // MARK: Cinematic
+
+        /// Reverse cymbal: bright noise and a few metallic partials growing exponentially, cut at the end.
+        mutating func swell(_ p: Double) {
+            let d = length, count = n(d)
+            var hp = SVF(), ring = SVF()
+            var mono = [Double](repeating: 0, count: count)
+            let partials = [3200.0, 4350, 5630, 7100, 8870].map { ($0 * p, rng.range(0, 2 * .pi)) }
+            for i in 0..<count {
+                let t = Double(i) / sampleRate, u = t / d
+                let env = exp((u - 1) * 5.5) * min(1, (d - t) / 0.006)
+                let x = rng.noise()
+                var v = hp.run(x, cutoff: p * (2600 + 3400 * u), q: 0.7).hp * 0.8
+                v += ring.run(x, cutoff: p * 5200, q: 6).bp * 0.6
+                for (f, ph) in partials { v += sin(2 * .pi * f * t + ph) * 0.07 }
+                mono[i] = v * env
+            }
+            let dir = direction
+            add(mono, at: 0) { i in dir * (Double(i) / Double(count) * 2 - 1) * 0.6 }
+            hits.append(d)
+        }
+
+        /// Band-limited sawtooth from a phase in 0…1 that advances `dt` per sample (polyBLEP at the jump).
+        static func saw(_ phase: Double, _ dt: Double) -> Double {
+            var v = 2 * phase - 1
+            if phase < dt { let x = phase / dt; v -= x + x - x * x - 1 }
+            else if phase > 1 - dt { let x = (phase - 1) / dt; v -= x * x + x + x + 1 }
+            return v
+        }
+
+        /// Brass: pairs of detuned saws through a lowpass that opens with the attack and closes as the note fades.
+        mutating func brass(_ freqs: [Double], length d: Double, attack: Double, release: Double, bright: Double,
+                            detune: Double, drive: Double) -> [Double] {
+            let count = n(max(0.02, d))
+            var phases = (0..<freqs.count * 2).map { _ in rng.unit() }
+            var lp = SVF()
+            var mono = [Double](repeating: 0, count: count)
+            let scale = 1 / Double(freqs.count * 2).squareRoot()
+            for i in 0..<count {
+                let t = Double(i) / sampleRate
+                let a = min(1, t / attack)
+                let r = pow(min(1, max(0, (d - t) / release)), 1.5)
+                var x = 0.0
+                for (j, f) in freqs.enumerated() {
+                    for k in 0..<2 {
+                        let dt = f * (1 + (k == 0 ? -detune : detune)) / sampleRate
+                        var ph = phases[2 * j + k] + dt
+                        if ph >= 1 { ph -= 1 }
+                        phases[2 * j + k] = ph
+                        x += Self.saw(ph, dt)
+                    }
+                }
+                let cut = freqs[0] * 2 + bright * a * a * (0.35 + 0.65 * exp(-t / (d * 0.5)))
+                mono[i] = tanh(lp.run(x * scale, cutoff: cut, q: 0.9).lp * drive) * a * r
+            }
+            return mono
+        }
+
+        mutating func braam(_ p: Double) {
+            let d = max(1, length)
+            var mono = brass([55, 110, 164.8].map { $0 * p }, length: d, attack: 0.05, release: d * 0.7, bright: 3600,
+                             detune: 0.007, drive: 2.5)
+            var lp = SVF()
+            for i in mono.indices {
+                let t = Double(i) / sampleRate
+                let sub = sin(2 * .pi * 55 * p * t) * 0.3 * min(1, t / 0.03) * pow(max(0, 1 - t / d), 1.5)
+                let grit = lp.run(rng.noise(), cutoff: 900 * p, q: 0.8).lp * exp(-t / 0.06) * 1.5
+                mono[i] += sub + grit * min(1, t / 0.002)
+            }
+            add(mono, at: 0)
+            hits.append(0.05)
+        }
+
+        mutating func explosion(_ p: Double) {
+            let d = max(0.8, length), count = n(d)
+            var body = SVF(), low = SVF(), hp = SVF()
+            var mono = [Double](repeating: 0, count: count)
+            var phase = 0.0
+            let wobble = rng.range(0, 2 * .pi)
+            for i in 0..<count {
+                let t = Double(i) / sampleRate
+                let x = rng.noise()
+                let crack = hp.run(x, cutoff: 1800 * p, q: 0.7).hp * exp(-t / 0.012) * 0.8
+                let fire = body.run(x, cutoff: p * (120 + 3000 * exp(-t / 0.12)), q: 0.8).lp * exp(-t / (d * 0.22)) * 2.2
+                let rumble = low.run(rng.noise(), cutoff: 90 * p, q: 1.2).lp * exp(-t / (d * 0.4)) * 10
+                    * (0.7 + 0.3 * sin(2 * .pi * 7 * t + wobble))
+                phase += 2 * .pi * p * (38 + 60 * exp(-t / 0.06)) / sampleRate
+                let sub = sin(phase) * exp(-t / (d * 0.25))
+                mono[i] = tanh((crack + fire + rumble + sub) * 1.5) * min(1, t / 0.0008) * min(1, (d - t) / 0.05)
+            }
+            add(mono, at: 0)
+            hits.append(0.005)
+        }
+
+        mutating func subdrop(_ p: Double) {
+            let d = max(0.4, length), count = n(d)
+            var hp = SVF()
+            var mono = [Double](repeating: 0, count: count)
+            var phase = 0.0
+            for i in 0..<count {
+                let t = Double(i) / sampleRate, u = t / d
+                phase += 2 * .pi * p * (30 + 95 * exp(-t / (d * 0.22))) / sampleRate
+                let click = hp.run(rng.noise(), cutoff: 2000, q: 0.7).hp * exp(-t / 0.003) * 0.2
+                // Driven a little, so small speakers that cannot play the fundamental still get its harmonics.
+                mono[i] = (tanh(sin(phase) * 1.8) + click) * min(1, t / 0.004) * pow(1 - u, 1.3)
+            }
+            add(mono, at: 0)
+            hits.append(0.005)
+        }
+
+        // MARK: Game and interface
+
+        mutating func powerup(_ p: Double) {
+            let d = length
+            let steps = [0, 4, 7, 12, 16, 19, 24, 28]
+            let step = d / Double(steps.count + 2)
+            var top = 0.0
+            for (j, semis) in steps.enumerated() {
+                let last = j == steps.count - 1
+                let f = 330 * p * pow(2, Double(semis) / 12)
+                let count = n(last ? step * 3 : step * 1.1)
+                var mono = [Double](repeating: 0, count: count)
+                for i in 0..<count {
+                    let t = Double(i) / sampleRate
+                    let ph = 2 * .pi * f * t
+                    let env = min(1, t / 0.002) * (last ? exp(-t / (step * 1.2)) : min(1, (Double(count) / sampleRate - t) / 0.004))
+                    mono[i] = (tanh(2.5 * sin(ph)) * 0.5 + sin(ph) * 0.3) * env
+                }
+                top = step * Double(j)
+                add(mono, at: top)
+            }
+            hits.append(top + 0.002)
+        }
+
+        mutating func tada(_ p: Double) {
+            let d = max(0.8, length)
+            let ta = brass([392.0, 523.25, 659.25].map { $0 * p }, length: 0.16, attack: 0.012, release: 0.05, bright: 3200,
+                           detune: 0.003, drive: 1.2)
+            let da = brass([523.25, 659.25, 783.99, 1046.5].map { $0 * p }, length: d - 0.2, attack: 0.018,
+                           release: min(0.6, (d - 0.2) * 0.6), bright: 4200, detune: 0.003, drive: 1.2)
+            add(ta.map { $0 * 0.7 }, at: 0)
+            add(da, at: 0.2)
+            hits.append(0.215)
+        }
+
+        mutating func boing(_ p: Double) {
+            let d = length, count = n(d)
+            var mono = [Double](repeating: 0, count: count)
+            var phase = 0.0
+            for i in 0..<count {
+                let t = Double(i) / sampleRate
+                let wobble = 0.55 * exp(-t / (d * 0.35)) * sin(2 * .pi * 11 * t)
+                phase += 2 * .pi * p * 150 * (1 + wobble) * (1 + 0.3 * exp(-t / 0.03)) / sampleRate
+                let tone = sin(phase) + 0.5 * sin(2 * phase) + 0.3 * sin(3 * phase) + 0.15 * sin(5 * phase)
+                mono[i] = tone * 0.5 * min(1, t / 0.002) * exp(-t / (d * 0.3))
+            }
+            add(mono, at: 0)
+            hits.append(0.004)
+        }
+
+        // MARK: Textures and beds
+
+        /// Pencil on paper: strokes of band-passed noise, brighter where the hand moves faster, with paper grain.
+        mutating func scribble(_ p: Double) {
+            let d = length
+            var t0 = 0.0
+            var first = true
+            while t0 < d - 0.05 || first {
+                let len = min(max(0.05, d - t0), rng.range(0.08, 0.26))
+                let count = n(len)
+                var bp = SVF(), grainLP = SVF()
+                let amp = first ? 1 : rng.range(0.5, 1)
+                let base = p * rng.range(1900, 2600)
+                var mono = [Double](repeating: 0, count: count)
+                for i in 0..<count {
+                    let u = Double(i) / Double(count)
+                    let speed = sin(.pi * u)
+                    let grain = 0.65 + 10 * grainLP.run(rng.noise(), cutoff: 70, q: 0.7).lp
+                    mono[i] = bp.run(rng.noise(), cutoff: base + 1500 * p * speed, q: 1.5).bp * pow(speed, 0.6) * max(0, grain) * amp
+                }
+                let from = rng.range(-0.3, 0.3), to = rng.range(-0.3, 0.3)
+                add(mono, at: t0) { i in from + (to - from) * Double(i) / Double(count) }
+                if first { hits.append(t0 + len * 0.5) }
+                first = false
+                t0 += len + rng.range(0.02, 0.09)
+            }
+        }
+
+        mutating func staticBurst(_ p: Double) {
+            let d = length, count = n(d)
+            var bp = SVF()
+            var mono = [Double](repeating: 0, count: count)
+            var level = 1.0, hold = 0, crackle = 0.0
+            for i in 0..<count {
+                let t = Double(i) / sampleRate
+                if hold == 0 { level = rng.range(0.45, 1); hold = n(rng.range(0.008, 0.04)) }
+                hold -= 1
+                if rng.unit() < 0.0015 { crackle = rng.range(0.6, 1.2) * (rng.unit() < 0.5 ? -1 : 1) }
+                crackle *= 0.9
+                let x = rng.noise()
+                let hiss = bp.run(x, cutoff: 2800 * p, q: 0.5).bp + x * 0.3
+                mono[i] = (hiss * level * 0.7 + crackle) * min(1, t / 0.003) * min(1, (d - t) / 0.003)
+            }
+            add(mono, at: 0)
+            hits.append(0)
+        }
+
+        /// A slow random curve in 0…1: three sines at rates the listener cannot follow.
+        mutating func drift(_ lowest: Double, _ highest: Double) -> (Double) -> Double {
+            let parts = (0..<3).map { _ in (rng.range(lowest, highest), rng.range(0, 2 * .pi)) }
+            return { t in
+                var v = 0.0
+                for (rate, ph) in parts { v += sin(2 * .pi * rate * t + ph) }
+                return 0.5 + v / 6
+            }
+        }
+
+        /// A bed's fade in and out (never more than a third of it each).
+        func bedFade(_ t: Double, _ d: Double, fadeIn: Double, fadeOut: Double) -> Double {
+            let a = min(fadeIn, d / 3), r = min(fadeOut, d / 3)
+            let up = min(1, t / a), down = min(1, max(0, (d - t) / r))
+            return up * up * (3 - 2 * up) * down * down * (3 - 2 * down)
+        }
+
+        mutating func wind(_ p: Double) {
+            let d = max(0.5, length), count = n(d)
+            var bpL = SVF(), bpR = SVF(), lp = SVF()
+            let tone = drift(0.08, 0.45), gust = drift(0.05, 0.3), side = drift(0.05, 0.2)
+            var l = [Double](repeating: 0, count: count), r = [Double](repeating: 0, count: count)
+            for i in 0..<count {
+                let t = Double(i) / sampleRate
+                let cut = p * (320 + 700 * tone(t))
+                let g = (0.35 + 0.65 * gust(t)) * bedFade(t, d, fadeIn: 0.6, fadeOut: 0.9)
+                let body = lp.run(rng.noise(), cutoff: 170 * p, q: 0.7).lp * 2.5
+                // Two noise sources so the wind is wide, leaning slowly from one side to the other.
+                let lean = (side(t) - 0.5) * 0.6
+                l[i] = (bpL.run(rng.noise(), cutoff: cut, q: 1.6).bp * 1.6 * (1 - lean) + body) * g
+                r[i] = (bpR.run(rng.noise(), cutoff: cut * 1.07, q: 1.6).bp * 1.6 * (1 + lean) + body) * g
+            }
+            add(l, at: 0) { _ in -1 }
+            add(r, at: 0) { _ in 1 }
+            hits.append(0)
+        }
+
+        mutating func drone(_ p: Double) {
+            let d = max(1, length), count = n(d)
+            let roots = [55.0, 49, 61.74, 46.25]
+            let root = roots[abs(s.variant) % roots.count] * p
+            // (ratio, level, pan): unison pair, fifth, and two octaves that small speakers can still play.
+            let voices: [(Double, Double, Double)] = [(1, 1, -0.5), (1.004, 1, 0.5), (1.498, 0.45, -0.3), (2.003, 0.6, 0.3),
+                                                      (4.01, 0.3, 0)]
+            var phases = voices.map { _ in rng.unit() }
+            let open = drift(0.03, 0.11), swellLFO = drift(0.04, 0.16)
+            var lpL = SVF(), lpR = SVF(), air = SVF()
+            var l = [Double](repeating: 0, count: count), r = [Double](repeating: 0, count: count)
+            for i in 0..<count {
+                let t = Double(i) / sampleRate
+                var xl = 0.0, xr = 0.0
+                for (j, v) in voices.enumerated() {
+                    let dt = root * v.0 / sampleRate
+                    var ph = phases[j] + dt
+                    if ph >= 1 { ph -= 1 }
+                    phases[j] = ph
+                    let x = Self.saw(ph, dt) * v.1
+                    xl += x * (1 - v.2) * 0.5
+                    xr += x * (1 + v.2) * 0.5
+                }
+                let sub = sin(2 * .pi * root * 0.5 * t) * 0.6
+                let cut = root * (5 + 9 * open(t))
+                let hiss = air.run(rng.noise(), cutoff: 5000, q: 0.7).hp * 0.012
+                let g = (0.75 + 0.25 * swellLFO(t)) * bedFade(t, d, fadeIn: 2, fadeOut: 2.5)
+                l[i] = (lpL.run(xl, cutoff: cut, q: 1.2).lp + sub + hiss) * g
+                r[i] = (lpR.run(xr, cutoff: cut, q: 1.2).lp + sub + hiss) * g
+            }
+            add(l, at: 0) { _ in -1 }
+            add(r, at: 0) { _ in 1 }
+            hits.append(0)
+        }
+
+        /// A soft mallet note: a sine with two harmonics that die sooner.
+        func mallet(_ f: Double, decay: Double, at t: Double) -> Double {
+            guard t >= 0 else { return 0 }
+            let w = 2 * .pi * f * t
+            return (sin(w) * exp(-t / decay) + 0.3 * sin(2 * w) * exp(-t / (decay * 0.4)) + 0.12 * sin(4 * w) * exp(-t / (decay * 0.2)))
+                * min(1, t / 0.0015)
+        }
+
         func bell(_ f0: Double, decay: Double, length d: Double) -> ([Double], Double) {
             let count = n(max(0.05, d))
             var mono = [Double](repeating: 0, count: count)
@@ -569,6 +972,124 @@ public enum SoundSynth {
                     mono[i] = tanh((body + knock) * 1.4) * min(1, t / 0.001)
                 }
                 return (mono, 0.006)
+            case .laser:
+                let count = n(0.3)
+                var phase = 0.0
+                var mono = [Double](repeating: 0, count: count)
+                for i in 0..<count {
+                    let t = Double(i) / sampleRate
+                    phase += 2 * .pi * p * (300 + 3200 * exp(-t / 0.05)) / sampleRate
+                    mono[i] = sin(phase + 0.8 * sin(phase * 2.01)) * exp(-t / 0.07) * min(1, t / 0.001)
+                }
+                return (mono, 0.002)
+            case .beep:
+                let d = 0.14, count = n(d)
+                var mono = [Double](repeating: 0, count: count)
+                for i in 0..<count {
+                    let t = Double(i) / sampleRate
+                    let w = 2 * .pi * 1000 * p * t
+                    mono[i] = (sin(w) + 0.15 * sin(2 * w)) * 0.8 * min(1, t / 0.004) * min(1, (d - t) / 0.008)
+                }
+                return (mono, 0.004)
+            case .coin:
+                let count = n(0.5)
+                var phase = 0.0
+                var mono = [Double](repeating: 0, count: count)
+                for i in 0..<count {
+                    let t = Double(i) / sampleRate
+                    phase += 2 * .pi * p * (t < 0.07 ? 987.77 : 1318.5) / sampleRate
+                    let env = t < 0.07 ? 0.8 : exp(-(t - 0.07) / 0.12)
+                    mono[i] = tanh(3 * sin(phase)) * 0.5 * env * min(1, t / 0.001)
+                }
+                return (mono, 0.002)
+            case .notification:
+                let pairs = [(783.99, 1046.5), (880.0, 1318.5), (659.25, 987.77), (1046.5, 1567.98)]
+                let (a, b) = pairs[abs(s.variant) % pairs.count]
+                let count = n(0.6)
+                var mono = [Double](repeating: 0, count: count)
+                for i in 0..<count {
+                    let t = Double(i) / sampleRate
+                    mono[i] = (mallet(a * p, decay: 0.11, at: t) + mallet(b * p, decay: 0.16, at: t - 0.13)) * 0.6
+                }
+                return (mono, 0.002)
+            case .error:
+                let count = n(0.4)
+                var phase = 0.0
+                var lp = SVF()
+                var mono = [Double](repeating: 0, count: count)
+                for i in 0..<count {
+                    let t = Double(i) / sampleRate
+                    // Two notes, the second lower: 0–0.14 s and 0.19–0.4 s.
+                    let second = t >= 0.19
+                    let local = second ? t - 0.19 : t, len = second ? 0.21 : 0.14
+                    phase += 2 * .pi * p * (second ? 146.83 : 196) / sampleRate
+                    let env = min(1, local / 0.004) * min(1, max(0, (len - local) / 0.012))
+                    mono[i] = lp.run(sin(phase) >= 0 ? 0.7 : -0.7, cutoff: 1800 * p, q: 0.8).lp * env
+                }
+                return (mono, 0.005)
+            case .shutter:
+                let count = n(0.2)
+                var snap = SVF(), whir = SVF()
+                var mono = [Double](repeating: 0, count: count)
+                for i in 0..<count {
+                    let t = Double(i) / sampleRate
+                    let x = rng.noise()
+                    // The curtain opens, a short mechanical whir, and it closes (a little softer).
+                    let t2 = t - 0.075
+                    let open = exp(-t / 0.004) * min(1, t / 0.0003)
+                    let close = t2 >= 0 ? exp(-t2 / 0.006) * min(1, t2 / 0.0003) * 0.8 : 0
+                    let clicks = snap.run(x, cutoff: p * (t2 >= 0 ? 2600 : 3600), q: 2).bp * (open + close) * 2
+                    let thock = sin(2 * .pi * 420 * p * t) * open * 0.4 + (t2 >= 0 ? sin(2 * .pi * 300 * p * t2) * close * 0.4 : 0)
+                    let motor = t < 0.075 ? whir.run(x, cutoff: 900 * p, q: 3).bp * 0.12 : 0
+                    mono[i] = clicks + thock + motor
+                }
+                return (mono, 0.002)
+            case .clap:
+                let count = n(0.3)
+                var body = SVF(), air = SVF()
+                // Several palms landing a few ms apart, then the room.
+                let starts = [0.0, rng.range(0.008, 0.012), rng.range(0.018, 0.023), 0.03]
+                var mono = [Double](repeating: 0, count: count)
+                for i in 0..<count {
+                    let t = Double(i) / sampleRate
+                    var env = 0.0
+                    for (j, o) in starts.enumerated() where t >= o {
+                        env = max(env, exp(-(t - o) / (j == starts.count - 1 ? 0.045 : 0.006)))
+                    }
+                    let x = rng.noise()
+                    mono[i] = (body.run(x, cutoff: 1300 * p, q: 1.2).bp * 2.2 + air.run(x, cutoff: 3500 * p, q: 0.7).hp * 0.35) * env
+                }
+                return (mono, 0.02)
+            case .droplet:
+                let count = n(0.3)
+                var phase = 0.0, phase2 = 0.0
+                var mono = [Double](repeating: 0, count: count)
+                for i in 0..<count {
+                    let t = Double(i) / sampleRate
+                    phase += 2 * .pi * p * (700 + 1100 * (1 - exp(-t / 0.018))) / sampleRate
+                    var v = sin(phase) * exp(-t / 0.045) * (1 - exp(-t / 0.0015))
+                    let t2 = t - 0.085
+                    if t2 >= 0 {
+                        phase2 += 2 * .pi * p * (1500 + 900 * (1 - exp(-t2 / 0.012))) / sampleRate
+                        v += sin(phase2) * exp(-t2 / 0.03) * (1 - exp(-t2 / 0.0015)) * 0.35
+                    }
+                    mono[i] = v
+                }
+                return (mono, 0.004)
+            case .heartbeat:
+                let count = n(0.5)
+                var mono = [Double](repeating: 0, count: count)
+                // Lub (lower, louder) and dub; the pitch of each falls within 25 ms.
+                func thump(_ t: Double, base: Double, amp: Double) -> Double {
+                    guard t >= 0 else { return 0 }
+                    let phase = 2 * .pi * p * (base * t + 40 * 0.025 * (1 - exp(-t / 0.025)))
+                    return (sin(phase) + 0.3 * sin(2 * phase)) * exp(-t / 0.07) * (1 - exp(-t / 0.004)) * amp
+                }
+                for i in 0..<count {
+                    let t = Double(i) / sampleRate
+                    mono[i] = tanh((thump(t, base: 48, amp: 1) + thump(t - 0.26, base: 58, amp: 0.75)) * 1.5)
+                }
+                return (mono, 0.012)
             default: // impact
                 let count = n(max(0.6, length))
                 var phase = 0.0
@@ -617,7 +1138,7 @@ public enum SoundSynth {
             }
             let peak = max(left.map(abs).max() ?? 0, right.map(abs).max() ?? 0)
             if peak > 1e-6 {
-                let g = 0.89 / peak
+                let g = Float(0.89 * s.kind.level) / peak
                 for i in left.indices { left[i] *= g; right[i] *= g }
             }
             // Trim trailing near-silence, then a 10 ms fade-out.

@@ -621,20 +621,30 @@ enum Docs {
       element in, fast cut → swoosh; scale-in/appear → pop (blip for UI-like elements); button press, cursor, snap into
       place → click; counter steps, list items, checkboxes → tick (or click); success, check mark, key number → ding;
       reveal, achievement, happy ending → chime; shine sweep, magic, stars → sparkle; build-up before a reveal → riser
-      ending exactly on the reveal; title slam, logo landing, beat drop → impact (subtle landing → thud); exit, error,
+      ending exactly on the reveal; title slam, logo landing, beat drop → impact (subtle landing → thud); exit,
       things falling → drop; glitch transition → glitch; typewriter text → typing over the typing time.
+      Cinematic: a soft lead-in to a cut or title → swell (gentler than a riser, ends on the hit); trailer-style title
+      or dramatic reveal → braam; things bursting apart → explosion; slow-motion or a beat drop → subdrop; beams and
+      fast streaks → laser. Interface and game: message bubble, toast → notification; wrong, declined → error;
+      3-2-1 → beep with count; points, prices, a counter reaching its goal → coin; growth, level up, a bar filling →
+      powerup (hit = the top); winner, final result → tada. Real-world: photo or freeze frame → shutter; beat accent
+      → clap; liquid, ripples → droplet; bounce, overshoot → boing; tension, health → heartbeat (count = beats);
+      draw-on lines, handwriting → scribble over the drawing time; channel-change cut → static. Beds, at volume
+      0.2–0.4 with no hitAt logic: wind (outdoors, emptiness), drone (suspense where there is no music).
     - Timing is where it goes wrong: the sound's peak must land on the frame where the motion peaks, not where the
       layer starts. Whoosh: peak at the middle/fastest point of the move, so it starts before the move. Impact, pop,
       click, thud: on the frame the thing lands or reaches full size (for a popIn preset, ~0.1–0.2 s after its start).
       Riser: ends on the reveal. Pass hitAt (scene time of that frame) to generate_sfx or add_audio and the tool does
       the math (skips leading silence, starts early). Never just put start = the visual's start.
     - Default to generate_sfx for every kind it has (whoosh, swoosh, pop, blip, click, tick, ding, chime, sparkle,
-      riser, impact, thud, drop, glitch, typing), also when reworking a scene that already uses stock effects: it is
+      riser, impact, thud, drop, glitch, typing, swell, braam, explosion, subdrop, laser, notification, error, beep,
+      coin, powerup, tada, shutter, clap, droplet, boing, heartbeat, scribble, static, wind, drone), also when
+      reworking a scene that already uses stock effects: it is
       made to measure (duration = the move, direction "left"/"right" pans a whoosh with the
       motion, pitch < 1 for bigger/heavier objects and > 1 for small/light ones, count for repeated ticks/clicks) and
       knows its exact hit. Vary `variant` (or pitch slightly) when the same sound repeats so it does not sound
-      copy-pasted. Use search_stock kind "sound" for real-world sounds the synth cannot make (applause, camera shutter,
-      door, crowd, nature, specific objects).
+      copy-pasted. Use search_stock kind "sound" for real-world sounds the synth cannot make (applause, doors,
+      crowds, rain, animals, vehicles, specific objects).
     - Picking a stock sound: search_stock lists each sound's shape (hit / whoosh / riser / sustained / multiple), peak,
       tags and a waveform image. Choose a single clear shape that fits the motion and a length close to it; avoid
       "sustained" (beds, loops) for one-shots and "multiple" files unless you pass hit to pick one of their sounds.
@@ -689,9 +699,14 @@ enum Docs {
       says it is unreachable or not configured, tell the user rather than retrying.
     - Photos: size them to cover the frame (set width = scene width, or height = scene height) when used as backgrounds,
       and dim them with a semi-transparent rect on top if text sits over them.
-    - Background music: search_stock kind "music" with a mood/genre (e.g. "calm piano", "upbeat corporate", "cinematic").
-      Prefer a track at least as long as the scene; import_stock it, then add_audio with role "music", start 0,
-      end = scene duration, volume ~0.6, fadeIn 0.5, fadeOut 1.5, and duckTo ~0.25 if there is a voice-over.
+    - Background music: search_stock kind "music" with a mood/genre in one or two words (e.g. "calm piano", "upbeat
+      corporate", "cinematic"; every word must match, so long queries find nothing). It searches three catalogs:
+      Jamendo (full 2–5 min tracks), Freesound (30 s–2 min loops and beds, mostly CC0 = no credit) and ccMixter
+      (remixes with a bpm, CC BY). Pass "instrumental": true under a voice-over or wherever lyrics would fight the
+      text, "tempo" (slow | medium | fast) to match the pace of the cuts, and "minDuration" = the scene duration to
+      get a track that need not loop. Each result lists its source, instrumental/vocals and tempo or bpm when known.
+      import_stock it, then add_audio with role "music", start 0, end = scene duration, volume ~0.6, fadeIn 0.5,
+      fadeOut 1.5, and duckTo ~0.25 if there is a voice-over.
     - Sound effects: see SOUND EFFECTS (generate_sfx first; search_stock kind "sound" for real-world sounds, then
       import_stock and add_audio with role "sfx" and hitAt).
     - Some licenses (CC BY, CC BY-SA) require credit. When you used such assets, call get_credits and tell the user,
@@ -1107,19 +1122,19 @@ enum Docs {
       },
       {
         "name": "generate_sfx",
-        "description": "Synthesize a sound effect made to measure (no download, no license) and add it as an sfx audio layer whose hit lands at hitAt. Kinds: whoosh (slides, zooms, camera moves; peaks mid-way), swoosh (quick flicks/cuts), pop (scale-in, appear), blip (UI elements), click (buttons, snaps), tick (counters, list steps), ding (success, highlight), chime (reveal, achievement), sparkle (shine, magic), riser (build-up whose hit is its end), impact (title slam, logo landing), thud (soft landing), drop (exit, error), glitch (glitch transition), typing (typewriter text). Same settings give the same file.",
+        "description": "Synthesize a sound effect made to measure (no download, no license) and add it as an sfx audio layer whose hit lands at hitAt. Kinds: whoosh (slides, zooms, camera moves; peaks mid-way), swoosh (quick flicks/cuts), pop (scale-in, appear), blip (UI elements), click (buttons, snaps), tick (counters, list steps), ding (success, highlight), chime (reveal, achievement), sparkle (shine, magic), riser (build-up whose hit is its end), impact (title slam, logo landing), thud (soft landing), drop (exit, things falling), glitch (glitch transition), typing (typewriter text); cinematic: swell (reverse cymbal ending on its hit), braam (trailer brass blast), explosion, subdrop (sub-bass dive), laser; interface and game: notification, error, beep (countdowns), coin, powerup (hit = top note), tada (fanfare, hit = second chord); real-world: shutter (camera), clap, droplet, boing, heartbeat, scribble (pencil strokes over a draw-on); textures and beds: static (TV noise burst), wind, drone (dark pad). Same settings give the same file.",
         "inputSchema": {
           "type": "object",
           "properties": {
-            "kind": { "type": "string", "enum": ["whoosh", "swoosh", "pop", "blip", "click", "tick", "ding", "chime", "sparkle", "riser", "impact", "thud", "drop", "glitch", "typing"] },
-            "hitAt": { "type": "number", "description": "Scene time the hit should land: the frame the motion peaks/lands (whoosh: middle of the move; riser: the reveal; typing: first keystroke). Preferred over start." },
+            "kind": { "type": "string", "enum": ["whoosh", "swoosh", "pop", "blip", "click", "tick", "ding", "chime", "sparkle", "riser", "impact", "thud", "drop", "glitch", "typing", "swell", "braam", "explosion", "subdrop", "laser", "notification", "error", "beep", "coin", "powerup", "tada", "shutter", "clap", "droplet", "boing", "heartbeat", "scribble", "static", "wind", "drone"] },
+            "hitAt": { "type": "number", "description": "Scene time the hit should land: the frame the motion peaks/lands (whoosh: middle of the move; riser/swell: the reveal; powerup: where the growth tops out; tada: the reveal; typing: first keystroke). Preferred over start. Beds (wind, drone) start there." },
             "start": { "type": "number", "description": "Scene time the layer starts (when hitAt is not given)." },
-            "duration": { "type": "number", "description": "Seconds. whoosh/swoosh: the move's length (0.2–2); riser: the build-up (1–6); typing: the typing time; drop/glitch/sparkle: length. With count: the span the repeats are spread over." },
+            "duration": { "type": "number", "description": "Seconds. whoosh/swoosh: the move's length (0.2–2); riser/swell: the build-up (0.5–6); typing/scribble: the typing or drawing time; braam/explosion/subdrop/tada: with the tail (0.8–6); wind/drone: the stretch they lie under (up to 30); drop/glitch/sparkle/powerup/boing/static: length. With count: the span the repeats are spread over." },
             "pitch": { "type": "number", "description": "Frequency multiplier 0.5–2 (default 1): lower for big/heavy things, higher for small/light ones." },
-            "direction": { "type": "string", "enum": ["left", "right"], "description": "whoosh/swoosh/riser: pan the sound in the direction the object moves." },
-            "count": { "type": "integer", "description": "tick/click/pop/blip/thud/ding: repeat this many times evenly over duration (e.g. a counter); typing: number of keystrokes." },
-            "variant": { "type": "integer", "description": "Different random detail (and chime root note). Change it when the same effect repeats." },
-            "reverb": { "type": "number", "description": "0–1 room tail (defaults: ding/chime 0.3, impact 0.25, sparkle 0.2, others 0)." },
+            "direction": { "type": "string", "enum": ["left", "right"], "description": "whoosh/swoosh/riser/swell: pan the sound in the direction the object moves." },
+            "count": { "type": "integer", "description": "tick/click/pop/blip/thud/ding/beep/coin/clap/droplet/laser/heartbeat: repeat this many times evenly over duration (a counter, a 3-2-1 countdown with beep count 3 duration 3, heartbeats); typing: number of keystrokes." },
+            "variant": { "type": "integer", "description": "Different random detail (and chime root, notification notes, drone root). Change it when the same effect repeats." },
+            "reverb": { "type": "number", "description": "0–1 room tail (defaults: braam 0.4, ding/chime/explosion/tada/droplet 0.3, impact 0.25, sparkle/swell 0.2, clap/notification 0.15, others 0)." },
             "volume": { "type": "number", "description": "Layer volume (1 = full; effects usually sit at 0.4–0.7 under a voice)." },
             "add": { "type": "boolean", "description": "Add an audio layer (default true). false = only create the file." },
             "id": { "type": "string" },
@@ -1332,7 +1347,7 @@ enum Docs {
       },
       {
         "name": "search_stock",
-        "description": "Search free assets online: photos and illustrations from Openverse (licenses allowing commercial use and changes), stock video clips from Pexels and Pixabay (free for commercial use, no credit needed; needs the VeyMotion server), icons from Iconify (200k+ open-source SVG icons), music from Jamendo and sound effects from Freesound (via Openverse), fonts from Google Fonts. Returns numbered results with refs, licenses, durations and a numbered preview image (thumbnails; for sounds, waveforms with each sound's shape, peak and tags). English keywords work best. For common motion sounds (whoosh, pop, click, ding, riser, impact…) generate_sfx is usually the better choice.",
+        "description": "Search free assets online: photos and illustrations from Openverse (licenses allowing commercial use and changes), stock video clips from Pexels and Pixabay (free for commercial use, no credit needed; needs the VeyMotion server), icons from Iconify (200k+ open-source SVG icons), music from Jamendo (full tracks), Freesound (short loops, mostly CC0) and ccMixter (remixes with a bpm), sound effects from Freesound, fonts from Google Fonts. Returns numbered results with refs, licenses, durations (for music also the source, instrumental/vocals and tempo or bpm when known) and a numbered preview image (thumbnails; for sounds, waveforms with each sound's shape, peak and tags). English keywords work best. For common motion sounds (whoosh, pop, click, ding, riser, impact…) generate_sfx is usually the better choice.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -1341,6 +1356,10 @@ enum Docs {
             "orientation": { "type": "string", "enum": ["landscape", "portrait", "square"], "description": "Videos only: frame shape (portrait for 9:16 TikTok/Reels/Shorts). Default: any." },
             "vietnamese": { "type": "boolean", "description": "Fonts only: keep fonts that have Vietnamese letters." },
             "maxDuration": { "type": "number", "description": "Music/sound/video: leave out results longer than this many seconds. Sounds default to 10 (one-shot effects); raise it for ambiences, 0 = no limit." },
+            "minDuration": { "type": "number", "description": "Music only: leave out tracks shorter than this many seconds (e.g. the scene duration, so the track need not loop)." },
+            "instrumental": { "type": "boolean", "description": "Music only: leave out tracks with vocals. Use it for background music under a voice-over or on-screen text." },
+            "tempo": { "type": "string", "enum": ["slow", "medium", "fast"], "description": "Music only: slow (under ~95 bpm), medium, fast (125 bpm and up). Tracks whose tempo is unknown are left out, so results are fewer." },
+            "source": { "type": "string", "enum": ["jamendo", "freesound", "ccmixter"], "description": "Music only: search one catalog (20 results) instead of all three in turn. freesound = short CC0 loops for pieces under a minute." },
             "page": { "type": "integer", "description": "1-based page (20 results per page, 48 for icons)." },
             "limit": { "type": "integer", "description": "Return at most this many results." },
             "preview": { "type": "boolean", "description": "Include the numbered preview image (thumbnails; for sounds, waveforms plus each sound's shape and peak, which downloads them). Default true." }

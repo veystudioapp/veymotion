@@ -25,7 +25,7 @@ struct SoundEffectSheet: View {
 
     private var usesDuration: Bool { kind.stretches || (kind.repeats && count > 1) }
     private var usesCount: Bool { kind.repeats || kind == .typing }
-    private var usesDirection: Bool { [.whoosh, .swoosh, .riser].contains(kind) }
+    private var usesDirection: Bool { kind.pans }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -44,7 +44,7 @@ struct SoundEffectSheet: View {
                 .fixedSize(horizontal: false, vertical: true)
             if usesDuration {
                 row("Length") {
-                    Slider(value: $duration, in: kind == .riser ? 0.5...6 : kind.stretches ? 0.1...3 : 0.2...6)
+                    Slider(value: $duration, in: kind.stretches ? kind.durationRange : 0.2...6)
                     Text(String(format: "%.2fs", duration)).font(.caption.monospacedDigit()).frame(width: 48)
                 }
             }
@@ -78,7 +78,9 @@ struct SoundEffectSheet: View {
                 Text(String(format: "%.0f%%", volume * 100)).font(.caption.monospacedDigit()).frame(width: 48)
             }
             Text(String(format: "The hit lands on the playhead (%.2fs)%@.", store.time,
-                        kind == .riser ? ": the riser ends there" : kind == .whoosh || kind == .swoosh ? ": the whoosh peaks there" : ""))
+                        kind == .riser || kind == .swell ? ": the \(kind.rawValue) ends there"
+                            : kind == .whoosh || kind == .swoosh ? ": the whoosh peaks there"
+                            : kind == .wind || kind == .drone ? ": the bed starts there" : ""))
                 .font(.caption).foregroundStyle(.secondary)
             if let error { Text(error).font(.caption).foregroundStyle(.red) }
             HStack {

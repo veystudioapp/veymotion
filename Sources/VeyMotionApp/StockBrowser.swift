@@ -13,6 +13,10 @@ final class StockBrowserModel {
     var vietnamese = false
     /// Videos: "any", "landscape", "portrait" or "square".
     var orientation = "any"
+    /// Music: leave out tracks with vocals; a tempo ("any", "slow", "medium", "fast"); one catalog ("all" or a `MusicSource`).
+    var instrumental = false
+    var tempo = "any"
+    var musicSource = "all"
     var results: [StockItem] = []
     var page = 1
     var isSearching = false
@@ -34,6 +38,7 @@ final class StockBrowserModel {
         guard !q.isEmpty, !(more && isSearching) else { return } // a new search replaces one in flight
         let kind = kind, page = more ? page + 1 : 1, vietnamese = vietnamese
         let orientation = orientation == "any" ? nil : orientation
+        let music = MusicFilter(instrumental: instrumental, tempo: MusicTempo(rawValue: tempo), source: MusicSource(rawValue: musicSource))
         if !more { results = []; canLoadMore = false }
         searchToken += 1
         let token = searchToken
@@ -41,7 +46,7 @@ final class StockBrowserModel {
         error = nil
         DispatchQueue.global(qos: .userInitiated).async {
             let outcome = Result { try StockSearch.search(q, kind: kind, page: page, vietnamese: vietnamese, maxDuration: 0,
-                                                        orientation: orientation) }
+                                                        orientation: orientation, music: music) }
             DispatchQueue.main.async {
                 guard token == self.searchToken else { return }
                 self.isSearching = false
@@ -78,7 +83,9 @@ final class StockBrowserModel {
         if playing == item.ref { stopPreview(); return }
         stopPreview()
         guard let url = item.downloadURL else { return }
-        let p = AVPlayer(url: url)
+        let headers = StockSearch.headers(for: url)
+        let asset = AVURLAsset(url: url, options: headers.isEmpty ? nil : ["AVURLAssetHTTPHeaderFieldsKey": headers])
+        let p = AVPlayer(playerItem: AVPlayerItem(asset: asset))
         endObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: p.currentItem,
                                                              queue: .main) { [weak self] _ in self?.stopPreview() }
         p.play()
@@ -171,6 +178,28 @@ struct StockBrowserSheet: View {
                             .labelsHidden()
                             .help("Frame shape (Portrait for 9:16 TikTok / Reels / Shorts)")
                             .onChange(of: model.orientation) { _, _ in model.search() }
+                        }
+                        if model.kind == .music {
+                            Toggle("Instrumental", isOn: $model.instrumental)
+                                .toggleStyle(.checkbox)
+                                .help("Leave out tracks with vocals")
+                                .onChange(of: model.instrumental) { _, _ in model.search() }
+                            Picker("", selection: $model.tempo) {
+                                Text("Any tempo").tag("any")
+                                Text("Slow").tag("slow")
+                                Text("Medium").tag("medium")
+                                Text("Fast").tag("fast")
+                            }
+                            .labelsHidden()
+                            .help("Slow is under about 95 bpm, fast is 125 and up. Tracks whose tempo is unknown are left out.")
+                            .onChange(of: model.tempo) { _, _ in model.search() }
+                            Picker("", selection: $model.musicSource) {
+                                Text("All sources").tag("all")
+                                ForEach(MusicSource.allCases, id: \.self) { Text($0.title).tag($0.rawValue) }
+                            }
+                            .labelsHidden()
+                            .help(MusicSource.allCases.map { "\($0.title): \($0.note)" }.joined(separator: "\n"))
+                            .onChange(of: model.musicSource) { _, _ in model.search() }
                         }
                         if model.kind == .font {
                             Toggle("Vietnamese", isOn: $model.vietnamese)
@@ -480,6 +509,7 @@ private struct StockAudioRow: View {
         var parts: [String] = []
         if let c = item.credit.creator, !c.isEmpty { parts.append(c) }
         if !item.genres.isEmpty { parts.append(item.genres.prefix(3).joined(separator: ", ")) }
+        if item.kind == .music { parts += item.musicTraits }
         return parts.joined(separator: " · ")
     }
 }

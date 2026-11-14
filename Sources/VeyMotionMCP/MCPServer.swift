@@ -935,11 +935,27 @@ public final class MCPServer {
             }
             let page = max(1, Int(number(a["page"]) ?? 1))
             let maxDuration = number(a["maxDuration"])
+            var music = MusicFilter(instrumental: a["instrumental"] as? Bool ?? false, minDuration: number(a["minDuration"]))
+            if let t = a["tempo"] as? String {
+                guard let tempo = MusicTempo(rawValue: t.lowercased()) else {
+                    throw ToolError("`tempo` must be one of \(MusicTempo.allCases.map(\.rawValue))")
+                }
+                music.tempo = tempo
+            }
+            if let s = a["source"] as? String {
+                guard let source = MusicSource(rawValue: s.lowercased()) else {
+                    throw ToolError("`source` must be one of \(MusicSource.allCases.map(\.rawValue)) (music only)")
+                }
+                music.source = source
+            }
             var items = try StockSearch.search(query, kind: kind, page: page, vietnamese: a["vietnamese"] as? Bool ?? false,
-                                               maxDuration: maxDuration, orientation: a["orientation"] as? String)
+                                               maxDuration: maxDuration, orientation: a["orientation"] as? String, music: music)
             if let limit = number(a["limit"]), limit > 0 { items = Array(items.prefix(Int(limit))) }
             if items.isEmpty {
                 var msg = "No \(kind.rawValue) results for '\(query)'. Try a simpler or English query."
+                if kind == .music, !music.isEmpty {
+                    msg += " The filters narrow it a lot (tempo keeps only tracks whose tempo is known): drop tempo, source or minDuration, or use one or two words."
+                }
                 if kind == .sound {
                     msg += String(format: " Only sounds up to %.0f s are listed (maxDuration). generate_sfx makes whoosh/pop/click/ding/riser/impact… without searching.",
                                   maxDuration ?? StockSearch.defaultSoundMaxDuration)
@@ -952,6 +968,10 @@ public final class MCPServer {
             if kind == .sound, let synth = SynthKind.matching(query) {
                 lines.insert("Tip: generate_sfx {\"kind\": \"\(synth.rawValue)\", \"hitAt\": …} makes this sound to measure (length, pitch, exact hit) — "
                              + "prefer it unless you need a real recording.", at: 0)
+            }
+            if kind == .music {
+                lines.append("Sources: " + MusicSource.allCases.map { "\($0.title) (\($0.note))" }.joined(separator: "; ")
+                             + ". After import, analyze_audio gives the exact tempo and beats.")
             }
             for (i, item) in items.enumerated() {
                 lines.append("\(i + 1). \(item.summary)")

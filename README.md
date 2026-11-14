@@ -100,9 +100,11 @@ Claude and Codex keep separate sessions (and model/effort settings) in the same 
   (toggle with **Beats** in the timeline header). `analyze_audio` gives agents the tempo, beat/downbeat times,
   strong hits and loudness, and `audioReact` makes any number property follow the music (loudness, bass/mid/treble,
   or a pulse on every beat/bar) — set it in the Inspector's Motion section.
-- **Sound effects** (Add → Sound Effect…, or the `generate_sfx` tool): 15 synthesized effects made to measure, offline
+- **Sound effects** (Add → Sound Effect…, or the `generate_sfx` tool): 35 synthesized effects made to measure, offline
   and license-free (whoosh, swoosh, pop, blip, click, tick, ding, chime, sparkle, riser, impact, thud, drop, glitch,
-  typing) with length, pitch, direction, repeats and reverb. Each knows where its hit is, so it lands on the playhead
+  typing; cinematic swell, braam, explosion, subdrop, laser; notification, error, beep, coin, powerup, tada; shutter,
+  clap, droplet, boing, heartbeat, scribble; static, and the beds wind and drone) with length, pitch, direction,
+  repeats and reverb. Each knows where its hit is, so it lands on the playhead
   (a whoosh peaks there, a riser ends there). For stock sounds, agents see each result's shape (hit / whoosh / riser /
   sustained / several sounds), peak and tags plus a waveform sheet, and `add_audio` with `hitAt` skips leading silence
   and starts the sound early so its peak lands on the right frame.
@@ -157,8 +159,11 @@ updates live. Images can be PNG/JPEG/HEIC/… or SVG (rendered sharp at any size
 - Photos and illustrations from [Openverse](https://openverse.org), limited to licenses that allow commercial use and
   changes (CC0, Public Domain, CC BY, CC BY-SA).
 - Icons from [Iconify](https://iconify.design): 200k+ open-source SVG icons, imported in the color you pick.
-- Music from [Jamendo](https://www.jamendo.com) and sound effects from [Freesound](https://freesound.org) (via Openverse,
-  same license filter), with in-app preview. **Use as Background** adds a track from 0s to the scene end with
+- Music from three catalogs searched together: [Jamendo](https://www.jamendo.com) (full tracks),
+  [Freesound](https://freesound.org) (short loops, mostly CC0) and [ccMixter](https://ccmixter.org) (remixes with a
+  bpm, CC BY / CC0 only), filtered by **Instrumental**, tempo and source (`instrumental`, `tempo`, `minDuration`,
+  `source` in `search_stock`). Sound effects come from Freesound. Jamendo and Freesound go through Openverse with the
+  same license filter. In-app preview for all of them. **Use as Background** adds a track from 0s to the scene end with
   fades, at 60% volume, ducked under voice-overs.
 - License and credit are saved with each file (`.credits.json` in the library). CC BY / BY-SA items must be credited:
   right-click an asset → Copy Credit, or the quote button copies the credits for everything the scene uses
