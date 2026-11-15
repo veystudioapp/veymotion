@@ -8,6 +8,7 @@ import VeyMotionMCP
 /// attachments, and dropped or pasted files are written in as their paths.
 struct ChatComposer: View {
     @Environment(ChatStore.self) private var chat
+    @Environment(SceneStore.self) private var store
     @State private var height: CGFloat = 54
     @State private var isTargeted = false
     /// Height set by dragging the top edge (0 = fit the text); the text still grows past it.
@@ -18,6 +19,7 @@ struct ChatComposer: View {
     var body: some View {
         @Bindable var chat = chat
         VStack(alignment: .leading, spacing: 8) {
+            if let layer = store.selectedLayer { SelectionChip(layer: layer) }
             if !chat.attachments.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
@@ -132,6 +134,45 @@ struct ChatComposer: View {
         panel.message = "Choose images to send to \(chat.provider.displayName)"
         guard panel.runModal() == .OK else { return }
         for url in panel.urls { chat.attachImage(file: url) }
+    }
+}
+
+/// The selected layer, above the text: what "this" means to the assistant (it goes out on every message's context
+/// line). Clicking it opens the Inspector to edit the layer by hand; × deselects.
+private struct SelectionChip: View {
+    @Environment(SceneStore.self) private var store
+    let layer: MotionLayer
+    @AppStorage("ui.showSidebar") private var showSidebar = false
+    @AppStorage("leftPanelTab") private var leftTab: LeftPanelTab = .layers
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Button {
+                leftTab = .layers
+                withAnimation(.easeOut(duration: 0.2)) { showSidebar = true }
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: layer.type.symbol)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(layer.timelineColor)
+                    Text(layer.name).lineLimit(1).truncationMode(.middle)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Selected: “this” in your message means this layer. Click to edit it in the Inspector.")
+            Button { store.selection = nil } label: {
+                Image(systemName: "xmark").font(.system(size: 8, weight: .bold)).foregroundStyle(.secondary)
+                    .frame(width: 12, height: 12).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Deselect")
+        }
+        .font(.system(size: 11))
+        .padding(.leading, 8).padding(.trailing, 5).padding(.vertical, 3)
+        .background(Capsule().fill(Color.accentColor.opacity(0.14)))
+        .overlay(Capsule().strokeBorder(Color.accentColor.opacity(0.3)))
+        .frame(maxWidth: 240, alignment: .leading)
     }
 }
 

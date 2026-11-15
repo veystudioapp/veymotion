@@ -43,7 +43,7 @@ struct SceneInspector: View {
             ColorField("Background", s.background) { c in edit { $0.background = c } }
         }
         CameraSection()
-        Text("Select a layer to edit it. Claude and other agents edit the same scene; their changes show up live and can be undone with ⌘Z.")
+        Text("Click a layer on the canvas or in the list to edit it. Claude and other agents edit the same scene; their changes show up live and can be undone with ⌘Z.")
             .font(.caption).foregroundStyle(.secondary)
             .padding(12)
     }

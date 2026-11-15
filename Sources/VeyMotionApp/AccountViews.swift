@@ -214,7 +214,8 @@ struct UpgradeToolbarButton: View {
             if store.isPro {
                 ProBadge()
             } else {
-                Label("Upgrade to Pro", systemImage: "sparkles")
+                // Short and unfilled: Export is the toolbar's one filled button.
+                Label("Upgrade", systemImage: "sparkles")
                     .labelStyle(.titleAndIcon)
                     .foregroundStyle(Color.accentColor)
             }

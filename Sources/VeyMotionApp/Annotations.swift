@@ -575,8 +575,7 @@ struct AnnotationToolbar: View {
     @Environment(SceneStore.self) private var store
     let annotations: AnnotationStore
     let unit: Double
-    @AppStorage("ui.rightPanelTab") private var rightTab: RightPanelTab = .claude
-    @AppStorage("showInspector") private var showInspector = true
+    @AppStorage("ui.showChat") private var showChat = true
     @State private var showColors = false
     @State private var showWidths = false
 
@@ -665,8 +664,7 @@ struct AnnotationToolbar: View {
     private func send() {
         annotations.addToChat(scene: store.scene, time: store.time) { ok in
             if ok {
-                withAnimation(.easeOut(duration: 0.2)) { showInspector = true }
-                rightTab = .claude
+                withAnimation(.easeOut(duration: 0.2)) { showChat = true }
             } else {
                 store.message = "Could not render the frame for the chat."
             }

@@ -2,8 +2,23 @@ import AppKit
 import SwiftUI
 import VeyMotionMCP
 
-/// Versions and New conversation, shown in the side panel's tab bar while the chat tab is open.
+/// Top of the chat column: who you are talking to, then Versions and New conversation.
 /// (Claude or Codex is picked in the composer's model picker.)
+struct ChatHeader: View {
+    @Environment(ChatStore.self) private var chat
+
+    var body: some View {
+        HStack(spacing: 6) {
+            AgentLogo(provider: chat.provider, size: 14)
+            Text(chat.provider.displayName).font(.callout.weight(.semibold))
+            Spacer(minLength: 0)
+            ChatHeaderButtons()
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 36)
+    }
+}
+
 struct ChatHeaderButtons: View {
     @Environment(ChatStore.self) private var chat
     @State private var showVersions = false
@@ -241,6 +256,12 @@ private struct EmptyChatHint: View {
                 }
                 .buttonStyle(.plain)
                 .help("Puts this in the composer; press Return to send it")
+            }
+            if !store.scene.layers.isEmpty {
+                Text("Click something in the preview first, and “this” in your message means that layer.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 4)
             }
             Text(chat.provider == .claude
                  ? "Claude uses your Claude Code login and can only run `vmotion` commands."

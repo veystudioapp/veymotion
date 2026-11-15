@@ -1254,7 +1254,7 @@ public final class FrameRenderer {
 
     /// Layer-local bounds of what `drawContent` paints, or nil when unknown (text animators move glyphs anywhere).
     /// Layer-local bounds of what `drawContent` paints (after any mesh warp), or nil when unknown.
-    private func contentBounds(_ layer: MotionLayer, scene: MotionScene, at t: Double) -> CGRect? {
+    func contentBounds(_ layer: MotionLayer, scene: MotionScene, at t: Double) -> CGRect? {
         if layer.type == .model { return modelBounds(layer, scene: scene, at: t) }
         guard let (warp, flat) = meshWarp(layer, scene: scene, at: t) else { return flatContentBounds(layer, scene: scene, at: t) }
         // The warped outline, sampled along the edges (bends and perspective push the middle of edges out).
@@ -1273,7 +1273,7 @@ public final class FrameRenderer {
     }
 
     /// Bounds of the layer as drawn flat (before a mesh warp); text with animators gets a generous box.
-    private func flatContentBounds(_ layer: MotionLayer, scene: MotionScene, at t: Double) -> CGRect? {
+    func flatContentBounds(_ layer: MotionLayer, scene: MotionScene, at t: Double) -> CGRect? {
         if layer.type == .text, layer.textPath == nil, !layer.textAnimators.isEmpty, let box = textLayout(layer, at: t)?.box,
            layer.rotationXYOrPinned || renders3D(layer) {
             let pad = max(layer.fontSize, 1) * 2 + layer.textAnimators.map { abs($0.x) + abs($0.y) }.max()!
@@ -1645,7 +1645,7 @@ public final class FrameRenderer {
     }
 
     /// Typesets the layer's text: the framesetter, the text box size, and how many UTF-16 units the reveal shows.
-    private func textLayout(_ layer: MotionLayer, at t: Double) -> (setter: CTFramesetter, box: CGSize, shownUTF16: Int)? {
+    func textLayout(_ layer: MotionLayer, at t: Double) -> (setter: CTFramesetter, box: CGSize, shownUTF16: Int)? {
         let full = Self.displayText(layer, at: t)
         guard !full.isEmpty else { return nil }
         let font = Self.font(for: layer, at: t)

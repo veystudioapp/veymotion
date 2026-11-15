@@ -10,12 +10,6 @@ import VeyMotionMCP
 protocol PanelTab: Hashable, CaseIterable where AllCases: RandomAccessCollection {
     var title: String { get }
     var icon: String { get }
-    /// Show the Claude logo instead of the SF Symbol `icon`.
-    var isClaude: Bool { get }
-}
-
-extension PanelTab {
-    var isClaude: Bool { false }
 }
 
 /// The Claude logo (brand color), used wherever the UI refers to Claude.
@@ -86,13 +80,6 @@ enum LeftPanelTab: String, PanelTab {
     var icon: String { self == .layers ? "square.3.layers.3d" : "photo.on.rectangle" }
 }
 
-enum RightPanelTab: String, PanelTab {
-    case inspector = "Inspector", claude = "Claude"
-    var title: String { self == .inspector ? "Inspector" : ChatStore.shared.provider.displayName }
-    var icon: String { self == .inspector ? "slider.horizontal.3" : "sparkles" }
-    var isClaude: Bool { self == .claude }
-}
-
 /// Text tabs at the top of a side panel (lighter than a segmented control).
 struct PanelTabBar<Tab: PanelTab>: View {
     @Binding var selection: Tab
@@ -102,11 +89,7 @@ struct PanelTabBar<Tab: PanelTab>: View {
             ForEach(Tab.allCases, id: \.self) { tab in
                 let on = tab == selection
                 Button { selection = tab } label: {
-                    Label {
-                        Text(tab.title)
-                    } icon: {
-                        if tab.isClaude { AgentLogo(provider: ChatStore.shared.provider, size: 13) } else { Image(systemName: tab.icon) }
-                    }
+                    Label(tab.title, systemImage: tab.icon)
                         .font(.callout.weight(on ? .semibold : .regular))
                         .foregroundStyle(on ? Color.primary : Color.secondary)
                         .padding(.horizontal, 9)

@@ -9,8 +9,8 @@ struct VeyMotionApp: App {
     @State private var chat = ChatStore.shared
     @State private var annotations = AnnotationStore.shared
     @AppStorage("ui.showSidebar") private var showSidebar = false
-    @AppStorage("showInspector") private var showInspector = true
-    @AppStorage("ui.rightPanelTab") private var rightTab: RightPanelTab = .claude
+    @AppStorage("leftPanelTab") private var leftTab: LeftPanelTab = .layers
+    @AppStorage("ui.showChat") private var showChat = true
     @AppStorage("showTimeline") private var showTimeline = false
 
     init() {
@@ -78,15 +78,22 @@ struct VeyMotionApp: App {
                 }
             }
             CommandGroup(after: .sidebar) {
-                Button(showSidebar ? "Hide Layers & Assets" : "Show Layers & Assets") { showSidebar.toggle() }
+                Button(showSidebar ? "Hide Layers & Inspector" : "Show Layers & Inspector") { showSidebar.toggle() }
                     .keyboardShortcut("s", modifiers: [.control, .command])
-                Button(showInspector ? "Hide Chat & Inspector" : "Show Chat & Inspector") { showInspector.toggle() }
+                // The Inspector sits under the layer list, so showing it means showing that tab.
+                Button("Show Inspector") { showSidebar = true; leftTab = .layers }
                     .keyboardShortcut("i", modifiers: [.option, .command])
-                Button("Show Chat") { showInspector = true; rightTab = .claude }
+                Button("Show Assets") { showSidebar = true; leftTab = .assets }
+                Button(showChat ? "Hide Chat" : "Show Chat") { showChat.toggle() }
                     .keyboardShortcut("l")
-                Button("Show Inspector") { showInspector = true; rightTab = .inspector }
                 Button(showTimeline ? "Hide Timeline" : "Show Timeline") { showTimeline.toggle() }
                     .keyboardShortcut("t", modifiers: [.control, .command])
+                Divider()
+                // The preview's zoom. Never disabled: at Fit, zooming out or fitting just does nothing.
+                Button("Zoom In") { CanvasViewport.shared.zoomIn() }.keyboardShortcut("=")
+                Button("Zoom Out") { CanvasViewport.shared.zoomOut() }.keyboardShortcut("-")
+                Button("Zoom to Fit") { CanvasViewport.shared.reset() }.keyboardShortcut("0")
+                Divider()
             }
             CommandMenu("Layer") {
                 Button("Add Rectangle") { store.addLayer(.rect) }

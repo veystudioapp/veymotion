@@ -7,16 +7,19 @@ struct ContentView: View {
     @Environment(SceneStore.self) private var store
     @State private var showVoice = false
     @State private var showSoundEffect = false
-    // Simple layout by default: canvas + chat. Layers/Assets, the Inspector and the timeline are one click away.
-    // (New keys, so existing installs get the simple layout once.)
-    @AppStorage("ui.rightPanelTab") private var rightTab: RightPanelTab = .claude
-    @AppStorage("leftPanelTab") private var leftTab: LeftPanelTab = .layers
+    // Simple layout by default: canvas + chat. The left panel (Layers/Assets, with the Inspector under the layer
+    // list) and the timeline are one click away; together with the canvas they are the workspace, and the chat is a
+    // column of its own beside it, so it keeps its height whatever is open.
+    // (`ui.` keys are newer ones, so existing installs got each new default once.)
     @AppStorage("ui.showSidebar") private var showSidebar = false
-    @AppStorage("showInspector") private var showInspector = true
+    @AppStorage("ui.showChat") private var showChat = true
     @AppStorage("timelineHeight") private var timelineHeight: Double = 240
     /// Hidden by default: most editing goes through Claude, so the canvas gets the space.
     /// The transport bar shows a compact scrubber instead.
     @AppStorage("showTimeline") private var showTimeline = false
+
+    private static let editPanelMinWidth: CGFloat = 290
+    private static let canvasMinWidth: CGFloat = 420
 
     /// The window shows either the Projects screen (at launch, ⇧⌘P) or the editor.
     var body: some View {
@@ -31,45 +34,36 @@ struct ContentView: View {
     }
 
     private var editor: some View {
-        VStack(spacing: 0) {
-            HSplitView {
-                if showSidebar {
-                    VStack(spacing: 0) {
-                        PanelTabBar(selection: $leftTab)
-                        Divider()
-                        switch leftTab {
-                        case .layers: LayerListView()
-                        case .assets: AssetsPanel()
-                        }
+        HSplitView {
+            VStack(spacing: 0) {
+                HSplitView {
+                    if showSidebar {
+                        EditPanel().frame(minWidth: Self.editPanelMinWidth, idealWidth: 320, maxWidth: 480)
                     }
-                    .frame(minWidth: 200, idealWidth: 240, maxWidth: 400)
-                }
-                VStack(spacing: 0) {
-                    CanvasView()
-                    TransportBar()
-                }
-                .frame(minWidth: 420, maxWidth: .infinity)
-                if showInspector {
                     VStack(spacing: 0) {
-                        HStack(spacing: 0) {
-                            PanelTabBar(selection: $rightTab)
-                            if rightTab == .claude { ChatHeaderButtons().padding(.trailing, 12) }
-                        }
-                        Divider()
-                        // Keep both alive so switching tabs does not reset the chat's scroll position or draft.
-                        ZStack {
-                            InspectorView().opacity(rightTab == .inspector ? 1 : 0)
-                                .allowsHitTesting(rightTab == .inspector)
-                            ChatPanel().opacity(rightTab == .claude ? 1 : 0)
-                                .allowsHitTesting(rightTab == .claude)
-                        }
+                        CanvasView()
+                            .overlay(alignment: .bottom) { CanvasToast().padding(.bottom, 10) }
+                        TransportBar()
                     }
-                    .frame(minWidth: 290, idealWidth: 340, maxWidth: 560)
+                    .frame(minWidth: Self.canvasMinWidth, maxWidth: .infinity)
+                }
+                if showTimeline {
+                    ResizeHandle(height: $timelineHeight, range: 140...700)
+                    TimelinePanel().frame(height: timelineHeight)
                 }
             }
-            if showTimeline {
-                ResizeHandle(height: $timelineHeight, range: 140...700)
-                TimelinePanel().frame(height: timelineHeight)
+            // The outer split only sees this number: it must be what the inner split needs (panel + divider +
+            // canvas), or a wide chat column squeezes the workspace below it and the inner split, which cannot
+            // shrink, hangs out of both sides (the panel's left edge cut off by the window).
+            .frame(minWidth: showSidebar ? Self.editPanelMinWidth + 1 + Self.canvasMinWidth : Self.canvasMinWidth,
+                   maxWidth: .infinity)
+            if showChat {
+                VStack(spacing: 0) {
+                    ChatHeader()
+                    Divider()
+                    ChatPanel()
+                }
+                .frame(minWidth: 290, idealWidth: 340, maxWidth: 560)
             }
         }
         .toolbar {
@@ -81,13 +75,13 @@ struct ContentView: View {
             }
             ToolbarItem(placement: .navigation) {
                 Button { withAnimation(.easeOut(duration: 0.2)) { showSidebar.toggle() } } label: {
-                    Label("Layers & Assets", systemImage: "sidebar.left")
+                    Label("Layers & Inspector", systemImage: "sidebar.left")
                 }
-                .help("Show or hide Layers & Assets (⌃⌘S)")
+                .help("Show or hide Layers, Assets and the Inspector (⌃⌘S)")
             }
+            // Left to right: make something, talk about a frame, then what the app wants to tell you, and the way
+            // out (Export) as the one filled button, next to the toggle of the column under it.
             ToolbarItemGroup(placement: .primaryAction) {
-                UpgradeToolbarButton()
-                UpdateToolbarButton()
                 addMenu
                 Button {
                     let a = AnnotationStore.shared
@@ -98,14 +92,17 @@ struct ContentView: View {
                 }
                 .help("Pause and mark up this frame, then send it to Claude (⇧⌘A)")
                 .keyboardShortcut("a", modifiers: [.command, .shift])
+                UpdateToolbarButton()
+                UpgradeToolbarButton()
                 Button { store.exportVideo() } label: {
-                    Label("Export", systemImage: "square.and.arrow.up")
+                    Label("Export", systemImage: "square.and.arrow.up").labelStyle(.titleAndIcon)
                 }
+                .buttonStyle(.borderedProminent)
                 .help("Export the video (⌘E)")
-                Button { withAnimation(.easeOut(duration: 0.2)) { showInspector.toggle() } } label: {
-                    Label("Chat & Inspector", systemImage: "sidebar.right")
+                Button { withAnimation(.easeOut(duration: 0.2)) { showChat.toggle() } } label: {
+                    Label("Chat", systemImage: "sidebar.right")
                 }
-                .help("Show or hide Chat & Inspector (⌥⌘I)")
+                .help("Show or hide the chat (⌘L)")
             }
         }
         .navigationTitle(store.project?.lastPathComponent ?? store.fileURL?.deletingPathExtension().lastPathComponent ?? "Untitled")
@@ -156,10 +153,11 @@ extension ContentView {
     }
 }
 
-/// Horizontal divider that can be dragged to resize the panel below it.
+/// Horizontal divider that can be dragged to resize the panel below it (or, with `growsDown`, the one above).
 struct ResizeHandle: View {
     @Binding var height: Double
     let range: ClosedRange<Double>
+    var growsDown = false
     @State private var startHeight: Double?
 
     var body: some View {
@@ -172,7 +170,8 @@ struct ResizeHandle: View {
             .gesture(DragGesture(minimumDistance: 1, coordinateSpace: .global)
                 .onChanged { v in
                     if startHeight == nil { startHeight = height }
-                    height = min(max((startHeight ?? height) - Double(v.translation.height), range.lowerBound), range.upperBound)
+                    let moved = Double(v.translation.height) * (growsDown ? 1 : -1)
+                    height = min(max((startHeight ?? height) + moved, range.lowerBound), range.upperBound)
                 }
                 .onEnded { _ in startHeight = nil })
     }
@@ -255,11 +254,94 @@ final class PreviewRenderer {
     }
 }
 
+/// The canvas's zoom and pan: how the preview is looked at, never part of the scene. `zoom` is relative to the frame
+/// fitted in the canvas (1 = Fit, the least); `pan` is the frame center's offset from the canvas center in points,
+/// and stays zero on an axis where the whole frame fits. Shared, so the View menu and the transport bar can drive it.
+@Observable
+final class CanvasViewport {
+    static let shared = CanvasViewport()
+    static let maxZoom = 16.0
+    /// Room kept around the fitted frame, each side.
+    static let margin: CGFloat = 20
+
+    private(set) var zoom = 1.0
+    private(set) var pan = CGSize.zero
+    /// Reported by the canvas: its size, the fitted frame's size (points) and the scene's width (px).
+    private(set) var canvas = CGSize.zero
+    private(set) var fit = CGSize(width: 1, height: 1)
+    private(set) var sceneWidth = 1.0
+    @ObservationIgnored var hovering = false
+    /// The pointer over the canvas, in its coordinates: what ⌘-scroll zooms around.
+    @ObservationIgnored var mouse: CGPoint?
+    @ObservationIgnored var pinchBase: Double?
+    @ObservationIgnored var monitor: Any?
+
+    var isFit: Bool { zoom <= 1.0001 }
+    /// Points per scene px.
+    var unit: Double { Double(fit.width) * zoom / max(sceneWidth, 1) }
+    /// The scale as people read it: 100% = one scene px per point.
+    var percent: Int { Int((unit * 100).rounded()) }
+
+    func layout(canvas: CGSize, fit: CGSize, sceneWidth: Double) {
+        self.canvas = canvas; self.fit = fit; self.sceneWidth = sceneWidth
+        clamp()
+    }
+
+    /// Zooms keeping the point under `anchor` (canvas coordinates; nil = the canvas center) where it is.
+    func setZoom(_ z: Double, anchor: CGPoint? = nil) {
+        let new = min(max(z, 1), Self.maxZoom)
+        guard new != zoom else { return }
+        let center = CGPoint(x: canvas.width / 2, y: canvas.height / 2)
+        let a = anchor ?? center
+        let k = new / zoom
+        let frame = CGPoint(x: center.x + pan.width, y: center.y + pan.height)
+        pan = CGSize(width: a.x - (a.x - frame.x) * k - center.x, height: a.y - (a.y - frame.y) * k - center.y)
+        zoom = new
+        clamp()
+    }
+
+    func setPercent(_ percent: Double) {
+        setZoom(percent / 100 * max(sceneWidth, 1) / max(Double(fit.width), 1))
+    }
+
+    func zoomIn() { setZoom(zoom * 1.5) }
+    func zoomOut() { setZoom(zoom / 1.5) }
+
+    func scroll(dx: Double, dy: Double) {
+        pan = CGSize(width: pan.width + dx, height: pan.height + dy)
+        clamp()
+    }
+
+    func reset() {
+        zoom = 1
+        pan = .zero
+    }
+
+    /// The frame never leaves a gap wider than the margin on a side it reaches past.
+    private func clamp() {
+        let roomX = max(0, (fit.width * zoom - (canvas.width - 2 * Self.margin)) / 2)
+        let roomY = max(0, (fit.height * zoom - (canvas.height - 2 * Self.margin)) / 2)
+        let clamped = CGSize(width: min(max(pan.width, -roomX), roomX), height: min(max(pan.height, -roomY), roomY))
+        if clamped != pan { pan = clamped }
+    }
+}
+
 struct CanvasView: View {
     @Environment(SceneStore.self) private var store
     @Environment(\.displayScale) private var displayScale
     @State private var preview = PreviewRenderer()
+    @State private var drag: CanvasDrag?
+    @State private var dropTargeted = false
     private let annotations = AnnotationStore.shared
+    private let viewport = CanvasViewport.shared
+    /// Measures layers for clicks and the selection outline. Main thread only (the preview has its own renderer).
+    private static let picker = FrameRenderer()
+
+    /// A press on the canvas: the layer under it, and whether it has turned into a move.
+    private struct CanvasDrag {
+        var layer: String?
+        var moving = false
+    }
 
     private struct FrameKey: Equatable {
         var revision: Int
@@ -272,11 +354,18 @@ struct CanvasView: View {
         var pixelWidth: Int
     }
 
+    private struct Layout: Equatable {
+        var canvas: CGSize
+        var fit: CGSize
+        var sceneWidth: Int
+    }
+
     var body: some View {
         GeometryReader { geo in
             let scene = store.scene
             let aspect = Double(scene.width) / Double(scene.height)
-            let avail = CGSize(width: max(geo.size.width - 40, 10), height: max(geo.size.height - 40, 10))
+            let avail = CGSize(width: max(geo.size.width - 2 * CanvasViewport.margin, 10),
+                               height: max(geo.size.height - 2 * CanvasViewport.margin, 10))
             let fit = avail.width / avail.height > aspect
                 ? CGSize(width: avail.height * aspect, height: avail.height)
                 : CGSize(width: avail.width, height: avail.width / aspect)
@@ -284,8 +373,17 @@ struct CanvasView: View {
             // when the canvas is larger than the scene); while playing, at most 1.5 px/pt to keep frames cheap.
             // The RAM preview cache holds frames at the playback density.
             let playDensity = min(displayScale, 1.5)
-            let density = store.isPlaying ? playDensity : displayScale
-            let scale = fit.width * density / Double(scene.width)
+            // Zoomed in (and paused), the frame is rendered larger so the detail looked at is real, up to twice the
+            // scene's size (4096 px at most): past that the picture is enlarged. Playing always renders at the
+            // fitted size, the one the RAM preview holds.
+            let zoom = viewport.zoom, pan = viewport.pan
+            let fitScale = fit.width * displayScale / Double(scene.width)
+            let sharpest = max(fitScale, min(2, 4096 / Double(max(scene.width, scene.height))))
+            let scale = store.isPlaying ? fit.width * playDensity / Double(scene.width) : min(fitScale * zoom, sharpest)
+            let shown = CGSize(width: fit.width * zoom, height: fit.height * zoom)
+            let unit = shown.width / Double(scene.width) // points per scene px
+            let origin = CGPoint(x: (geo.size.width - shown.width) / 2 + pan.width,
+                                 y: (geo.size.height - shown.height) / 2 + pan.height)
             let key = FrameKey(revision: store.sceneRevision, time: store.time, scale: scale)
             let cacheSource = CacheSource(revision: store.sceneRevision,
                                           pixelWidth: FrameCache.pixelWidth(scene, scale: fit.width * playDensity / Double(scene.width)))
@@ -294,23 +392,57 @@ struct CanvasView: View {
                     Image(decorative: img, scale: 1)
                         .resizable()
                         .interpolation(.high)
-                        .frame(width: fit.width, height: fit.height)
-                        .shadow(color: .black.opacity(0.35), radius: 12, y: 4)
+                        .frame(width: shown.width, height: shown.height)
+                        // A hairline just outside the picture, so a dark scene still has an edge on the dark stage.
+                        .overlay(Rectangle().stroke(Color.white.opacity(0.14), lineWidth: 1).padding(-0.5))
+                        .shadow(color: .black.opacity(0.5), radius: 16, y: 6)
                 }
-                if !annotations.isActive, let layer = store.selectedLayer, layer.type.isVisual, layer.type != .text,
-                   layer.isVisible(at: store.time, sceneDuration: scene.duration) {
-                    SelectionBox(layer: layer, scene: scene, time: store.time, unit: fit.width / Double(scene.width))
-                        .frame(width: fit.width, height: fit.height)
+                if scene.layers.isEmpty, !annotations.isActive {
+                    EmptySceneHint(onLight: scene.background.r * 0.2126 + scene.background.g * 0.7152
+                        + scene.background.b * 0.0722 > 0.5)
+                        .frame(width: shown.width, height: shown.height)
+                        .allowsHitTesting(false)
+                }
+                // Not while playing: the preview stays clean and nothing is measured per frame.
+                if !annotations.isActive, !store.isPlaying, let id = store.selection,
+                   let outline = Self.picker.selectionOutline(of: id, in: scene, at: store.time) {
+                    Path(outline)
+                        .applying(CGAffineTransform(scaleX: unit, y: unit))
+                        .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 1.5, dash: [5, 3]))
+                        .frame(width: shown.width, height: shown.height)
+                        .allowsHitTesting(false)
                 }
                 if annotations.isActive {
-                    AnnotationOverlay(annotations: annotations, unit: fit.width / Double(scene.width))
-                        .frame(width: fit.width, height: fit.height)
+                    AnnotationOverlay(annotations: annotations, unit: unit)
+                        .frame(width: shown.width, height: shown.height)
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .offset(pan)
+            // A fixed frame, not a flexible one: zoomed in, the picture is larger than the canvas and must hang
+            // over its edges (cut off there) instead of making the canvas as large as itself.
+            .frame(width: geo.size.width, height: geo.size.height)
+            .clipped()
+            .contentShape(Rectangle())
+            // While marking up a frame the presses belong to the marks.
+            .gesture(pickAndMove(origin: origin, unit: unit), including: annotations.isActive ? .subviews : .all)
+            .simultaneousGesture(MagnifyGesture()
+                .onChanged { v in
+                    if viewport.pinchBase == nil { viewport.pinchBase = viewport.zoom }
+                    viewport.setZoom((viewport.pinchBase ?? 1) * Double(v.magnification), anchor: v.startLocation)
+                }
+                .onEnded { _ in viewport.pinchBase = nil })
+            .onHover { viewport.hovering = $0 }
+            .onContinuousHover { phase in
+                if case let .active(p) = phase { viewport.mouse = p } else { viewport.mouse = nil }
+            }
+            .onChange(of: Layout(canvas: geo.size, fit: fit, sceneWidth: scene.width), initial: true) { _, l in
+                viewport.layout(canvas: l.canvas, fit: l.fit, sceneWidth: Double(l.sceneWidth))
+            }
+            // Another document is looked at from the start: fitted.
+            .onChange(of: store.documentRevision) { viewport.reset() }
             .overlay(alignment: .top) {
                 if annotations.isActive {
-                    AnnotationToolbar(annotations: annotations, unit: fit.width / Double(scene.width))
+                    AnnotationToolbar(annotations: annotations, unit: unit)
                         .padding(.top, 10)
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }
@@ -344,67 +476,143 @@ struct CanvasView: View {
                 FrameCache.shared.isSuspended = exporting
             }
         }
-        .background(Color(nsColor: .underPageBackgroundColor))
+        .background(Color.stage)
+        .onAppear(perform: installScrollMonitor)
+        .onDisappear(perform: removeScrollMonitor)
+        .overlay {
+            if dropTargeted {
+                RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
+                    .padding(6)
+                    .allowsHitTesting(false)
+            }
+        }
         // Drop images/audio from the Assets panel or Finder to add them as layers.
         .dropDestination(for: URL.self) { urls, _ in
             let files = urls.filter(\.isFileURL)
             files.forEach { store.addFileLayer($0.path) }
             return !files.isEmpty
-        }
+        } isTargeted: { dropTargeted = $0 }
     }
 }
 
-/// Outline of the selected shape/image layer, following its animated transform (parents, skew, anchor, path).
-struct SelectionBox: View {
-    let layer: MotionLayer
-    let scene: MotionScene
-    let time: Double
-    let unit: Double
+extension Color {
+    /// The surround of the preview: dark and neutral in both appearances, like a viewing room, so the picture's own
+    /// colors and brightness are judged against nothing brighter than it.
+    static let stage = Color(nsColor: NSColor(name: nil) { appearance in
+        NSColor(white: appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? 0.07 : 0.15, alpha: 1)
+    })
+}
+
+/// Over the frame of a scene with no layers: the two ways to start.
+private struct EmptySceneHint: View {
+    /// The scene's background is light, so the hint is written dark.
+    let onLight: Bool
 
     var body: some View {
-        // 3D layers: their projected box (a model's: its bounding box's edges).
-        if layer.is3D {
-            let extent = layer.type == .model ? layer.modelExtent(at: time) : (box: box, depth: 0)
-            if let outline = scene.outline3D(of: layer, box: extent.box, depth: extent.depth, at: time) {
-                Path(outline)
-                    .applying(CGAffineTransform(scaleX: unit, y: unit))
-                    .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 1.5, dash: [5, 3]))
-                    .allowsHitTesting(false)
-            }
-        } else {
-            let screen = scene.worldTransform(of: layer, at: time)
-            Path(box)
-                .applying(screen.concatenating(CGAffineTransform(scaleX: unit, y: unit)))
-                .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 1.5, dash: [5, 3]))
-                .allowsHitTesting(false)
+        VStack(spacing: 6) {
+            Image(systemName: "sparkles").font(.title2)
+            Text("Describe the video you want in the chat").font(.callout.weight(.medium))
+            Text("or drop images, video and audio here").font(.caption)
         }
-    }
-
-    private var box: CGRect {
-        if layer.type == .path {
-            let b = layer.pathShape(at: time).cgPath.boundingBoxOfPath
-            return b.isNull ? .zero : b
-        }
-        let (w, h) = boxSize
-        return CGRect(x: -w / 2, y: -h / 2, width: w, height: h)
-    }
-
-    private var boxSize: (Double, Double) {
-        if layer.type == .particles && layer.particles.emitter == .point && layer.particles.from == nil { return (24, 24) }
-        let size = { (v: AnimValue?, fallback: Double) -> Double in
-            let x = v?.value(at: time) ?? 0
-            return x > 0 ? x : fallback
-        }
-        return (layer.type.hasNaturalSize ? size(layer.width, 400) : layer.shapeWidth(at: time),
-                layer.type.hasNaturalSize ? size(layer.height, 240) : layer.shapeHeight(at: time))
+        .multilineTextAlignment(.center)
+        .foregroundStyle((onLight ? Color.black : Color.white).opacity(0.55))
+        .padding(12)
     }
 }
 
-/// Playback controls under the canvas: timecode on the left, transport centered, format on the right.
+extension CanvasView {
+    /// Over the canvas: ⌘-scroll zooms around the pointer, and once zoomed in a plain scroll (two fingers, or the
+    /// wheel, ⇧ for sideways) moves the picture. Fitted, scrolling is left alone.
+    private func installScrollMonitor() {
+        let viewport = viewport
+        guard viewport.monitor == nil else { return }
+        viewport.monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { e in
+            guard viewport.hovering, e.window?.attachedSheet == nil else { return e }
+            let precise = e.hasPreciseScrollingDeltas
+            if e.modifierFlags.contains(.command) {
+                viewport.setZoom(viewport.zoom * exp(Double(e.scrollingDeltaY) * (precise ? 0.01 : 0.1)), anchor: viewport.mouse)
+                return nil
+            }
+            guard !viewport.isFit else { return e }
+            var dx = Double(e.scrollingDeltaX), dy = Double(e.scrollingDeltaY)
+            if e.modifierFlags.contains(.shift), dx == 0 { dx = dy; dy = 0 }
+            if !precise { dx *= 10; dy *= 10 }
+            viewport.scroll(dx: dx, dy: dy)
+            return nil
+        }
+    }
+
+    private func removeScrollMonitor() {
+        if let m = viewport.monitor { NSEvent.removeMonitor(m) }
+        viewport.monitor = nil
+    }
+
+    /// The layer a press at `p` (scene px) is on. Outside the frame there is nothing to see, so nothing to pick.
+    private func layer(at p: CGPoint) -> String? {
+        let scene = store.scene
+        guard CGRect(x: 0, y: 0, width: scene.width, height: scene.height).contains(p) else { return nil }
+        return Self.picker.layerHit(in: scene, at: p, time: store.time)
+    }
+
+    /// Click: select the layer under the pointer, or nothing. Drag: move that layer (one undo step; ⇧ keeps it on
+    /// one axis). A layer that fills the frame is only dragged once it is selected (from the Layers list), so a
+    /// drag on the backdrop moves nothing by accident.
+    private func pickAndMove(origin: CGPoint, unit: Double) -> some Gesture {
+        func scenePoint(_ p: CGPoint) -> CGPoint { CGPoint(x: (p.x - origin.x) / unit, y: (p.y - origin.y) / unit) }
+        return DragGesture(minimumDistance: 0)
+            .onChanged { g in
+                if drag == nil {
+                    let p = scenePoint(g.startLocation)
+                    var target = layer(at: p)
+                    if target == nil, let id = store.selection,
+                       Self.picker.selectionOutline(of: id, in: store.scene, at: store.time)?.contains(p) == true {
+                        target = id
+                    }
+                    drag = CanvasDrag(layer: target)
+                }
+                guard let id = drag?.layer, !store.isPlaying else { return }
+                if drag?.moving != true {
+                    guard hypot(g.translation.width, g.translation.height) >= 3 else { return }
+                    // Say why a layer cannot be moved (its position is linked…) instead of ignoring the drag.
+                    var probe = store.scene
+                    do {
+                        try probe.moveLayer(id, byFrame: .zero, at: store.time)
+                    } catch {
+                        store.message = error.localizedDescription
+                        drag?.layer = nil
+                        return
+                    }
+                    store.selection = id
+                    store.beginInteractive("Move Layer")
+                    drag?.moving = true
+                }
+                var dx = Double(g.translation.width) / unit, dy = Double(g.translation.height) / unit
+                if NSEvent.modifierFlags.contains(.shift) {
+                    if abs(dx) > abs(dy) { dy = 0 } else { dx = 0 }
+                }
+                let t = store.time
+                store.updateInteractive { try $0.moveLayer(id, byFrame: CGVector(dx: dx, dy: dy), at: t) }
+            }
+            .onEnded { g in
+                defer { drag = nil }
+                if drag?.moving == true {
+                    store.endInteractive()
+                } else {
+                    store.selection = layer(at: scenePoint(g.startLocation))
+                }
+            }
+    }
+}
+
+/// Playback controls under the canvas, on the window's own background so they read as a bar and not as part of the
+/// stage: timecode on the left, transport centered, the scene's format and the Timeline switch on the right.
 /// With the timeline hidden, a compact scrubber sits above the controls.
 struct TransportBar: View {
     @Environment(SceneStore.self) private var store
     @AppStorage("showTimeline") private var showTimeline = false
+    @AppStorage("ui.showSidebar") private var showSidebar = false
+    @AppStorage("leftPanelTab") private var leftTab: LeftPanelTab = .layers
 
     var body: some View {
         VStack(spacing: 0) {
@@ -413,41 +621,70 @@ struct TransportBar: View {
                     .padding(.horizontal, 14)
                     .padding(.top, 6)
             }
-            controls
+            // As the canvas column narrows: the format goes first, then the duration and the Timeline switch's title.
+            GeometryReader { geo in controls(showsFormat: geo.size.width >= 700, compact: geo.size.width < 520) }
+                .frame(height: 44)
         }
-        .background(Color(nsColor: .underPageBackgroundColor))
+        .background(Color(nsColor: .windowBackgroundColor))
     }
 
-    private var controls: some View {
+    private func controls(showsFormat: Bool, compact: Bool) -> some View {
         let s = store.scene
         return ZStack {
             HStack(spacing: 6) {
                 Text(timecode(store.time, fps: s.fps))
                     .font(.system(.callout, design: .monospaced).weight(.medium))
-                Text("/ \(timecode(s.duration, fps: s.fps))")
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Button { withAnimation(.easeOut(duration: 0.2)) { showTimeline.toggle() } } label: {
-                    Image(systemName: showTimeline ? "chevron.down" : "chevron.up")
+                if !compact {
+                    Text("/ \(timecode(s.duration, fps: s.fps))")
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
                 }
-                .help(showTimeline ? "Hide the Timeline (⌃⌘T)" : "Show the Timeline (⌃⌘T)")
+                Spacer()
+                ZoomMenu().padding(.trailing, 4)
+                if showsFormat {
+                    // The scene's settings are what the Inspector shows with nothing selected.
+                    Button {
+                        store.selection = nil
+                        leftTab = .layers
+                        withAnimation(.easeOut(duration: 0.2)) { showSidebar = true }
+                    } label: {
+                        Text("\(s.width)×\(s.height) · \(s.fps) fps")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                    .help("Scene size and frame rate. Click to change them.")
+                    .padding(.trailing, 8)
+                }
+                Button { withAnimation(.easeOut(duration: 0.2)) { showTimeline.toggle() } } label: {
+                    Label("Timeline", systemImage: "rectangle.bottomthird.inset.filled")
+                        .labelStyle(TimelineLabelStyle(iconOnly: compact))
+                        .font(.callout)
+                        .foregroundStyle(showTimeline ? Color.accentColor : Color.secondary)
+                }
+                .help(showTimeline ? "Hide the Timeline (⌃⌘T)" : "Show the Timeline: layers in time, keyframes and curves (⌃⌘T)")
             }
             // Frame stepping stays on ⌘← / ⌘→ (Playback menu).
-            HStack(spacing: 16) {
-                Button { store.seek(0) } label: { Image(systemName: "backward.end.fill") }
-                    .help("Go to start (⇧⌘←)")
+            HStack(spacing: 12) {
+                Button { store.seek(0) } label: {
+                    Image(systemName: "backward.end.fill").frame(width: 28, height: 28).contentShape(Rectangle())
+                }
+                .help("Go to start (⇧⌘←)")
                 Button { store.togglePlay() } label: {
                     Image(systemName: store.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.title3)
-                        .frame(width: 22)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Color.primary)
+                        .frame(width: 32, height: 32)
+                        .background(Circle().fill(Color.primary.opacity(0.1)))
+                        .contentShape(Circle())
                 }
                 .help("Play / pause (Space)")
+                // Keeps Play on the bar's center line.
+                Color.clear.frame(width: 28, height: 28)
             }
         }
         .buttonStyle(.borderless)
         .padding(.horizontal, 14)
-        .frame(height: 40)
+        .frame(height: 44)
     }
 
     /// mm:ss:ff
@@ -458,41 +695,117 @@ struct TransportBar: View {
     }
 }
 
-/// Thin click/drag scrubber over the whole scene, used while the full timeline is hidden.
+/// Title and icon, or the icon alone where the bar is short of room.
+private struct TimelineLabelStyle: LabelStyle {
+    let iconOnly: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 5) {
+            configuration.icon
+            if !iconOnly { configuration.title }
+        }
+    }
+}
+
+/// "Fit ⌄" / "150% ⌄" in the transport bar: how large the preview is shown, and the ways to change it.
+private struct ZoomMenu: View {
+    private let viewport = CanvasViewport.shared
+
+    var body: some View {
+        Menu {
+            Button("Zoom In") { viewport.zoomIn() }.disabled(viewport.zoom >= CanvasViewport.maxZoom)
+            Button("Zoom Out") { viewport.zoomOut() }.disabled(viewport.isFit)
+            Divider()
+            Button("Fit") { viewport.reset() }
+            // Sizes smaller than the fitted frame would only add empty stage.
+            ForEach([100, 200, 400], id: \.self) { p in
+                if Double(p) / 100 * viewport.sceneWidth > Double(viewport.fit.width) * 1.02 {
+                    Button("\(p)%") { viewport.setPercent(Double(p)) }
+                }
+            }
+        } label: {
+            Text(viewport.isFit ? "Fit" : "\(viewport.percent)%")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(viewport.isFit ? Color.secondary : Color.accentColor)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Preview size. Pinch or ⌘-scroll over the preview to zoom, scroll to move around, ⌘0 to fit.")
+    }
+}
+
+/// Thin click/drag scrubber over the whole scene, used while the full timeline is hidden. It thickens under the
+/// pointer, and the whole 16 pt strip takes the press, not only the 4 pt line.
 struct MiniScrubber: View {
     @Environment(SceneStore.self) private var store
+    @State private var hovering = false
+    @State private var dragging = false
 
     var body: some View {
         GeometryReader { geo in
             let w = max(Double(geo.size.width), 1)
             let d = max(store.scene.duration, 0.001)
             let x = min(max(store.time / d, 0), 1) * w
+            let active = hovering || dragging
+            let track: CGFloat = active ? 6 : 4, thumb: CGFloat = active ? 14 : 10
             ZStack(alignment: .leading) {
-                Capsule().fill(Color.secondary.opacity(0.25)).frame(height: 4)
+                Capsule().fill(Color.secondary.opacity(0.25)).frame(height: track)
                 // Frames held in the RAM preview cache, just under the track.
-                CachedFramesStrip(pointsPerSecond: w / d).offset(y: 4)
-                Capsule().fill(Color.accentColor).frame(width: x, height: 4)
+                CachedFramesStrip(pointsPerSecond: w / d).offset(y: track / 2 + 2)
+                Capsule().fill(Color.accentColor).frame(width: x, height: track)
                 Circle()
                     .fill(Color.white)
                     .shadow(color: .black.opacity(0.3), radius: 1, y: 0.5)
-                    .frame(width: 10, height: 10)
-                    .offset(x: x - 5)
+                    .frame(width: thumb, height: thumb)
+                    .offset(x: x - thumb / 2)
             }
             .frame(maxHeight: .infinity)
             .contentShape(Rectangle())
+            .animation(.easeOut(duration: 0.12), value: active)
+            .onHover { hovering = $0 }
             .gesture(DragGesture(minimumDistance: 0)
                 .onChanged { g in
+                    dragging = true
                     let fps = Double(max(store.scene.fps, 1))
                     let t = min(max(Double(g.location.x) / w, 0), 1) * d
                     store.seek((t * fps).rounded() / fps)
-                })
+                }
+                .onEnded { _ in dragging = false })
         }
-        .frame(height: 12)
+        .frame(height: 16)
         .help("Drag to scrub")
     }
 }
 
 // MARK: - Layers
+
+/// The left panel: everything edited by hand. Layers, with the Inspector of the selected one under the list (the
+/// scene's own settings when nothing is selected), or the Assets library.
+struct EditPanel: View {
+    @AppStorage("leftPanelTab") private var tab: LeftPanelTab = .layers
+    @AppStorage("ui.layerListHeight") private var listHeight: Double = 220
+
+    var body: some View {
+        VStack(spacing: 0) {
+            PanelTabBar(selection: $tab)
+            Divider()
+            switch tab {
+            case .layers:
+                GeometryReader { geo in
+                    VStack(spacing: 0) {
+                        // The list never takes more than 60% of the panel: the Inspector is the reason to open it.
+                        LayerListView()
+                            .frame(height: min(max(listHeight, 90), max(Double(geo.size.height) * 0.6, 90)))
+                        ResizeHandle(height: $listHeight, range: 90...600, growsDown: true)
+                        InspectorView()
+                    }
+                }
+            case .assets:
+                AssetsPanel()
+            }
+        }
+    }
+}
 
 struct LayerListView: View {
     @Environment(SceneStore.self) private var store
@@ -562,71 +875,73 @@ struct LayerListView: View {
 
 // MARK: - Status
 
-/// Shown only when there is something to say: an export, a recent message, or an agent connection problem.
-/// Messages and agent actions fade after a few seconds.
-struct StatusBar: View {
+/// What the store has to say, floating over the bottom of the canvas so it takes no room and moves nothing: a running
+/// export, a finished one, an error or note (`store.message`, gone after a few seconds or on a click), and a failed
+/// agent connection.
+struct CanvasToast: View {
     @Environment(SceneStore.self) private var store
 
-    private var agentsOK: Bool { store.controlStatus == "Ready" && store.mcpStatus.hasPrefix("Listening") }
+    private var agentsFailed: Bool { store.controlStatus.hasPrefix("Failed") || store.mcpStatus.hasPrefix("Failed") }
+
+    private var exportDone: URL? {
+        guard store.exportProgress == nil, store.exportResultUnseen, case let .done(url, _)? = store.exportResult else { return nil }
+        return url
+    }
 
     private var isEmpty: Bool {
-        agentsOK && store.lastAgentAction == nil && store.exportProgress == nil && store.message == nil
-            && !(store.exportResultUnseen && store.exportResult != nil)
+        !agentsFailed && store.exportProgress == nil && exportDone == nil && store.message == nil
     }
 
     var body: some View {
-        Group {
+        // A container that is there while empty, so the pill animates in and out.
+        ZStack {
             if !isEmpty {
-                VStack(spacing: 0) {
-                    Divider()
-                    bar
-                }
+                HStack(spacing: 10) { content }
+                    .font(.callout)
+                    .padding(.horizontal, 12)
+                    .frame(minHeight: 30)
+                    .background(.regularMaterial, in: Capsule())
+                    .overlay(Capsule().strokeBorder(Color.primary.opacity(0.1)))
+                    .shadow(color: .black.opacity(0.25), radius: 8, y: 2)
+                    .padding(.horizontal, 20)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
+        .animation(.easeOut(duration: 0.2), value: isEmpty)
         .task(id: store.message) {
             guard let m = store.message else { return }
-            try? await Task.sleep(for: .seconds(8))
+            try? await Task.sleep(for: .seconds(6))
             if store.message == m { store.message = nil }
-        }
-        .task(id: store.lastAgentAction) {
-            guard let a = store.lastAgentAction else { return }
-            try? await Task.sleep(for: .seconds(8))
-            if store.lastAgentAction == a { store.lastAgentAction = nil }
         }
     }
 
-    private var bar: some View {
-        HStack(spacing: 10) {
-            if !agentsOK { AgentStatusButton() }
-            if let action = store.lastAgentAction {
-                Text(action).foregroundStyle(.secondary).lineLimit(1)
-            }
-            Spacer()
-            if let p = store.exportProgress {
-                Button { store.exportVideo() } label: {
-                    HStack(spacing: 6) {
-                        ProgressView(value: p).frame(width: 140).controlSize(.small)
-                        Text("Exporting \(Int(p * 100))%").monospacedDigit()
-                    }
+    @ViewBuilder private var content: some View {
+        if agentsFailed { AgentStatusButton() }
+        if let p = store.exportProgress {
+            Button { store.exportVideo() } label: {
+                HStack(spacing: 6) {
+                    ProgressView(value: p).frame(width: 120).controlSize(.small)
+                    Text("Exporting \(Int(p * 100))%").monospacedDigit()
                 }
-                .buttonStyle(.plain)
-                .help("Show export progress")
-            } else if store.exportResultUnseen, case let .done(url, _)? = store.exportResult {
-                Button { store.exportVideo() } label: {
-                    Label("Exported \(url.lastPathComponent)", systemImage: "checkmark.circle.fill")
-                        .lineLimit(1).truncationMode(.middle)
-                }
-                .buttonStyle(.plain)
-                .help("Show the export result")
-                Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
-                    .buttonStyle(.link)
-            } else if let m = store.message {
-                Text(m).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
             }
+            .buttonStyle(.plain)
+            .help("Show export progress")
+        } else if let url = exportDone {
+            Button { store.exportVideo() } label: {
+                Label("Exported \(url.lastPathComponent)", systemImage: "checkmark.circle.fill")
+                    .lineLimit(1).truncationMode(.middle)
+            }
+            .buttonStyle(.plain)
+            .help("Show the export result")
+            Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+                .buttonStyle(.link)
+        } else if let m = store.message {
+            Button { store.message = nil } label: {
+                Text(m).lineLimit(2).multilineTextAlignment(.leading)
+            }
+            .buttonStyle(.plain)
+            .help("Click to dismiss")
         }
-        .font(.caption)
-        .padding(.horizontal, 12)
-        .frame(height: 24)
     }
 }
 
