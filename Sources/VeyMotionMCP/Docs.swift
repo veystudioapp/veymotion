@@ -64,7 +64,7 @@ enum Docs {
        magenta #FF2D95 + cyan #00D4FF (neon); orange #FF8C42 + plum #C34A8F (retro).
     Timing and rhythm: entrances 0.5–0.8 s staggered 0.08–0.15 s, exits shorter (0.3–0.5 s, easeIn), hold readable
        text ~1 s per 4 words, transitions between sections with a wipe, a shape morph or a camera move (not just a
-       cut), and sound: a whoosh on moves, a soft hit on landings, music ducked under voice (see AUDIO).
+       cut), and music ducked under voice (see AUDIO). No sound effects unless asked (see SOUND EFFECTS).
     Illustrations: an object the viewer must recognize (a tree, a hand, a phone, a plane, a person, an animal) is never
        a triangle, a box or a stack of ellipses: that is a placeholder. Get a real drawing first: search_stock kind
        "icon" with palette=true in the query (e.g. "christmas tree palette=true": only multi-color illustration
@@ -615,8 +615,12 @@ enum Docs {
       audioReact (e.g. a logo pulsing on bass, a background breathing with level).
 
     SOUND EFFECTS
+    Default: no sound effects. Add them only when the user asks for sound (sound effects, SFX, sound design, "âm
+    thanh", "hiệu ứng âm thanh"…) or is reworking a scene that already has sfx layers. Many videos are watched muted
+    or get their soundtrack later, and unasked whooshes are something the user has to delete. If a piece would gain
+    from sound, finish the visuals and offer it in one line; do not add it.
     A sound effect sells a motion only if it matches it in kind, length and timing. Add sound effects after the visuals
-    are timed, and only where the user wants sound design (or the piece clearly calls for it).
+    are timed.
     - Match the motion (motion → sound): slide/fly-in or camera move → whoosh (duration ≈ the move); quick flick, small
       element in, fast cut → swoosh; scale-in/appear → pop (blip for UI-like elements); button press, cursor, snap into
       place → click; counter steps, list items, checkboxes → tick (or click); success, check mark, key number → ding;
@@ -636,7 +640,7 @@ enum Docs {
       click, thud: on the frame the thing lands or reaches full size (for a popIn preset, ~0.1–0.2 s after its start).
       Riser: ends on the reveal. Pass hitAt (scene time of that frame) to generate_sfx or add_audio and the tool does
       the math (skips leading silence, starts early). Never just put start = the visual's start.
-    - Default to generate_sfx for every kind it has (whoosh, swoosh, pop, blip, click, tick, ding, chime, sparkle,
+    - When you add effects, prefer generate_sfx over stock sounds for every kind it has (whoosh, swoosh, pop, blip, click, tick, ding, chime, sparkle,
       riser, impact, thud, drop, glitch, typing, swell, braam, explosion, subdrop, laser, notification, error, beep,
       coin, powerup, tada, shutter, clap, droplet, boing, heartbeat, scribble, static, wind, drone), also when
       reworking a scene that already uses stock effects: it is
@@ -707,7 +711,7 @@ enum Docs {
       get a track that need not loop. Each result lists its source, instrumental/vocals and tempo or bpm when known.
       import_stock it, then add_audio with role "music", start 0, end = scene duration, volume ~0.6, fadeIn 0.5,
       fadeOut 1.5, and duckTo ~0.25 if there is a voice-over.
-    - Sound effects: see SOUND EFFECTS (generate_sfx first; search_stock kind "sound" for real-world sounds, then
+    - Sound effects (only when asked): see SOUND EFFECTS (generate_sfx first; search_stock kind "sound" for real-world sounds, then
       import_stock and add_audio with role "sfx" and hitAt).
     - Some licenses (CC BY, CC BY-SA) require credit. When you used such assets, call get_credits and tell the user,
       or add a small credits text at the end if they want it in the video.
@@ -1122,7 +1126,7 @@ enum Docs {
       },
       {
         "name": "generate_sfx",
-        "description": "Synthesize a sound effect made to measure (no download, no license) and add it as an sfx audio layer whose hit lands at hitAt. Kinds: whoosh (slides, zooms, camera moves; peaks mid-way), swoosh (quick flicks/cuts), pop (scale-in, appear), blip (UI elements), click (buttons, snaps), tick (counters, list steps), ding (success, highlight), chime (reveal, achievement), sparkle (shine, magic), riser (build-up whose hit is its end), impact (title slam, logo landing), thud (soft landing), drop (exit, things falling), glitch (glitch transition), typing (typewriter text); cinematic: swell (reverse cymbal ending on its hit), braam (trailer brass blast), explosion, subdrop (sub-bass dive), laser; interface and game: notification, error, beep (countdowns), coin, powerup (hit = top note), tada (fanfare, hit = second chord); real-world: shutter (camera), clap, droplet, boing, heartbeat, scribble (pencil strokes over a draw-on); textures and beds: static (TV noise burst), wind, drone (dark pad). Same settings give the same file.",
+        "description": "Synthesize a sound effect made to measure (no download, no license) and add it as an sfx audio layer whose hit lands at hitAt. Only when the user asked for sound effects (or the scene already has sfx layers). Kinds: whoosh (slides, zooms, camera moves; peaks mid-way), swoosh (quick flicks/cuts), pop (scale-in, appear), blip (UI elements), click (buttons, snaps), tick (counters, list steps), ding (success, highlight), chime (reveal, achievement), sparkle (shine, magic), riser (build-up whose hit is its end), impact (title slam, logo landing), thud (soft landing), drop (exit, things falling), glitch (glitch transition), typing (typewriter text); cinematic: swell (reverse cymbal ending on its hit), braam (trailer brass blast), explosion, subdrop (sub-bass dive), laser; interface and game: notification, error, beep (countdowns), coin, powerup (hit = top note), tada (fanfare, hit = second chord); real-world: shutter (camera), clap, droplet, boing, heartbeat, scribble (pencil strokes over a draw-on); textures and beds: static (TV noise burst), wind, drone (dark pad). Same settings give the same file.",
         "inputSchema": {
           "type": "object",
           "properties": {
