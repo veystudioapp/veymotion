@@ -159,6 +159,8 @@ updates live. Images can be PNG/JPEG/HEIC/… or SVG (rendered sharp at any size
 - Photos and illustrations from [Openverse](https://openverse.org), limited to licenses that allow commercial use and
   changes (CC0, Public Domain, CC BY, CC BY-SA).
 - Icons from [Iconify](https://iconify.design): 200k+ open-source SVG icons, imported in the color you pick.
+- Lottie animations from [LottieFiles](https://lottiefiles.com) (animated icons, loaders, stickers), free under the
+  Lottie Simple License, played as vector video layers.
 - Music from three catalogs searched together: [Jamendo](https://www.jamendo.com) (full tracks),
   [Freesound](https://freesound.org) (short loops, mostly CC0) and [ccMixter](https://ccmixter.org) (remixes with a
   bpm, CC BY / CC0 only), filtered by **Instrumental**, tempo and source (`instrumental`, `tempo`, `minDuration`,

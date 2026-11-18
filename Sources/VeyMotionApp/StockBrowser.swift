@@ -272,6 +272,7 @@ struct StockBrowserSheet: View {
         case .music: return "Search music by mood or genre (e.g. calm piano, upbeat corporate)"
         case .sound: return "Search sound effects (e.g. whoosh, pop, click, applause)"
         case .font: return "Search fonts by name, style or mood (e.g. serif, handwriting, elegant, Montserrat)"
+        case .animation: return "Search Lottie animations (e.g. loading, success check, confetti, rocket)"
         }
     }
 
@@ -298,6 +299,7 @@ struct StockBrowserSheet: View {
         case .music: return ["upbeat", "calm piano", "cinematic", "lofi", "corporate"]
         case .sound: return ["whoosh", "pop", "click", "ding", "transition"]
         case .font: return ["popular", "elegant", "modern", "handwriting", "display"]
+        case .animation: return ["loading", "success", "confetti", "arrow", "rocket"]
         }
     }
 
@@ -308,6 +310,7 @@ struct StockBrowserSheet: View {
         case .music: return "music.note.list"
         case .sound: return "speaker.wave.2"
         case .font: return "textformat"
+        case .animation: return "sparkles"
         default: return "photo.on.rectangle.angled"
         }
     }
@@ -336,7 +339,7 @@ private struct StockCell: View {
                         if let img = model.thumbnail(item) {
                             Image(nsImage: img)
                                 .resizable()
-                                .aspectRatio(contentMode: dark ? .fit : .fill)
+                                .aspectRatio(contentMode: dark || item.kind == .animation ? .fit : .fill)
                                 .padding(isIcon ? 18 : 0)
                         } else {
                             ProgressView().controlSize(.small)
@@ -367,7 +370,7 @@ private struct StockCell: View {
                 }
             }
             .overlay(alignment: .bottomLeading) {
-                if item.kind == .video, let d = item.duration {
+                if item.kind == .video || item.kind == .animation, let d = item.duration {
                     Text(StockItem.clock(d)).font(.system(size: 10, weight: .semibold).monospacedDigit())
                         .padding(.horizontal, 5).padding(.vertical, 1)
                         .background(Capsule().fill(Color.black.opacity(0.6)))

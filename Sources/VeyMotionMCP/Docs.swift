@@ -705,6 +705,12 @@ enum Docs {
       add_layer type "video" with the returned path, sized to cover the frame. Set maxDuration ≥ the time it must cover
       or use playback "loop"; mute it (volume 0) under music or a voice-over. Needs the VeyMotion server: if the search
       says it is unreachable or not configured, tell the user rather than retrying.
+    - Animated illustrations: search_stock kind "animation" finds Lottie animations on LottieFiles (animated icons,
+      check marks, loaders, confetti, arrows, characters). They are vectors, so they stay sharp at any size: import_stock
+      the ref, then add_layer type "video" with the path (playback "loop" for loops, "once" for one-shots). Prefer
+      results with several layers and a small file: one or two layers in a large file is usually a bitmap wrapped in a
+      Lottie. Their look comes from their author: pick ones whose style and colors fit the piece (or recolor with hue /
+      tint), and use them as accents next to your own type and shapes, not as the whole composition.
     - Photos: size them to cover the frame (set width = scene width, or height = scene height) when used as backgrounds,
       and dim them with a semi-transparent rect on top if text sits over them.
     - Background music: search_stock kind "music" with a mood/genre in one or two words (e.g. "calm piano", "upbeat
@@ -1355,12 +1361,12 @@ enum Docs {
       },
       {
         "name": "search_stock",
-        "description": "Search free assets online: photos and illustrations from Openverse (licenses allowing commercial use and changes), stock video clips from Pexels and Pixabay (free for commercial use, no credit needed; needs the VeyMotion server), icons from Iconify (200k+ open-source SVG icons), music from Jamendo (full tracks), Freesound (short loops, mostly CC0) and ccMixter (remixes with a bpm), sound effects from Freesound, fonts from Google Fonts. Returns numbered results with refs, licenses, durations (for music also the source, instrumental/vocals and tempo or bpm when known) and a numbered preview image (thumbnails; for sounds, waveforms with each sound's shape, peak and tags). English keywords work best. For common motion sounds (whoosh, pop, click, ding, riser, impact…) generate_sfx is usually the better choice.",
+        "description": "Search free assets online: photos and illustrations from Openverse (licenses allowing commercial use and changes), stock video clips from Pexels and Pixabay (free for commercial use, no credit needed; needs the VeyMotion server), icons from Iconify (200k+ open-source SVG icons), music from Jamendo (full tracks), Freesound (short loops, mostly CC0) and ccMixter (remixes with a bpm), sound effects from Freesound, fonts from Google Fonts, Lottie animations from LottieFiles (animated icons, loaders, stickers, characters; free for commercial use, no credit needed). Returns numbered results with refs, licenses, durations (for music also the source, instrumental/vocals and tempo or bpm when known) and a numbered preview image (thumbnails; for sounds, waveforms with each sound's shape, peak and tags). English keywords work best. For common motion sounds (whoosh, pop, click, ding, riser, impact…) generate_sfx is usually the better choice.",
         "inputSchema": {
           "type": "object",
           "properties": {
             "query": { "type": "string", "description": "e.g. \"mountain sunset\", \"rocket\", \"upbeat corporate\", \"whoosh\"." },
-            "kind": { "type": "string", "enum": ["photo", "illustration", "video", "icon", "music", "sound", "font"], "default": "photo" },
+            "kind": { "type": "string", "enum": ["photo", "illustration", "video", "icon", "music", "sound", "font", "animation"], "default": "photo" },
             "orientation": { "type": "string", "enum": ["landscape", "portrait", "square"], "description": "Videos only: frame shape (portrait for 9:16 TikTok/Reels/Shorts). Default: any." },
             "vietnamese": { "type": "boolean", "description": "Fonts only: keep fonts that have Vietnamese letters." },
             "maxDuration": { "type": "number", "description": "Music/sound/video: leave out results longer than this many seconds. Sounds default to 10 (one-shot effects); raise it for ambiences, 0 = no limit." },
@@ -1377,7 +1383,7 @@ enum Docs {
       },
       {
         "name": "import_stock",
-        "description": "Download a search_stock result into the asset library (with its license and credit recorded). Returns the path to use in an image layer (a video layer for videos, downloaded as MP4 up to 1920 px on the long side). Icons are saved as SVG in `color`. Fonts are installed for the app and used by family name (fontName).",
+        "description": "Download a search_stock result into the asset library (with its license and credit recorded). Returns the path to use in an image layer (a video layer for videos, downloaded as MP4 up to 1920 px on the long side, and for animations, a Lottie .json). Icons are saved as SVG in `color`. Fonts are installed for the app and used by family name (fontName).",
         "inputSchema": {
           "type": "object",
           "properties": {

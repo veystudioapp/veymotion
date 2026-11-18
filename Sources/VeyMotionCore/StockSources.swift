@@ -12,8 +12,9 @@ import UniformTypeIdentifiers
 /// - ccMixter (ccmixter.org/api/query): remixes under CC BY / CC0, many with a bpm (see `CCMixter`).
 /// - Google Fonts: open-source font families (see `GoogleFonts`).
 /// - Videos: Pexels and Pixabay through the VeyMotion server, which holds their API keys (see `StockVideoSearch`).
+/// - Animations: Lottie files from LottieFiles (see `LottieStock`).
 public enum StockKind: String, CaseIterable, Codable, Sendable {
-    case photo, illustration, video, icon, music, sound, font
+    case photo, illustration, video, icon, music, sound, font, animation
 
     public var title: String {
         switch self {
@@ -24,6 +25,7 @@ public enum StockKind: String, CaseIterable, Codable, Sendable {
         case .music: return "Music"
         case .sound: return "Sound FX"
         case .font: return "Fonts"
+        case .animation: return "Animations"
         }
     }
 
@@ -129,11 +131,11 @@ public struct StockItem: Identifiable, Hashable, Sendable {
         var parts = [ref, title]
         if kind == .font {
             parts.append(genres.joined(separator: ", "))
-        } else if kind == .video {
+        } else if kind == .video || kind == .animation {
             var s = duration.map { Self.clock($0) + " " } ?? ""
             if let w = width, let h = height { s += "\(w)×\(h) " }
             parts.append(s + fileExtension)
-            if !tags.isEmpty { parts.append("tags: " + tags.prefix(8).joined(separator: ", ")) }
+            if !tags.isEmpty { parts.append((kind == .video ? "tags: " : "") + tags.prefix(8).joined(separator: ", ")) }
         } else if let d = duration {
             parts.append(Self.clock(d) + " " + fileExtension + (genres.isEmpty ? "" : " — " + genres.prefix(3).joined(separator: ", ")))
             if kind == .sound, !tags.isEmpty { parts.append("tags: " + tags.prefix(8).joined(separator: ", ")) }
@@ -188,6 +190,7 @@ public enum StockSearch {
         case .icon: return try searchIcons(q, page: page)
         case .photo, .illustration: return try searchOpenverse(q, kind: kind, page: page)
         case .video: return try StockVideoSearch.search(q, page: page, orientation: orientation, maxDuration: maxDuration)
+        case .animation: return try LottieStock.search(q, page: page)
         case .music:
             return try searchMusic(q, page: page, maxDuration: maxDuration.flatMap { $0 > 0 ? $0 : nil }, filter: music)
         case .sound:
@@ -512,6 +515,8 @@ public enum StockSearch {
             return GoogleFonts.item(try GoogleFonts.family(named: parts[1]))
         case let source? where StockVideoSearch.refPrefixes.contains(source) && parts.count == 2:
             return try StockVideoSearch.item(source: source, id: parts[1])
+        case LottieStock.refPrefix where parts.count == 2:
+            return try LottieStock.item(id: parts[1])
         case "iconify" where parts.count == 3:
             let info = try? HTTP.json(URL(string: "https://api.iconify.design/collections?prefixes=\(parts[1])")!)
             return iconItem(prefix: parts[1], name: parts[2], collection: info?[parts[1]] as? [String: Any])
@@ -535,6 +540,7 @@ public enum StockSearch {
         case .music: typeFolder = "music"
         case .sound: typeFolder = "sfx"
         case .video: typeFolder = "video"
+        case .animation: typeFolder = "animations"
         default: typeFolder = "images"
         }
         // Projects file stock items by type unless a folder is given.
@@ -572,9 +578,9 @@ public enum StockSearch {
             _ = try? AssetStore.trash(asset.path)
             throw AssetError.failed("The downloaded file for '\(item.title)' is not playable audio. Try another result.")
         }
-        if item.kind == .video, asset.kind != .video {
+        if item.kind == .video || item.kind == .animation, asset.kind != .video {
             _ = try? AssetStore.trash(asset.path)
-            throw AssetError.failed("The downloaded file for '\(item.title)' is not a video. Try another result.")
+            throw AssetError.failed("The downloaded file for '\(item.title)' is not a \(item.kind == .video ? "video" : "Lottie animation"). Try another result.")
         }
         AssetStore.setCredit(item.credit, for: asset.name)
         asset.credit = item.credit
@@ -681,7 +687,7 @@ public enum StockSearch {
             return img
         }
         let pixels = (item.width ?? .max / 2) * (item.height ?? 2)
-        guard item.kind != .video, let original = item.downloadURL, item.fileExtension == "svg" || pixels <= 1_500_000,
+        guard item.kind != .video, item.kind != .animation, let original = item.downloadURL, item.fileExtension == "svg" || pixels <= 1_500_000,
               let data = try? HTTP.get(original, timeout: timeout) else { return nil }
         return decodeImage(data)
     }

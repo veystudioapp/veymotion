@@ -36,6 +36,24 @@ import Testing
         #expect(AssetStore.kind(of: URL(fileURLWithPath: other)) == .text)
     }
 
+    /// A LottieFiles search result (as its GraphQL API returns it) becomes an importable animation.
+    @Test func readsLottieFilesResults() throws {
+        let node: [String: Any] = [
+            "id": 1509401, "name": " success check ", "url": "https://lottiefiles.com/animations/x",
+            "jsonUrl": "https://assets-v2.lottiefiles.com/a/x/y.json", "imageUrl": "https://assets-v2.lottiefiles.com/a/x/y.png",
+            "lottieFileSize": 51_234,
+            "metadata": ["width": 1080, "height": 1080.4, "duration": 2.52, "layers": 5],
+            "createdBy": ["firstName": "Deepak", "lastName": "Suthar", "username": "/abc"],
+        ]
+        let item = try #require(LottieStock.item(node))
+        #expect(item.ref == "lottiefiles:1509401" && item.kind == .animation && item.title == "success check")
+        #expect(item.fileExtension == "json" && item.downloadURL?.lastPathComponent == "y.json")
+        #expect(item.width == 1080 && item.height == 1080 && item.duration == 2.52)
+        #expect(!item.credit.requiresAttribution && item.credit.creator == "Deepak Suthar")
+        #expect(item.summary.contains("5 layers, 50 KB") && !item.summary.contains("tags:"))
+        #expect(LottieStock.item(["id": 1, "name": "no file"]) == nil)
+    }
+
     /// Drawn upright (the square stays near the top), stretched to the layer's box, and moving with scene time.
     @Test func drawsAsAVideoLayer() throws {
         var layer = MotionLayer(id: "l", name: "l", type: .video, x: 320, y: 180)

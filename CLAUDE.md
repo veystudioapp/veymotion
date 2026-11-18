@@ -78,6 +78,9 @@ Easy Ease F9 / ⇧F9 / ⌘⇧F9).
 - `swift build` fails inside the Claude Code sandbox (SwiftPM writes through the system temp folder). To check code there, run `swiftc` per target into `$TMPDIR`: Core as a dylib + module, then MCP, then the CLI, and the app with `-typecheck`.
 - `update_layer` / `update_scene` apply an RFC 7386 merge patch through JSON round-tripping (`JSONMerge`). Exception: any object containing `keyframes` replaces the old one wholesale. `null` resets a field to its default.
 - Assets: `AssetStore` (`Assets.swift`) is one shared folder with optional subfolders; an asset's `name` is its path relative to the library (`icons/logo.svg`, also the `.credits.json` key), while layers still store absolute `path`s. Folder renames/moves repoint layers via `replaceFolder`. File ops (import/write/rename/trash) are not on the undo stack. Renaming repoints layers via `replacePath`, which is undoable. SVG goes through `AssetStore.loadImage` (NSImage fallback), and the renderer's image cache is keyed by modification date. `AssetLibrary` (app) watches the whole tree with FSEvents so agent changes appear live. Free asset sources (Openverse images + audio from Jamendo/Freesound, Iconify — no keys) are in `StockSources.swift`;
+  Lottie animations (`StockKind.animation`) come from LottieFiles' public GraphQL API (`StockLottie.swift`, no key;
+  pages through base64 `arrayconnection:<n>` cursors; imported as .json into `animations/`). Sandboxed processes
+  cannot reach it with URLSession (the sandbox proxy needs auth): test with a `URLProtocol` that runs curl;
   music searches Jamendo, Freesound (query + "music", 30 s–10 min) and `CCMixter` (CC BY/CC0 only; it answers 502 at
   times, so a failed source is left out and ccMixter is skipped for 5 min) at once and interleaves them; `MusicFilter`
   (instrumental, tempo, minDuration, source) works through Jamendo's `instrumental` / `speed_*` tags in the Openverse

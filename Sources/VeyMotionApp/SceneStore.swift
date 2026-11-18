@@ -244,9 +244,13 @@ final class SceneStore: SceneHost {
             l.start = time
             if let path { l.name = (path as NSString).lastPathComponent }
             try? l.loadVideoInfo(sceneFps: scene.fps)
+            // Lottie files are mostly loops (loaders, icons, stickers) drawn on big square comps: loop, half the frame.
+            let lottie = path.map(LottieSource.isLottie) ?? false
+            if lottie { l.playback = .loop }
             // Natural size, scaled down to fit the frame when larger (set explicitly so the selection box knows it).
             if let path, let info = try? VideoSource.info(of: path), info.width > 0, info.height > 0 {
-                let fit = min(1, Double(scene.width) / Double(info.width), Double(scene.height) / Double(info.height))
+                let room = lottie ? 0.5 : 1
+                let fit = min(1, room * Double(scene.width) / Double(info.width), room * Double(scene.height) / Double(info.height))
                 l.width = .constant((Double(info.width) * fit).rounded())
                 l.height = .constant((Double(info.height) * fit).rounded())
             }

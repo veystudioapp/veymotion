@@ -1018,6 +1018,10 @@ public final class MCPServer {
             if item.kind == .video {
                 lines.append("Next: add_layer {\"layer\": {\"type\": \"video\", \"path\": \"\(asset.path)\", \"start\": …}} "
                              + "(size it to cover the frame; muted with \"volume\": 0 if its sound is not wanted).")
+            } else if item.kind == .animation {
+                lines.append("Next: add_layer {\"layer\": {\"type\": \"video\", \"path\": \"\(asset.path)\", \"playback\": \"loop\", "
+                             + "\"width\": …, \"x\": …, \"y\": …, \"start\": …}} (a Lottie: vectors, sharp at any width; "
+                             + "playback \"once\" for a one-shot such as a check mark). Then render_frame to see it in place.")
             } else if item.kind == .music {
                 lines.append("Next: add_audio {\"path\": \"\(asset.path)\", \"role\": \"music\", \"start\": 0, \"end\": <scene duration>, \"volume\": 0.6, \"fadeIn\": 0.5, \"fadeOut\": 1.5, \"duckTo\": 0.25}")
             } else if item.kind == .sound {
