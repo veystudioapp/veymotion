@@ -13,7 +13,7 @@ public enum MediaAudio {
     /// True if the file has an audio track (false for image sequences). Cached per path and modification date.
     public static func hasAudioTrack(_ path: String) -> Bool {
         let p = AssetStore.expand(path).path
-        guard !VideoSource.isSequence(p) else { return false }
+        guard !VideoSource.isSequence(p), !LottieSource.isLottie(p) else { return false }
         let modified = (try? FileManager.default.attributesOfItem(atPath: p))?[.modificationDate] as? Date
         lock.lock()
         if let c = trackCache[p], c.modified == modified { lock.unlock(); return c.hasAudio }

@@ -127,6 +127,10 @@ enum Docs {
           frames in natural name order), width/height (as image), trimIn (source seconds skipped), speed (1 = normal),
           playback ("once": the layer ends with the clip, default | "hold": last frame stays | "loop": starts over),
           fps (image sequences only: frames per second of the images; set to the render's rate, Blender's default is 24).
+          path can also be a LOTTIE animation (.json exported with Bodymovin, or .lottie): drawn as vectors, sharp at
+          any size, with its own length and frame rate; most are loops (loaders, animated icons, stickers), so set
+          playback "loop" for those. width/height stretch it (set one to keep its aspect). To bring it into the
+          palette, use the layer's color effects (hue, saturation; tint 1 + tintColor for a one-color version).
           The movie's own sound plays at speed 1 (silent at other speeds); volume (animatable, 1 = original, 0 = mute).
           timeRemap: keyframes of the SOURCE second shown over scene time, replacing speed/trimIn (silent):
           {"keyframes":[{"t":0,"v":0},{"t":1,"v":1},{"t":1.5,"v":4,"easing":"easeInOut"},{"t":3,"v":4,"easing":"hold"},

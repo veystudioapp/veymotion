@@ -93,6 +93,15 @@ Easy Ease F9 / ⇧F9 / ⌘⇧F9).
   or `SequenceFrames`. `refreshMediaInfo` fills `sourceDuration` (and a sequence's fps). Movie decoding fails in
   sandboxed processes (`-12911`), so `vmotion frame` there draws the placeholder: test movies in the app, or test
   with image sequences.
+  A Lottie file (`Lottie.swift`; .lottie, or .json sniffed by `LottieSource.isLottie`, asset kind `video`) is a third
+  source: `LottieFrames` holds a lottie-ios `LottieAnimationLayer` on the main-thread engine (its layers draw with
+  CoreGraphics, so `render(in:)` works offscreen on any thread) and `drawImage` draws it as vectors into the layer box
+  (a bitmap only for removeBackground/frameBlend/tracking). The root layer is geometry-flipped in a y-down context
+  (flipping only the context turns images and text upside down) and its animation layer is centered by hand (the
+  view normally does it). Cost grows with drawn area (~7 ms per megapixel); Lottie drop-shadow effects come out as
+  boxes. lottie-ios is pinned to 4.5.2 (4.6 needs SwiftUI's `@Entry` macro plugin, which only Xcode has); in the
+  sandbox, build it with `swiftc` from its `Sources/` like the other targets (its `.lottie` loader unzips into the
+  system temp folder, so test with .json there).
 - Music sync (`AudioAnalysis.swift`): one FFT pass gives band envelopes, an onset curve (flux over log-spaced bands, so
   kicks are not drowned by hi-hats), tempo (autocorrelation) and beats (dynamic programming). `AudioAnalysisCache`
   caches per path (failures too) and is shared by `analyze_audio`, the timeline (`BeatCache` warms it) and the

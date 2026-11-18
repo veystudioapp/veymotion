@@ -604,7 +604,7 @@ public final class FrameRenderer {
         case .path:
             return layer.pathShape(at: t).cgPath.boundingBoxOfPath
         case .image, .video:
-            return imageFrame(layer, at: t).rect
+            return imageFrame(layer, at: t, decode: false).rect
         case .text:
             if let box = textLayout(layer, at: t)?.box {
                 return CGRect(x: -box.width / 2, y: -box.height / 2, width: box.width, height: box.height)
@@ -1291,7 +1291,7 @@ public final class FrameRenderer {
             let stroke = max(layer.value(.strokeWidth, at: t), 0) * (layer.lineJoin == .miter ? 5 : 1)
             return shape.cgPath.boundingBoxOfPath.insetBy(dx: -stroke - 1, dy: -stroke - 1)
         case .image, .video:
-            return imageFrame(layer, at: t).rect.insetBy(dx: -4, dy: -4) // placeholder outline
+            return imageFrame(layer, at: t, decode: false).rect.insetBy(dx: -4, dy: -4) // placeholder outline
         case .text:
             if let mp = layer.textPath {
                 guard layer.textAnimators.isEmpty else { return nil }
@@ -1928,6 +1928,12 @@ public final class FrameRenderer {
     }
 
     private func drawImage(_ layer: MotionLayer, at t: Double, in ctx: CGContext) {
+        // Lottie: vectors straight into the context (sharp at any zoom) unless a bitmap is needed.
+        if layer.type == .video, layer.removeBackground == nil, layer.frameBlend == .off,
+           let lottie = layer.path.flatMap(videoFrames) as? LottieFrames {
+            if let s = layer.videoTime(at: t) { lottie.draw(at: s, in: imageFrame(layer, at: t, decode: false).rect, of: ctx) }
+            return
+        }
         let (img, rect) = imageFrame(layer, at: t)
         guard let img else {
             drawPlaceholder(rect, in: ctx)
@@ -1941,7 +1947,8 @@ public final class FrameRenderer {
     }
 
     /// The image or video frame (nil if missing) and its layer-local rect: natural size unless width/height are set.
-    private func imageFrame(_ layer: MotionLayer, at t: Double) -> (image: CGImage?, rect: CGRect) {
+    /// `decode: false` skips decoding the video frame (callers that only need the rect).
+    private func imageFrame(_ layer: MotionLayer, at t: Double, decode: Bool = true) -> (image: CGImage?, rect: CGRect) {
         let setW = layer.width.map { $0.value(at: t) }.flatMap { $0 > 0 ? $0 : nil }
         let setH = layer.height.map { $0.value(at: t) }.flatMap { $0 > 0 ? $0 : nil }
         var img: CGImage?
@@ -1949,7 +1956,7 @@ public final class FrameRenderer {
         var source: (CGImage?, CGSize)?
         if layer.type == .video {
             source = layer.path.flatMap(videoFrames).map { frames in
-                (layer.videoTime(at: t).flatMap { videoFrame(layer, frames, at: $0) }, frames.size)
+                (decode ? layer.videoTime(at: t).flatMap { videoFrame(layer, frames, at: $0) } : nil, frames.size)
             }
         } else {
             source = layer.path.flatMap(loadImage).map { ($0.0, $0.1) }
@@ -2331,7 +2338,7 @@ extension FrameRenderer {
             }
             return outline.pointOnOutline(r1)
         case .image, .video:
-            let r = imageFrame(src, at: t).rect
+            let r = imageFrame(src, at: t, decode: false).rect
             return MotionScene.rectPoint(r.width, r.height, r1, r2, edge)
         case .path:
             let shape = src.pathShape(at: t)

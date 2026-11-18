@@ -9,8 +9,12 @@ let package = Package(
         .executable(name: "vmotion", targets: ["vmotion"]),
         .library(name: "VeyMotionCore", targets: ["VeyMotionCore"]),
     ],
+    dependencies: [
+        // Pinned: 4.6 uses SwiftUI's @Entry macro, whose plugin ships with Xcode only (Command Line Tools cannot build it).
+        .package(url: "https://github.com/airbnb/lottie-ios.git", exact: "4.5.2"),
+    ],
     targets: [
-        .target(name: "VeyMotionCore"),
+        .target(name: "VeyMotionCore", dependencies: [.product(name: "Lottie", package: "lottie-ios")]),
         .target(name: "VeyMotionMCP", dependencies: ["VeyMotionCore"]),
         .executableTarget(name: "VeyMotionApp", dependencies: ["VeyMotionCore", "VeyMotionMCP"]),
         .executableTarget(name: "vmotion", dependencies: ["VeyMotionCore", "VeyMotionMCP"]),

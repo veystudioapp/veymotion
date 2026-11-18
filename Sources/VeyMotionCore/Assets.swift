@@ -165,6 +165,7 @@ extension AssetStore {
 
     public static func kind(of url: URL) -> AssetKind {
         if FontLibrary.fileExtensions.contains(url.pathExtension.lowercased()) { return .font }
+        if LottieSource.fileExtensions.contains(url.pathExtension.lowercased()), LottieSource.isLottie(url.path) { return .video }
         guard let type = UTType(filenameExtension: url.pathExtension.lowercased()) else { return .other }
         if type.conforms(to: .image) { return .image }
         if type.conforms(to: .audio) { return .audio }
@@ -466,6 +467,7 @@ extension AssetStore {
 
     /// A downscaled image (about `maxPixels` on its longer side), or nil if the file is not an image.
     public static func thumbnail(_ url: URL, maxPixels: Int) -> CGImage? {
+        if LottieSource.isLottie(url.path) { return LottieSource.thumbnail(url.path, maxPixels: maxPixels) }
         let opts: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,

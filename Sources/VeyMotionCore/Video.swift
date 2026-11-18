@@ -12,8 +12,9 @@ public enum VideoPlayback: String, Codable, CaseIterable, Sendable {
     case loop
 }
 
-/// Sources of a video layer: a movie file (.mov/.mp4/.m4v, ProRes 4444 keeps alpha) or a folder of numbered images
-/// (an image sequence such as a Blender render, sorted by file name; PNG keeps alpha).
+/// Sources of a video layer: a movie file (.mov/.mp4/.m4v, ProRes 4444 keeps alpha), a folder of numbered images
+/// (an image sequence such as a Blender render, sorted by file name; PNG keeps alpha) or a Lottie animation
+/// (`LottieSource`, drawn as vectors).
 public enum VideoSource {
     static let sequenceExtensions: Set<String> = ["png", "jpg", "jpeg", "tif", "tiff", "exr", "webp", "heic", "bmp", "tga"]
 
@@ -43,6 +44,7 @@ public enum VideoSource {
     public static func info(of path: String) throws -> Info {
         let p = expand(path)
         guard FileManager.default.fileExists(atPath: p) else { throw SceneError.invalid("File not found: \(path)") }
+        if LottieSource.isLottie(p) { return try LottieSource.info(of: p) }
         if isSequence(p) {
             let files = sequenceFiles(p)
             guard let first = files.first else { throw SceneError.invalid("No images (png, jpg, tiff, exr…) in folder \(path)") }
@@ -109,7 +111,8 @@ extension MovieFrames { var frameDuration: Double? { info.frameDuration } }
 
 enum VideoFramesFactory {
     static func open(_ path: String) -> VideoFrames? {
-        VideoSource.isSequence(path) ? SequenceFrames(path: path) : MovieFrames(url: URL(fileURLWithPath: VideoSource.expand(path)))
+        if LottieSource.isLottie(path) { return LottieFrames(path: path) }
+        return VideoSource.isSequence(path) ? SequenceFrames(path: path) : MovieFrames(url: URL(fileURLWithPath: VideoSource.expand(path)))
     }
 }
 

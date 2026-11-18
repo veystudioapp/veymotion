@@ -276,7 +276,7 @@ vmotion render scene.json out.mp4
   fill, stroke, fillRule, lineCap, lineJoin),
   `text` (text, fontSize, fontWeight, fontName = any installed font, a font file in the asset library, or a Google
   font imported with `search_stock`/`import_stock` kind `font`; color, align, maxWidth), `image` (path, width, height),
-  `video` (path to a .mov/.mp4 or a folder of numbered images, width, height, trimIn, speed,
+  `video` (path to a .mov/.mp4, a folder of numbered images or a Lottie .json/.lottie, width, height, trimIn, speed,
   playback `once`/`hold`/`loop`, fps for image sequences, `timeRemap` for speed ramps/freezes/reverse), `particles`
   (see below), `generator` (audio `spectrum`/`waveform` visualizers in bars, line or circle; fractal `noise`;
   `lightning`; `grid`; `chart` bar/line/area/pie/donut from `values`; lens `flare`), `group` (`children` drawn as one
