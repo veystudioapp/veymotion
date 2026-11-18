@@ -460,6 +460,7 @@ struct CanvasView: View {
                 FrameCache.shared.setSource(store.scene, revision: s.revision, pixelWidth: s.pixelWidth, playhead: store.time)
             }
             .onChange(of: key, initial: true) { _, k in
+                FrameCache.shared.follow(k.time, playing: store.isPlaying)
                 preview.request(store.scene, at: k.time, scale: k.scale, fast: store.isPlaying, cacheKey: FrameCache.shared.key)
             }
             // An image file overwritten in place (e.g. by write_asset) leaves the scene unchanged.

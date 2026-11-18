@@ -6,7 +6,8 @@ import VeyMotionCore
 
 /// RAM preview, After Effects style: canvas frames at the playback resolution, kept for one scene revision.
 /// Frames the canvas renders are kept, and while the scene is unchanged for a moment background workers render
-/// the rest (from the playhead to the end, then from the start), so playback runs from memory instead of
+/// the rest (from the playhead to the end, then from the start; while playing, ahead of the playhead as it
+/// moves: `follow`), so playback runs from memory instead of
 /// rendering each frame in 1/fps. A scene edit drops only the frames it can have changed
 /// (`MotionScene.change(since:)`); a canvas resize or an input change (asset file, audio analysis) drops them all,
 /// and memory pressure purges them.
@@ -48,6 +49,8 @@ final class FrameCache {
     @ObservationIgnored private var renderers: [FrameRenderer] = []
     @ObservationIgnored private var rendererGeneration = 0
     @ObservationIgnored private var publishPending = false
+    /// How long a worker takes per frame (moving average), to aim ahead of the playhead.
+    @ObservationIgnored private var renderSeconds = 0.05
 
     // Main thread only.
     @ObservationIgnored private var scene: MotionScene?
@@ -194,11 +197,14 @@ final class FrameCache {
 
     // MARK: - Background fill
 
+    /// Workers take the first missing frame from `aim` on (wrapping to the start), so moving `aim` redirects them.
     private final class FillJob {
-        let order: [Int]
-        var next = 0          // guarded by FrameCache.lock
-        var cancelled = false // guarded by FrameCache.lock
-        init(order: [Int]) { self.order = order }
+        let count: Int
+        var aim: Int              // guarded by FrameCache.lock
+        /// Frames a worker took (rendering or done): never taken twice, so one that fails to render is not retried.
+        var taken = Set<Int>()    // guarded by FrameCache.lock
+        var cancelled = false     // guarded by FrameCache.lock
+        init(count: Int, aim: Int) { self.count = count; self.aim = aim }
     }
 
     private func restartFill() {
@@ -224,7 +230,7 @@ final class FrameCache {
         let count = Self.frameCount(scene)
         guard count > 0, scene.width > 0 else { return }
         let start = min(max(Self.frame(at: playhead, fps: scene.fps) ?? Int(playhead * Double(scene.fps)), 0), count - 1)
-        let job = FillJob(order: Array(start..<count) + Array(0..<start))
+        let job = FillJob(count: count, aim: start)
         lock.withLock {
             self.job?.cancelled = true
             self.job = job
@@ -237,6 +243,7 @@ final class FrameCache {
                 let (renderer, gen) = takeRenderer()
                 defer { returnRenderer(renderer, generation: gen) }
                 while let f = nextFrame(of: job, frameBytes: frameBytes) {
+                    let began = Date()
                     autoreleasepool {
                         // Off the main thread and outside `withoutWaiting`, so audio reactions wait for their
                         // analysis: cached frames are final.
@@ -244,6 +251,8 @@ final class FrameCache {
                             insert(img, frame: f, key: key)
                         }
                     }
+                    let took = Date().timeIntervalSince(began)
+                    lock.withLock { renderSeconds += (took - renderSeconds) * 0.2 }
                 }
             }
         }
@@ -251,12 +260,35 @@ final class FrameCache {
 
     private func nextFrame(of job: FillJob, frameBytes: Int) -> Int? {
         lock.lock(); defer { lock.unlock() }
-        while !job.cancelled, job.next < job.order.count, bytes + frameBytes <= budget {
-            let f = job.order[job.next]
-            job.next += 1
-            if frames[f] == nil { return f }
+        guard !job.cancelled, bytes + frameBytes <= budget else { return nil }
+        for i in 0..<job.count {
+            let f = (job.aim + i) % job.count
+            if frames[f] == nil, job.taken.insert(f).inserted {
+                job.aim = (f + 1) % job.count
+                return f
+            }
         }
         return nil
+    }
+
+    /// Main thread, whenever the canvas shows another time. Playing, a frame missing at the playhead means the
+    /// workers are behind it: they are sent ahead by as many frames as one of them takes to render one, so what
+    /// they render next is ready when playback gets there (and a fill still waiting for the scene to settle starts
+    /// now). Paused, they start from the frame looked at.
+    func follow(_ t: Double, playing: Bool) {
+        guard let scene else { return }
+        let count = Self.frameCount(scene)
+        guard count > 0 else { return }
+        let p = min(max(Self.frame(at: t, fps: scene.fps) ?? Int(t * Double(max(scene.fps, 1))), 0), count - 1)
+        playhead = t
+        if playing, idleWork != nil {
+            idleWork?.cancel()
+            startFill()
+        }
+        lock.lock(); defer { lock.unlock() }
+        guard let job, !job.cancelled, frames[p] == nil else { return }
+        let lead = playing ? Int((renderSeconds * Double(max(scene.fps, 1))).rounded(.up)) + 1 : 0
+        job.aim = (p + lead) % count
     }
 
     /// Workers reuse renderers so decoded images and open video decoders survive edits.
