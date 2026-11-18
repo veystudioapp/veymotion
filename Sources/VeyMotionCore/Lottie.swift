@@ -120,6 +120,15 @@ final class LottieFrames: VideoFrames {
         layer.isGeometryFlipped = true
         layer.sublayers?.first?.position = CGPoint(x: b.midX, y: b.midY)
         CATransaction.commit()
+        // Building the layer queued one forceDisplayUpdate on the main queue (see `draw`): let it run before this
+        // thread draws, or the two threads rebuild the same shape layers at once and free each other's paths.
+        // The app's main thread never waits for renderers, and the CLI's runs dispatchMain, so this is short;
+        // the timeout only guards against a stalled main thread.
+        if !Thread.isMainThread {
+            let ran = DispatchSemaphore(value: 0)
+            DispatchQueue.main.async { ran.signal() }
+            _ = ran.wait(timeout: .now() + 5)
+        }
     }
 
     /// Draws the frame `seconds` into the animation into `rect` of a y-down context (stretched to it), as vectors.
@@ -133,8 +142,12 @@ final class LottieFrames: VideoFrames {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         if abs(layer.screenScale - scale) > 0.05 * scale { layer.screenScale = scale }
-        let frame = animation.startFrame + seconds * animation.framerate
-        layer.currentFrame = min(max(frame, animation.startFrame), animation.endFrame)
+        let frame = min(max(animation.startFrame + seconds * animation.framerate, animation.startFrame), animation.endFrame)
+        // Not `layer.currentFrame = …`: that setter commits with a completion block that calls forceDisplayUpdate
+        // again on the main queue, concurrently with this thread (crashes in CGPath/CAShapeLayer). The root layer's
+        // own `currentFrame` (@NSManaged, so KVC) takes the frame with no side effects; on this thread its display()
+        // returns at once (main thread only), and forceDisplayUpdate below does the work synchronously.
+        layer.animationLayer?.setValue(frame, forKey: "currentFrame")
         layer.forceDisplayUpdate()
         CATransaction.commit()
         ctx.saveGState()

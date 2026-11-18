@@ -34,6 +34,22 @@ SERVERS
 
 """
 
+/// Runs `work` on another thread while the main thread keeps serving its queue. lottie-ios queues a layer update
+/// there for every Lottie a renderer opens, and the renderer waits for it (`LottieFrames`): with the main thread
+/// blocked on an export, each one would wait out its timeout.
+func servingMain<T>(_ work: @escaping () -> T) -> T {
+    var result: T?
+    let done = DispatchSemaphore(value: 0)
+    Thread.detachNewThread {
+        result = work()
+        done.signal()
+    }
+    while done.wait(timeout: .now() + .milliseconds(5)) == .timedOut {
+        RunLoop.main.run(mode: .default, before: Date())
+    }
+    return result!
+}
+
 func fail(_ message: String, code: Int32 = 1) -> Never {
     FileHandle.standardError.write(Data((message + "\n").utf8))
     exit(code)
@@ -102,7 +118,8 @@ func runTool(_ tool: String, _ rest: [String]) -> Never {
     if let scenePath {
         do {
             let host = try FileSceneHost(url: URL(fileURLWithPath: scenePath))
-            response = MCPServer(host: host).handle(request) ?? [:]
+            let server = MCPServer(host: host)
+            response = servingMain { server.handle(request) ?? [:] }
         } catch { fail(error.localizedDescription) }
     } else {
         do {
@@ -246,12 +263,15 @@ case "render":
     }
     let started = Date()
     var lastPct = -1
-    do {
-        try VideoExporter.export(scene, to: url, options: options) { p in
-            let pct = Int(p * 100)
-            if pct / 10 != lastPct / 10 { lastPct = pct; FileHandle.standardError.write(Data("\(pct)%\n".utf8)) }
+    let exported = servingMain {
+        Result {
+            try VideoExporter.export(scene, to: url, options: options) { p in
+                let pct = Int(p * 100)
+                if pct / 10 != lastPct / 10 { lastPct = pct; FileHandle.standardError.write(Data("\(pct)%\n".utf8)) }
+            }
         }
-    } catch { fail(error.localizedDescription) }
+    }
+    if case .failure(let error) = exported { fail(error.localizedDescription) }
     print(String(format: "Wrote %@ (%d frames, %.1fs)", url.path, scene.frameCount, Date().timeIntervalSince(started)))
 
 case "mcp":
@@ -263,7 +283,12 @@ case "mcp":
         let host = try FileSceneHost(url: URL(fileURLWithPath: path))
         let server = MCPServer(host: host)
         server.log = { FileHandle.standardError.write(Data(("[vmotion] " + $0 + "\n").utf8)) }
-        MCPStdioTransport.run(server: server)
+        // Requests are handled off the main thread, which keeps serving its queue (see `LottieFrames`).
+        Thread.detachNewThread {
+            MCPStdioTransport.run(server: server)
+            exit(0)
+        }
+        dispatchMain()
     } catch { fail(error.localizedDescription) }
 
 case "serve":

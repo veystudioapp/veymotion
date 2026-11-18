@@ -101,8 +101,13 @@ Easy Ease F9 / ⇧F9 / ⌘⇧F9).
   CoreGraphics, so `render(in:)` works offscreen on any thread) and `drawImage` draws it as vectors into the layer box
   (a bitmap only for removeBackground/frameBlend/tracking). The root layer is geometry-flipped in a y-down context
   (flipping only the context turns images and text upside down) and its animation layer is centered by hand (the
-  view normally does it). Cost grows with drawn area (~7 ms per megapixel); Lottie drop-shadow effects come out as
-  boxes. lottie-ios is pinned to 4.5.2 (4.6 needs SwiftUI's `@Entry` macro plugin, which only Xcode has); in the
+  view normally does it). Threads: `LottieAnimationLayer`'s frame setters (and building it) commit with a completion
+  block that runs `forceDisplayUpdate` on the main queue, which raced the renderer's thread and crashed the app
+  (freed CGPaths). So frames go to the root layer's `currentFrame` by KVC, and `LottieFrames.init` waits (≤ 5 s) for
+  the main queue to run the one block that building queues. Every process that renders off the main thread must
+  keep the main queue served: the app does; the CLI's `render` and `--scene` tools run through `servingMain`, and
+  `mcp`/`serve`/`daemon` through `dispatchMain`. Stress tests must service the main queue too, or this race never
+  shows. Cost grows with drawn area (~7 ms per megapixel); Lottie drop-shadow effects come out as boxes. lottie-ios is pinned to 4.5.2 (4.6 needs SwiftUI's `@Entry` macro plugin, which only Xcode has); in the
   sandbox, build it with `swiftc` from its `Sources/` like the other targets (its `.lottie` loader unzips into the
   system temp folder, so test with .json there).
 - Music sync (`AudioAnalysis.swift`): one FFT pass gives band envelopes, an onset curve (flux over log-spaced bands, so
