@@ -7,8 +7,9 @@ import VeyMotionCore
 /// RAM preview, After Effects style: canvas frames at the playback resolution, kept for one scene revision.
 /// Frames the canvas renders are kept, and while the scene is unchanged for a moment background workers render
 /// the rest (from the playhead to the end, then from the start), so playback runs from memory instead of
-/// rendering each frame in 1/fps. Any scene edit, canvas resize or input change (asset file, audio analysis)
-/// drops the frames; memory pressure purges them.
+/// rendering each frame in 1/fps. A scene edit drops only the frames it can have changed
+/// (`MotionScene.change(since:)`); a canvas resize or an input change (asset file, audio analysis) drops them all,
+/// and memory pressure purges them.
 @Observable
 final class FrameCache {
     static let shared = FrameCache()
@@ -129,14 +130,21 @@ final class FrameCache {
     // MARK: - Source
 
     /// Main thread. Called by the canvas whenever the scene or the playback size changes: a new key drops the
-    /// cached frames and (after a short idle delay) starts filling from `playhead`.
+    /// cached frames the edit can have changed (all of them for another size) and, after a short idle delay,
+    /// starts filling from `playhead`.
     func setSource(_ scene: MotionScene, revision: Int, pixelWidth: Int, playhead: Double) {
         let newKey = Key(revision: revision, pixelWidth: pixelWidth, generation: generation)
+        let previous = self.scene
         self.scene = scene
         guard newKey != key else { return }
         self.playhead = playhead
-        reset(to: newKey)
         if fps != scene.fps { fps = scene.fps }
+        // An edit keeps the frames it cannot have changed (most agent edits touch a layer or two).
+        if let previous, let old = key, old.pixelWidth == pixelWidth, old.generation == generation {
+            reset(to: newKey, dropping: scene.change(since: previous), fps: scene.fps)
+        } else {
+            reset(to: newKey)
+        }
     }
 
     /// Main thread. Something the frames depend on changed outside the scene (an asset file, an audio analysis).
@@ -160,17 +168,27 @@ final class FrameCache {
         }
     }
 
-    private func reset(to newKey: Key?, fill: Bool = true) {
+    /// Re-keys the cache, keeping the frames outside `change` (frame numbers at `fps`).
+    private func reset(to newKey: Key?, dropping change: SceneChange = .all, fps: Int = 1, fill: Bool = true) {
         idleWork?.cancel()
         idleWork = nil
         lock.lock()
         job?.cancelled = true
         job = nil
         _key = newKey
-        frames.removeAll()
-        bytes = 0
+        if change == .all {
+            frames.removeAll()
+            bytes = 0
+        } else {
+            let rate = Double(max(fps, 1))
+            for (f, img) in frames where change.contains(Double(f) / rate) {
+                frames[f] = nil
+                bytes -= img.bytesPerRow * img.height
+            }
+        }
+        let kept = IndexSet(frames.keys)
         lock.unlock()
-        if !cachedFrames.isEmpty { cachedFrames = IndexSet() }
+        if cachedFrames != kept { cachedFrames = kept }
         if fill, newKey != nil { scheduleFill() }
     }
 
