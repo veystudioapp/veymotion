@@ -195,21 +195,6 @@ struct ProjectsScreen: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            Divider()
-            HStack {
-                Button { store.showProjects = false } label: {
-                    Label(store.project == nil ? "Continue Without a Project" : "Back to \(store.project!.lastPathComponent)",
-                          systemImage: "chevron.left")
-                }
-                .keyboardShortcut(.cancelAction)
-                Spacer()
-                Button("Open") { if let selection { open(selection) } }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(selection == nil)
-            }
-            .padding(.horizontal, 28)
-            .padding(.vertical, 12)
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .navigationTitle("Vey Motion")
