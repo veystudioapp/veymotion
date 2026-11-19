@@ -100,8 +100,8 @@ public final class MCPServer {
             guard let obj = a["scene"] as? [String: Any] else { throw ToolError("`scene` must be an object") }
             var scene = try SceneJSON.decode(MotionScene.self, fromObject: obj)
             let problems = scene.refreshMediaInfo()
-            // A flat scene gets a look by default, so a one-line prompt still comes out finished.
-            let lookArg = (a["look"] as? String ?? "auto").lowercased()
+            // The scene is kept as given unless the agent asks for a look: a flat background can be the design.
+            let lookArg = (a["look"] as? String ?? "none").lowercased()
             var lookNote = ""
             if lookArg != "none" && lookArg != "auto" {
                 guard let kind = LookKind(rawValue: lookArg) else {
@@ -110,7 +110,7 @@ public final class MCPServer {
                 try scene.applyLook(kind)
                 lookNote = " Applied the \(kind.title) look."
             } else if lookArg == "auto", let kind = try scene.applyAutoLook() {
-                lookNote = " The background was flat, so the \(kind.title) look was added (groups look / look-finish; apply_look to change it, remove_look or \"look\":\"none\" to drop it)."
+                lookNote = " The background was flat, so the \(kind.title) look was added (groups look / look-finish; apply_look to change it, remove_look to drop it)."
             }
             try host.mutate("Set Scene") { $0 = scene }
             let design = scene.designIssues(renderer: FrameRenderer()).filter { $0.severity >= .warning }

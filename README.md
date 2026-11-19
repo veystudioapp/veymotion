@@ -284,7 +284,7 @@ vmotion render scene.json out.mp4
   `stabilize` (removes camera shake), `sync_to_beats` (presets, pulses, cuts or flashes on the music's beats),
   `add_template` (lower third, call-out, subscribe, end card, title card, quote), `apply_look` (cinematic, clean,
   neon, retro, sunset, studio: gradient backdrop, drifting lights, dust, vignette, grain and a slow camera push in one
-  call; also Add → Look in the app; `set_scene` adds one by itself when the background is flat), `check_design`
+  call; also Add → Look in the app; `set_scene` adds one only when asked with `look`), `check_design`
   (lints for what makes a draft: flat background, system font, unlit layers, static stretches, text on the edge; and
   for what makes a piece look machine-made: one entrance on everything, no stagger, too many fonts or hues, text
   shown too briefly, weak contrast against the pixels behind it, overlapping or almost-aligned text, text under a

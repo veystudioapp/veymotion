@@ -757,12 +757,12 @@ enum Docs {
       },
       {
         "name": "set_scene",
-        "description": "Replace the entire scene. Use this to build a new composition in one step. See the server instructions for the format. When the scene's background is one flat color, a look is applied automatically (`look` auto): pass a look kind to choose it, or \"none\" to keep the scene exactly as given. The result includes a design check: fix what it lists before you finish.",
+        "description": "Replace the entire scene. Use this to build a new composition in one step. See the server instructions for the format. The scene is kept exactly as given (`look` none). Pass a look kind to add that ready-made backdrop + finish, or \"auto\" to add one only when the background is one flat color. The result includes a design check: fix the problems it lists before you finish.",
         "inputSchema": {
           "type": "object",
           "properties": {
             "scene": { "type": "object", "description": "Full scene JSON: width, height, fps, duration, background, layers." },
-            "look": { "type": "string", "enum": ["auto", "none", "cinematic", "clean", "neon", "retro", "sunset", "studio"], "default": "auto" }
+            "look": { "type": "string", "enum": ["none", "auto", "cinematic", "clean", "neon", "retro", "sunset", "studio"], "default": "none" }
           },
           "required": ["scene"]
         }

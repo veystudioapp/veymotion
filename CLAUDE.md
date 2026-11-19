@@ -263,8 +263,9 @@ Easy Ease F9 / ⇧F9 / ⌘⇧F9).
   overshoot easing on ≥ 40% of ≥ 12 animated layers, ≥ 1 s with under 1% of the frame covered by a subject,
   outlines grown with scale so the drawn stroke is ≥ 2× strokeWidth: `scaled-stroke`, fixed by preset `ripple`) behind the
   `check_design` tool, whose reply ends with `reviewNote` (`reviewTimes`: one time per top-level group for the agent
-  to `render_frame` at full size, since the lint cannot see drawings); `set_scene` runs it and, unless `look` is "none", `applyAutoLook` adds a look to a scene whose
-  background is flat (`hasBackgroundDepth`), picking the kind from the background's luminance. In the app,
+  to `render_frame` at full size, since the lint cannot see drawings); `set_scene` runs it and keeps the scene as given by default; only with `look` "auto" does `applyAutoLook`
+  add a look to a scene whose background is flat (`hasBackgroundDepth`), picking the kind from the background's
+  luminance (a flat background can be the design, so nothing adds one unasked). In the app,
   `ChatStore` puts `design=` (the lint summary) and `style=` (the project's `ChatStyle`: look + font pairing,
   chosen in the composer's Style popover, saved in `.chat.json`) on every context line (lint with `pixels: false`:
   no renders on the main thread), and after a turn that changed the scene `startReview` runs off the main thread:
