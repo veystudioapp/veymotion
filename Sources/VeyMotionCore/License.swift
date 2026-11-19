@@ -8,7 +8,7 @@ import IOKit
 /// the rest is checked here, in the app and the CLI.
 public enum ProFeature: String, CaseIterable, Sendable {
     // Through the VeyMotion server (cost money per use).
-    case vietnameseVoice, stockVideo
+    case stockVideo
     // Export.
     case highResExport, proResExport, noWatermark
     // Content a Free scene can preview but not export.
@@ -18,7 +18,6 @@ public enum ProFeature: String, CaseIterable, Sendable {
 
     public var title: String {
         switch self {
-        case .vietnameseVoice: return "Vietnamese voices (VieNeu)"
         case .stockVideo: return "Stock video"
         case .highResExport: return "Export above 1080p"
         case .proResExport: return "ProRes 4444 export"
@@ -211,7 +210,7 @@ public enum License {
 
     /// Where to buy and manage Pro, from the server. Blocking.
     public static func serverInfo() throws -> ServerInfo {
-        let base = VieNeu.baseURL
+        let base = VeyServer.baseURL
         guard let url = URL(string: base.absoluteString + "/api/license") else { throw LicenseError.failed("Invalid BASE_API_URL") }
         let r = try HTTP.perform(HTTP.request(url, timeout: 15))
         guard (200..<300).contains(r.response?.statusCode ?? 0),
@@ -369,7 +368,7 @@ public enum License {
     // MARK: HTTP
 
     private static func call(_ path: String, json: [String: Any], token: String?) throws -> (Data, Int) {
-        let base = VieNeu.baseURL
+        let base = VeyServer.baseURL
         guard let url = URL(string: base.absoluteString + path) else { throw LicenseError.failed("Invalid BASE_API_URL: \(base)") }
         var req = HTTP.request(url, timeout: 30)
         req.httpMethod = "POST"

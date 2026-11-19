@@ -154,7 +154,7 @@ struct UpgradeSheet: View {
                                                 endPoint: .bottomTrailing))
                 .symbolEffect(.bounce, value: store.isPro)
             Text("You're Pro").font(.system(size: 30, weight: .bold))
-            Text("Thank you for supporting Vey Motion. 4K and ProRes export without a watermark, the Vietnamese voices, stock video, 3D and every Pro tool are now on for this Mac.")
+            Text("Thank you for supporting Vey Motion. 4K and ProRes export without a watermark, stock video, 3D and every Pro tool are now on for this Mac.")
                 .font(.callout).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 360)
@@ -266,12 +266,12 @@ private struct ProPerk: Identifiable {
                 detail: "Sharp masters, and alpha for compositing.", features: [.highResExport, .proResExport]),
         ProPerk(id: "watermark", symbol: "checkmark.seal", tint: .green, title: "No watermark",
                 detail: "Your brand on every frame, not ours.", features: [.noWatermark]),
-        ProPerk(id: "voice", symbol: "waveform", tint: .orange, title: "Vietnamese voices",
-                detail: "Natural VieNeu voice-overs from your script.", features: [.vietnameseVoice]),
         ProPerk(id: "stock", symbol: "film.stack", tint: .pink, title: "Stock video",
                 detail: "Pexels and Pixabay clips, searchable in the app.", features: [.stockVideo]),
-        ProPerk(id: "3d", symbol: "cube.transparent", tint: .purple, title: "3D and cut-outs",
-                detail: "3D layers and models, background removal.", features: [.threeD, .backgroundRemoval]),
+        ProPerk(id: "3d", symbol: "cube.transparent", tint: .purple, title: "3D layers and models",
+                detail: "Extruded logos, lathed shapes and model files.", features: [.threeD]),
+        ProPerk(id: "cutout", symbol: "person.crop.rectangle", tint: .orange, title: "Background removal",
+                detail: "Cut people and subjects out of any video.", features: [.backgroundRemoval]),
         ProPerk(id: "tools", symbol: "scope", tint: .teal, title: "Pro tools",
                 detail: "Tracking, auto reframe, stabilize, templates, graph editor.",
                 features: [.motionTracking, .autoReframe, .stabilize, .templates, .graphEditor]),

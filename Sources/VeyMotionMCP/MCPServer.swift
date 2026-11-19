@@ -309,11 +309,6 @@ public final class MCPServer {
             ]]
 
         case "list_voices":
-            if try voiceEngine(a) == "vieneu" {
-                let voices = try VieNeu.voices()
-                return text(voices.map(\.label).joined(separator: "\n")
-                    + "\n(VieNeu: Vietnamese voices; pass the id before \" — \" as `voice` with engine \"vieneu\")")
-            }
             let lang = a["language"] as? String
             let voices = VoiceSynth.voices(language: lang)
             if voices.isEmpty {
@@ -327,15 +322,10 @@ public final class MCPServer {
             let start = number(a["start"]) ?? 0
             let rate = min(max(number(a["rate"]) ?? 1, 0.5), 2)
             let folder = AssetStore.routed(nil, default: "voice")
-            let result: VoiceResult
-            if try voiceEngine(a) == "vieneu" {
-                result = try VieNeu.synthesize(script, voice: a["voice"] as? String, speed: rate, folder: folder)
-            } else {
-                let url = try AssetStore.newFile(prefix: "voice", ext: "caf", folder: folder)
-                result = try VoiceSynth.synthesize(script, voiceId: a["voice"] as? String,
+            let url = try AssetStore.newFile(prefix: "voice", ext: "caf", folder: folder)
+            let result = try VoiceSynth.synthesize(script, voiceId: a["voice"] as? String,
                                                    language: a["language"] as? String,
                                                    rate: rate, to: url)
-            }
             var layer = MotionLayer(id: a["id"] as? String ?? "vo", name: "Voice", type: .audio)
             layer.role = .voice
             layer.path = result.url.path
@@ -1245,13 +1235,6 @@ public final class MCPServer {
         if let n = v as? NSNumber { return n.doubleValue }
         if let s = v as? String { return Double(s) }
         return nil
-    }
-
-    /// Text-to-speech engine: "macos" (default, voices built into macOS) or "vieneu" (Vietnamese cloud voices).
-    private func voiceEngine(_ a: [String: Any]) throws -> String {
-        let e = (a["engine"] as? String)?.lowercased() ?? "macos"
-        guard e == "macos" || e == "vieneu" else { throw ToolError("`engine` must be \"macos\" or \"vieneu\"") }
-        return e
     }
 }
 

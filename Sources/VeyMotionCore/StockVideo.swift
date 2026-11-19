@@ -1,7 +1,7 @@
 import Foundation
 
 /// Free stock video (Pexels and Pixabay) through the VeyMotion server (`/api/stock/videos`), which holds the API
-/// keys. The server is the one at `VieNeu.baseURL` (`BASE_API_URL`). The video files themselves come straight from
+/// keys. The server is the one at `VeyServer.baseURL` (`BASE_API_URL`). The video files themselves come straight from
 /// the sources' CDNs.
 enum StockVideoSearch {
     static let refPrefixes = ["pexels", "pixabay"]
@@ -66,7 +66,7 @@ enum StockVideoSearch {
     // MARK: HTTP
 
     private static func call(_ pathAndQuery: String) throws -> [String: Any] {
-        let base = VieNeu.baseURL
+        let base = VeyServer.baseURL
         guard let url = URL(string: base.absoluteString + pathAndQuery) else {
             throw AssetError.failed("Invalid BASE_API_URL: \(base)")
         }

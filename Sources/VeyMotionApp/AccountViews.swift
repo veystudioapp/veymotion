@@ -69,7 +69,7 @@ final class LicenseStore {
                 if links?.configured == false { problem = problem ?? "Licensing is not set up on the VeyMotion server yet." }
                 else if links?.checkoutURL == nil { problem = problem ?? "The VeyMotion server has no checkout link (NITRO_LICENSE_CHECKOUT_URL)." }
             } catch {
-                problem = problem ?? "Cannot reach the VeyMotion server at \(VieNeu.baseURL.absoluteString) to buy or activate Pro."
+                problem = problem ?? "Cannot reach the VeyMotion server at \(VeyServer.baseURL.absoluteString) to buy or activate Pro."
             }
             let found = links, why = problem
             await MainActor.run {
@@ -207,7 +207,7 @@ struct AccountPanel: View {
 
     static let highlights = [
         "Export in 4K and ProRes 4444 with alpha, no watermark",
-        "Vietnamese voices (VieNeu), stock video",
+        "Stock video",
         "3D layers and models, background removal",
         "Motion tracking, auto reframe, stabilize, templates, graph editor",
     ]
@@ -234,7 +234,7 @@ struct UpgradeToolbarButton: View {
         }
         .help(store.isPro ? "VeyMotion Pro is active on this Mac"
               : store.info != nil ? "VeyMotion Pro is paused: this Mac needs to reach the server"
-              : "Unlock 4K export without watermark, VieNeu voices, stock video, 3D and more")
+              : "Unlock 4K export without watermark, stock video, 3D and more")
         .popover(isPresented: $showPanel, arrowEdge: .bottom) {
             AccountPanel().padding(16).frame(width: 400)
         }

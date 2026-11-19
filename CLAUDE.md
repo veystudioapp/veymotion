@@ -128,11 +128,10 @@ Easy Ease F9 / ⇧F9 / ⌘⇧F9).
   `addCaptions(for:)` works on them; `setCaptionTexts` swaps caption text (translations). Speech recognition needs
   `NSSpeechRecognitionUsageDescription` (only the bundled app has it); without it `Transcriber` throws instead of
   letting macOS kill the process, so the debug build and `vmotion --scene` cannot transcribe.
-- Text-to-speech has two engines behind `generate_voice` / `list_voices` (`engine`) and the Voice-over sheet:
-  `VoiceSynth` (macOS, exact word timings) and `VieNeu` (`VieNeu.swift`), which calls the Nitro server in
-  `server/` (`/api/tts/*`; it holds the VieNeu key) at `BASE_API_URL` (env, else a `.env` in the working dir /
-  next to the binary / Application Support). VieNeu gives no word timings, so `VoiceSynth.estimateTimings` fills them.
-  Short text uses `/api/tts/speech` (WAV); text over 1500 characters goes through `/api/tts/jobs` and polling.
+- Text-to-speech (`generate_voice` / `list_voices`, the Voice-over sheet) is `VoiceSynth` only: macOS voices, exact
+  word timings. The Nitro server in `server/` (licenses, stock video, app updates) is reached at `VeyServer.baseURL`
+  (`VeyServer.swift`): `BASE_API_URL` from the env, else a `.env` in the working dir / next to the binary /
+  Application Support / the bundle's Resources.
 - Social video sizes (`Platforms.swift`): `PlatformPreset` sizes feed `ExportOptions.size`; when the
   aspect differs, `VideoExporter` renders the scene into its own bitmap and places it per `ExportFit` (bars or crop).
   The app has no publishing: videos are exported and uploaded by the user.
@@ -322,8 +321,8 @@ Easy Ease F9 / ⇧F9 / ⌘⇧F9).
   (`refreshIfDue`, at launch and on app activation). No database: Polar holds keys/activations. The token lives in
   Application Support/VeyMotion/license.json (not the keychain: the CLI reads it too) and is checked offline against
   `License.publicKeyBase64` (empty = everyone is Free). Gates: `License.require(.feature)` sits in Core entry points
-  (VieNeu synthesis, stock video, tracking/saliency/shake, `addTemplate`), so UI and MCP tools share it;
-  the server checks the token on TTS/stock routes too (`requirePro`, Polar re-checked hourly).
+  (stock video, tracking/saliency/shake, `addTemplate`), so UI and MCP tools share it;
+  the server checks the token on the stock routes too (`requirePro`, Polar re-checked hourly).
   `VideoExporter` calls `License.prepareExport`: Free refuses ProRes and Pro content (`proContent`: 3D/models,
   removeBackground), fits into 1080p and draws `Watermark`. Debug builds only: `VEYMOTION_PRO=1` forces Pro and
   `VEYMOTION_LICENSE_PUBLIC_KEY` overrides the key.

@@ -65,7 +65,7 @@ public struct AppRelease: Codable, Equatable, Sendable {
 
     /// Asks the server for the newest release. Blocking: do not call on the main thread.
     public static func latest(timeout: TimeInterval = 20) throws -> AppRelease {
-        let base = VieNeu.baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let base = VeyServer.baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         guard let url = URL(string: base + "/api/app/latest") else { throw AssetError.failed("Invalid BASE_API_URL: \(base)") }
         let (data, response): (Data, HTTPURLResponse?)
         do {
