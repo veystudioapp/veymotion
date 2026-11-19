@@ -96,8 +96,9 @@ struct ContentView: View {
             }
             .help("Show or hide Layers, Assets and the Inspector (⌃⌘S)")
         }
-        // Left to right: make something, talk about a frame, then what the app wants to tell you, and the way
-        // out (Export) as the one filled button, next to the toggle of the chat column.
+        // Left to right, each its own group (macOS 26 draws a group as one glass capsule): the editing tools (make
+        // something, talk about a frame), then what the app wants to tell you (update, plan), the way out (Export)
+        // as the one filled button, and the toggle of the chat column.
         ToolbarItemGroup(placement: .primaryAction) {
             addMenu
             Button {
@@ -109,17 +110,34 @@ struct ContentView: View {
             }
             .help("Pause and mark up this frame, then send it to Claude (⇧⌘A)")
             .keyboardShortcut("a", modifiers: [.command, .shift])
+        }
+        groupGap
+        ToolbarItemGroup(placement: .primaryAction) {
             UpdateToolbarButton()
             UpgradeToolbarButton()
+        }
+        groupGap
+        ToolbarItem(placement: .primaryAction) {
             Button { store.exportVideo() } label: {
                 Label("Export", systemImage: "square.and.arrow.up").labelStyle(.titleAndIcon)
             }
             .buttonStyle(.borderedProminent)
             .help("Export the video (⌘E)")
+        }
+        groupGap
+        ToolbarItem(placement: .primaryAction) {
             Button { withAnimation(.easeOut(duration: 0.2)) { showChat.toggle() } } label: {
                 Label("Chat", systemImage: "sidebar.right")
             }
             .help("Show or hide the chat (⌘L)")
+        }
+    }
+
+    /// Splits toolbar groups into separate capsules on macOS 26 (earlier systems draw no capsules).
+    @ToolbarContentBuilder
+    private var groupGap: some ToolbarContent {
+        if #available(macOS 26.0, *) {
+            ToolbarSpacer(.fixed, placement: .primaryAction)
         }
     }
 }
