@@ -18,7 +18,10 @@ struct ContentView: View {
     /// The transport bar shows a compact scrubber instead.
     @AppStorage("showTimeline") private var showTimeline = false
 
+    @AppStorage("ui.sidebarWidth") private var sidebarWidth: Double = 320
+
     private static let editPanelMinWidth: CGFloat = 290
+    private static let editPanelMaxWidth: Double = 480
     private static let canvasMinWidth: CGFloat = 420
 
     /// The window shows either the Projects screen (at launch, ⇧⌘P) or the editor.
@@ -33,20 +36,21 @@ struct ContentView: View {
         .sheet(isPresented: Bindable(store).showNewProject) { NewProjectSheet() }
     }
 
-    /// The Layers/Inspector column, as the split view's sidebar (its own toggle and ⌃⌘S both drive `showSidebar`).
-    private var sidebarVisibility: Binding<NavigationSplitViewVisibility> {
-        Binding(get: { showSidebar ? .all : .detailOnly },
-                set: { v in showSidebar = v != .detailOnly })
-    }
-
-    /// Same frame as the Projects screen: Layers/Inspector as the sidebar, the canvas with transport and timeline as
-    /// the detail, and the chat as the inspector column on the right. Both side columns are opaque (`opaqueColumn`).
+    /// Layers/Inspector on the left and the chat on the right are both plain full-height columns, flush with the
+    /// window edge (no floating, rounded sidebar: that is all `NavigationSplitView` offers on macOS 26), sliding in
+    /// from their edge when shown. The canvas with transport and timeline sits between them.
     private var editor: some View {
-        NavigationSplitView(columnVisibility: sidebarVisibility) {
-            EditPanel()
-                .opaqueColumn()
-                .navigationSplitViewColumnWidth(min: Self.editPanelMinWidth, ideal: 320, max: 480)
-        } detail: {
+        HStack(spacing: 0) {
+            if showSidebar {
+                HStack(spacing: 0) {
+                    EditPanel()
+                        .frame(width: min(max(sidebarWidth, Double(Self.editPanelMinWidth)), Self.editPanelMaxWidth))
+                        .opaqueColumn()
+                    ColumnResizeHandle(width: $sidebarWidth,
+                                       range: Double(Self.editPanelMinWidth)...Self.editPanelMaxWidth)
+                }
+                .transition(.move(edge: .leading))
+            }
             VStack(spacing: 0) {
                 CanvasView()
                     .overlay(alignment: .bottom) { CanvasToast().padding(.bottom, 10) }
@@ -57,11 +61,12 @@ struct ContentView: View {
                 }
             }
             .frame(minWidth: Self.canvasMinWidth, maxWidth: .infinity)
-            // Declared on the detail so they sit over the canvas; the chat's own items sit over the chat.
-            .toolbar { editorToolbar }
         }
-        // On the split view, not the detail: a full-height column with its own part of the toolbar, so the
-        // editor's items stay over the canvas and only Versions / New conversation sit over the chat.
+        // Every way of toggling it (toolbar, ⌃⌘S, the menus, the composer's layer chip) animates the same.
+        .animation(.easeInOut(duration: 0.25), value: showSidebar)
+        .toolbar { editorToolbar }
+        // On the root: a full-height column with its own part of the toolbar, so the editor's items stay over the
+        // canvas and only Versions / New conversation sit over the chat.
         .inspector(isPresented: $showChat) {
             ChatPanel()
                 .opaqueColumn()
@@ -83,6 +88,12 @@ struct ContentView: View {
                 Label("Projects", systemImage: "square.grid.2x2")
             }
             .help("Back to Projects (⇧⌘P)")
+        }
+        ToolbarItem(placement: .navigation) {
+            Button { showSidebar.toggle() } label: {
+                Label("Layers & Inspector", systemImage: "sidebar.left")
+            }
+            .help("Show or hide Layers, Assets and the Inspector (⌃⌘S)")
         }
         // Left to right: make something, talk about a frame, then what the app wants to tell you, and the way
         // out (Export) as the one filled button, next to the toggle of the chat column.
@@ -156,6 +167,30 @@ extension ContentView {
             Label("Add", systemImage: "plus")
         }
         .help("Add text, shapes, media, particles, generators, 3D objects or templates")
+    }
+}
+
+/// Vertical divider that can be dragged to resize the column on its left.
+struct ColumnResizeHandle: View {
+    @Binding var width: Double
+    let range: ClosedRange<Double>
+    @State private var startWidth: Double?
+
+    var body: some View {
+        Rectangle()
+            .fill(Color(nsColor: .separatorColor))
+            .frame(width: 1)
+            .padding(.horizontal, 2)
+            .contentShape(Rectangle())
+            .padding(.horizontal, -2)
+            .onHover { inside in if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() } }
+            .gesture(DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                .onChanged { v in
+                    if startWidth == nil { startWidth = min(max(width, range.lowerBound), range.upperBound) }
+                    width = min(max((startWidth ?? width) + Double(v.translation.width), range.lowerBound),
+                                range.upperBound)
+                }
+                .onEnded { _ in startWidth = nil })
     }
 }
 
