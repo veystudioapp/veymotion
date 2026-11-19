@@ -2,36 +2,31 @@ import AppKit
 import SwiftUI
 import VeyMotionMCP
 
-/// Top of the chat column: who you are talking to, then Versions and New conversation.
-/// (Claude or Codex is picked in the composer's model picker.)
-struct ChatHeader: View {
-    @Environment(ChatStore.self) private var chat
-
-    var body: some View {
-        HStack(spacing: 6) {
-            AgentLogo(provider: chat.provider, size: 14)
-            Text(chat.provider.displayName).font(.callout.weight(.semibold))
-            Spacer(minLength: 0)
-            ChatHeaderButtons()
-        }
-        .padding(.horizontal, 12)
-        .frame(height: 36)
+/// The chat column's toolbar items (it has no header bar of its own; who you talk to shows in the composer's model
+/// picker): Versions, then New conversation.
+struct ChatToolbar: ToolbarContent {
+    var body: some ToolbarContent {
+        ToolbarItem(placement: .primaryAction) { VersionsToolbarButton() }
+        ToolbarItem(placement: .primaryAction) { NewChatToolbarButton() }
     }
 }
 
-struct ChatHeaderButtons: View {
-    @Environment(ChatStore.self) private var chat
+private struct VersionsToolbarButton: View {
     @State private var showVersions = false
 
     var body: some View {
-        HStack(spacing: 12) {
-            Button { showVersions.toggle() } label: { Image(systemName: "clock.arrow.circlepath") }
-                .help("The scene after each prompt")
-                .popover(isPresented: $showVersions, arrowEdge: .bottom) { VersionsPopover() }
-            Button { chat.newChat() } label: { Image(systemName: "square.and.pencil") }
-                .help("New conversation")
-        }
-        .buttonStyle(.borderless)
+        Button { showVersions.toggle() } label: { Label("Versions", systemImage: "clock.arrow.circlepath") }
+            .help("The scene after each prompt")
+            .popover(isPresented: $showVersions, arrowEdge: .bottom) { VersionsPopover() }
+    }
+}
+
+private struct NewChatToolbarButton: View {
+    @Environment(ChatStore.self) private var chat
+
+    var body: some View {
+        Button { chat.newChat() } label: { Label("New Conversation", systemImage: "square.and.pencil") }
+            .help("New conversation")
     }
 }
 

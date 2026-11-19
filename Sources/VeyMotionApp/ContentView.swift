@@ -56,46 +56,12 @@ struct ContentView: View {
                 }
             }
             .frame(minWidth: Self.canvasMinWidth, maxWidth: .infinity)
+            // Declared on the detail so they sit over the canvas; the chat's own items sit over the chat.
+            .toolbar { editorToolbar }
             .inspector(isPresented: $showChat) {
-                VStack(spacing: 0) {
-                    ChatHeader()
-                    Divider()
-                    ChatPanel()
-                }
-                .inspectorColumnWidth(min: 290, ideal: 340, max: 560)
-            }
-        }
-        .toolbar {
-            ToolbarItem(placement: .navigation) {
-                Button { store.showProjects = true } label: {
-                    Label("Projects", systemImage: "square.grid.2x2")
-                }
-                .help("Back to Projects (⇧⌘P)")
-            }
-            // Left to right: make something, talk about a frame, then what the app wants to tell you, and the way
-            // out (Export) as the one filled button, next to the toggle of the column under it.
-            ToolbarItemGroup(placement: .primaryAction) {
-                addMenu
-                Button {
-                    let a = AnnotationStore.shared
-                    withAnimation(.easeOut(duration: 0.15)) { a.isActive ? a.close() : a.begin() }
-                } label: {
-                    Label("Annotate", systemImage: "pencil.tip.crop.circle")
-                        .foregroundStyle(AnnotationStore.shared.isActive ? Color.accentColor : Color.primary)
-                }
-                .help("Pause and mark up this frame, then send it to Claude (⇧⌘A)")
-                .keyboardShortcut("a", modifiers: [.command, .shift])
-                UpdateToolbarButton()
-                UpgradeToolbarButton()
-                Button { store.exportVideo() } label: {
-                    Label("Export", systemImage: "square.and.arrow.up").labelStyle(.titleAndIcon)
-                }
-                .buttonStyle(.borderedProminent)
-                .help("Export the video (⌘E)")
-                Button { withAnimation(.easeOut(duration: 0.2)) { showChat.toggle() } } label: {
-                    Label("Chat", systemImage: "sidebar.right")
-                }
-                .help("Show or hide the chat (⌘L)")
+                ChatPanel()
+                    .toolbar { ChatToolbar() }
+                    .inspectorColumnWidth(min: 290, ideal: 340, max: 560)
             }
         }
         .navigationTitle(store.project?.lastPathComponent ?? store.fileURL?.deletingPathExtension().lastPathComponent ?? "Untitled")
@@ -104,6 +70,41 @@ struct ContentView: View {
         .sheet(isPresented: $showVoice) { VoiceOverSheet() }
         .sheet(isPresented: $showSoundEffect) { SoundEffectSheet() }
         .sheet(isPresented: Bindable(store).showExport) { ExportSheet() }
+    }
+
+    @ToolbarContentBuilder
+    private var editorToolbar: some ToolbarContent {
+        ToolbarItem(placement: .navigation) {
+            Button { store.showProjects = true } label: {
+                Label("Projects", systemImage: "square.grid.2x2")
+            }
+            .help("Back to Projects (⇧⌘P)")
+        }
+        // Left to right: make something, talk about a frame, then what the app wants to tell you, and the way
+        // out (Export) as the one filled button, next to the toggle of the chat column.
+        ToolbarItemGroup(placement: .primaryAction) {
+            addMenu
+            Button {
+                let a = AnnotationStore.shared
+                withAnimation(.easeOut(duration: 0.15)) { a.isActive ? a.close() : a.begin() }
+            } label: {
+                Label("Annotate", systemImage: "pencil.tip.crop.circle")
+                    .foregroundStyle(AnnotationStore.shared.isActive ? Color.accentColor : Color.primary)
+            }
+            .help("Pause and mark up this frame, then send it to Claude (⇧⌘A)")
+            .keyboardShortcut("a", modifiers: [.command, .shift])
+            UpdateToolbarButton()
+            UpgradeToolbarButton()
+            Button { store.exportVideo() } label: {
+                Label("Export", systemImage: "square.and.arrow.up").labelStyle(.titleAndIcon)
+            }
+            .buttonStyle(.borderedProminent)
+            .help("Export the video (⌘E)")
+            Button { withAnimation(.easeOut(duration: 0.2)) { showChat.toggle() } } label: {
+                Label("Chat", systemImage: "sidebar.right")
+            }
+            .help("Show or hide the chat (⌘L)")
+        }
     }
 }
 
