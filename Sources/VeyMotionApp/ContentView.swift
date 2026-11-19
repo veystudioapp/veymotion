@@ -59,12 +59,14 @@ struct ContentView: View {
             .frame(minWidth: Self.canvasMinWidth, maxWidth: .infinity)
             // Declared on the detail so they sit over the canvas; the chat's own items sit over the chat.
             .toolbar { editorToolbar }
-            .inspector(isPresented: $showChat) {
-                ChatPanel()
-                    .opaqueColumn()
-                    .toolbar { ChatToolbar() }
-                    .inspectorColumnWidth(min: 290, ideal: 340, max: 560)
-            }
+        }
+        // On the split view, not the detail: a full-height column with its own part of the toolbar, so the
+        // editor's items stay over the canvas and only Versions / New conversation sit over the chat.
+        .inspector(isPresented: $showChat) {
+            ChatPanel()
+                .opaqueColumn()
+                .toolbar { ChatToolbar() }
+                .inspectorColumnWidth(min: 290, ideal: 340, max: 560)
         }
         .navigationTitle(store.project?.lastPathComponent ?? store.fileURL?.deletingPathExtension().lastPathComponent ?? "Untitled")
         .navigationSubtitle([store.project != nil ? "Project" : nil, store.isDirty ? "Edited" : nil]

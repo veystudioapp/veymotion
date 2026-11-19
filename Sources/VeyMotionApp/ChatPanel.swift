@@ -11,6 +11,18 @@ struct ChatToolbar: ToolbarContent {
     }
 }
 
+/// On macOS 26 a scroll view runs on under the toolbar, its items floating over the messages; a hard edge stops
+/// the messages at the toolbar instead.
+private struct HardTopEdge: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(macOS 26.0, *) {
+            content.scrollEdgeEffectStyle(.hard, for: .top)
+        } else {
+            content
+        }
+    }
+}
+
 private struct VersionsToolbarButton: View {
     @State private var showVersions = false
 
@@ -60,6 +72,7 @@ struct ChatPanel: View {
                     }
                     .padding(12)
                 }
+                .modifier(HardTopEdge())
                 .onChange(of: chat.scrollToken) { _, _ in
                     withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo("bottom", anchor: .bottom) }
                 }
