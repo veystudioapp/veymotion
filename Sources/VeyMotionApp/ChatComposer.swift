@@ -188,6 +188,9 @@ private struct ModelPickerButton: View {
                 AgentLogo(provider: chat.provider, size: 14)
                 Text(chat.modelEfforts.isEmpty || chat.effort.isEmpty
                      ? chat.modelLabel : "\(chat.modelLabel) · \(ModelPicker.effortName(chat.effort))")
+                    // One line at any column width: the Style label beside it truncates instead.
+                    .lineLimit(1)
+                    .fixedSize()
                 Image(systemName: "chevron.down")
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(.secondary)
