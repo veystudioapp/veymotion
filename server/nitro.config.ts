@@ -3,12 +3,6 @@ import { defineConfig } from "nitro";
 export default defineConfig({
   serverDir: "./server",
   runtimeConfig: {
-    // Overridden at runtime by NITRO_VIENEU_API_KEY / NITRO_VIENEU_BASE_URL
-    // (VIENEU_API_KEY is also read as a fallback).
-    vieneu: {
-      apiKey: "",
-      baseUrl: "https://api.vieneu.io/api/v1",
-    },
     // Stock video (server/utils/stock.ts). Overridden by NITRO_PEXELS_API_KEY / NITRO_PIXABAY_API_KEY
     // (PEXELS_API_KEY / PIXABAY_API_KEY are also read). A source without a key is skipped.
     pexels: { apiKey: "" },
