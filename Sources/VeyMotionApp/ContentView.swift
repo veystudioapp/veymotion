@@ -33,37 +33,36 @@ struct ContentView: View {
         .sheet(isPresented: Bindable(store).showNewProject) { NewProjectSheet() }
     }
 
+    /// The Layers/Inspector column, as the split view's sidebar (its own toggle and ⌃⌘S both drive `showSidebar`).
+    private var sidebarVisibility: Binding<NavigationSplitViewVisibility> {
+        Binding(get: { showSidebar ? .all : .detailOnly },
+                set: { v in showSidebar = v != .detailOnly })
+    }
+
+    /// Same frame as the Projects screen: Layers/Inspector as the (on macOS 26 floating, glass) sidebar, the canvas
+    /// with transport and timeline as the detail, and the chat as the inspector column on the right.
     private var editor: some View {
-        HSplitView {
+        NavigationSplitView(columnVisibility: sidebarVisibility) {
+            EditPanel()
+                .navigationSplitViewColumnWidth(min: Self.editPanelMinWidth, ideal: 320, max: 480)
+        } detail: {
             VStack(spacing: 0) {
-                HSplitView {
-                    if showSidebar {
-                        EditPanel().frame(minWidth: Self.editPanelMinWidth, idealWidth: 320, maxWidth: 480)
-                    }
-                    VStack(spacing: 0) {
-                        CanvasView()
-                            .overlay(alignment: .bottom) { CanvasToast().padding(.bottom, 10) }
-                        TransportBar()
-                    }
-                    .frame(minWidth: Self.canvasMinWidth, maxWidth: .infinity)
-                }
+                CanvasView()
+                    .overlay(alignment: .bottom) { CanvasToast().padding(.bottom, 10) }
+                TransportBar()
                 if showTimeline {
                     ResizeHandle(height: $timelineHeight, range: 140...700)
                     TimelinePanel().frame(height: timelineHeight)
                 }
             }
-            // The outer split only sees this number: it must be what the inner split needs (panel + divider +
-            // canvas), or a wide chat column squeezes the workspace below it and the inner split, which cannot
-            // shrink, hangs out of both sides (the panel's left edge cut off by the window).
-            .frame(minWidth: showSidebar ? Self.editPanelMinWidth + 1 + Self.canvasMinWidth : Self.canvasMinWidth,
-                   maxWidth: .infinity)
-            if showChat {
+            .frame(minWidth: Self.canvasMinWidth, maxWidth: .infinity)
+            .inspector(isPresented: $showChat) {
                 VStack(spacing: 0) {
                     ChatHeader()
                     Divider()
                     ChatPanel()
                 }
-                .frame(minWidth: 290, idealWidth: 340, maxWidth: 560)
+                .inspectorColumnWidth(min: 290, ideal: 340, max: 560)
             }
         }
         .toolbar {
@@ -72,12 +71,6 @@ struct ContentView: View {
                     Label("Projects", systemImage: "square.grid.2x2")
                 }
                 .help("Back to Projects (⇧⌘P)")
-            }
-            ToolbarItem(placement: .navigation) {
-                Button { withAnimation(.easeOut(duration: 0.2)) { showSidebar.toggle() } } label: {
-                    Label("Layers & Inspector", systemImage: "sidebar.left")
-                }
-                .help("Show or hide Layers, Assets and the Inspector (⌃⌘S)")
             }
             // Left to right: make something, talk about a frame, then what the app wants to tell you, and the way
             // out (Export) as the one filled button, next to the toggle of the column under it.
