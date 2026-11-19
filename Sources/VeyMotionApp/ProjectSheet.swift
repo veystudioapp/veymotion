@@ -125,81 +125,86 @@ struct NewProjectSheet: View {
     }
 }
 
-/// The Projects screen: fills the window at launch and with File ▸ Projects… (⇧⌘P). Every project, with a preview,
-/// to open or manage. Leaving it (opening a project or going back) shows the editor.
+/// The Projects screen: fills the window at launch and with File ▸ Projects… (⇧⌘P). A sidebar (Home, All Projects,
+/// formats, search, the plan) and, on Home, the project being edited (or the latest one) as a large banner over
+/// shelves of the others. Leaving it (opening a project) shows the editor.
 struct ProjectsScreen: View {
+    fileprivate enum Filter: String, Hashable, Identifiable {
+        case home, all, landscape, portrait, square
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .home: "Home"
+            case .all: "All Projects"
+            case .landscape: "Landscape"
+            case .portrait: "Portrait"
+            case .square: "Square"
+            }
+        }
+        var symbol: String {
+            switch self {
+            case .home: "house"
+            case .all: "square.grid.2x2"
+            case .landscape: "rectangle"
+            case .portrait: "rectangle.portrait"
+            case .square: "square"
+            }
+        }
+        func includes(_ p: ProjectSummary) -> Bool {
+            let w = Double(p.width), h = Double(p.height)
+            switch self {
+            case .home, .all: return true
+            case .landscape: return w > h * 1.05
+            case .portrait: return h > w * 1.05
+            case .square: return w <= h * 1.05 && h <= w * 1.05
+            }
+        }
+        /// The shape of this format's cards on Home: posters for portrait scenes.
+        var cardAspect: CGFloat {
+            switch self {
+            case .portrait: 9 / 16
+            case .square: 1
+            default: 16 / 9
+            }
+        }
+    }
+
     @Environment(SceneStore.self) private var store
     @State private var projects: [ProjectSummary] = []
     @State private var search = ""
+    @State private var filter: Filter? = .home
     @State private var selection: URL?
     @State private var renaming: ProjectSummary?
     @State private var newName = ""
     @State private var confirmTrash: ProjectSummary?
     @State private var creating = false
 
-    private var shown: [ProjectSummary] {
-        let q = search.trimmingCharacters(in: .whitespaces)
-        return q.isEmpty ? projects : projects.filter { $0.name.localizedCaseInsensitiveContains(q) }
+    private var query: String { search.trimmingCharacters(in: .whitespaces) }
+
+    /// The banner on Home: the project being edited, else the one saved last.
+    private var featured: ProjectSummary? {
+        projects.first { $0.url == store.project } ?? projects.first
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(alignment: .center, spacing: 12) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Projects").font(.largeTitle.weight(.bold))
-                    Text("\(projects.count) projects · \((ProjectStore.projectsDirectory.path as NSString).abbreviatingWithTildeInPath)")
-                        .font(.callout).foregroundStyle(.secondary)
-                }
-                Spacer()
-                TextField("Search projects", text: $search)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 220)
+        NavigationSplitView {
+            sidebar
+        } detail: {
+            detail
+        }
+        .searchable(text: $search, placement: .sidebar, prompt: "Search")
+        .toolbar {
+            ToolbarItemGroup(placement: .primaryAction) {
                 Button("Open Other…") { store.openProjectWithPanel(); leaveIfOpened() }
-                Button { creating = true } label: { Label("New Project", systemImage: "plus") }
+                Button { creating = true } label: { Label("New Project", systemImage: "plus").labelStyle(.titleAndIcon) }
                     .buttonStyle(.borderedProminent)
                     .help("New project (⇧⌘N)")
             }
-            .padding(.horizontal, 28)
-            .padding(.vertical, 20)
-            Divider()
-
-            Group {
-                if projects.isEmpty {
-                    ContentUnavailableView {
-                        Label("No projects yet", systemImage: "folder.badge.plus")
-                    } description: {
-                        Text("A project keeps a video's scene and all its files together in one folder.\nStart with the sample to see what a finished piece is made of, then describe your own video in the chat.")
-                    } actions: {
-                        HStack {
-                            Button("Open the Sample Project") {
-                                store.createProject(name: "Sample", in: ProjectStore.projectsDirectory, start: .sample)
-                            }
-                            .buttonStyle(.borderedProminent)
-                            Button("New Project") { creating = true }
-                        }
-                    }
-                } else if shown.isEmpty {
-                    ContentUnavailableView.search(text: search)
-                } else {
-                    ScrollView {
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 240, maximum: 340), spacing: 20, alignment: .top)], spacing: 24) {
-                            ForEach(shown) { p in
-                                ProjectCard(project: p, isOpen: p.url == store.project, isSelected: p.url == selection)
-                                    .onTapGesture(count: 2) { open(p.url) }
-                                    .onTapGesture { selection = p.url }
-                                    .contextMenu { menu(for: p) }
-                            }
-                        }
-                        .padding(28)
-                    }
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .background(Color(nsColor: .windowBackgroundColor))
         .navigationTitle("Vey Motion")
-        .navigationSubtitle("Projects")
+        .modifier(HiddenWindowTitle())
         .onAppear(perform: reload)
+        .onChange(of: filter) { if filter != nil { search = "" } }
         .sheet(isPresented: $creating) { NewProjectSheet(onCreated: { store.showProjects = false }) }
         .alert("Rename Project", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
             TextField("Name", text: $newName)
@@ -218,6 +223,161 @@ struct ProjectsScreen: View {
         } message: {
             Text("The whole folder — scene and assets — goes to the Trash. You can get it back from Finder.")
         }
+    }
+
+    // MARK: Sidebar
+
+    private var sidebar: some View {
+        List(selection: $filter) {
+            Section {
+                ForEach([Filter.home, .all]) { f in
+                    Label(f.title, systemImage: f.symbol).tag(f)
+                }
+            }
+            Section("Formats") {
+                ForEach([Filter.landscape, .portrait, .square]) { f in
+                    Label(f.title, systemImage: f.symbol)
+                        .badge(projects.filter(f.includes).count)
+                        .tag(f)
+                }
+            }
+        }
+        .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 320)
+        .safeAreaInset(edge: .bottom) { PlanRow().padding(10) }
+    }
+
+    // MARK: Detail
+
+    @ViewBuilder
+    private var detail: some View {
+        if projects.isEmpty {
+            welcome
+        } else if !query.isEmpty {
+            let found = projects.filter { $0.name.localizedCaseInsensitiveContains(query) }
+            gridPage(title: "Results for “\(query)”", items: found)
+        } else if let f = filter, f != .home {
+            gridPage(title: f.title, items: projects.filter(f.includes))
+        } else {
+            home
+        }
+    }
+
+    private var home: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 34) {
+                if let hero = featured {
+                    ProjectHero(project: hero, isOpen: hero.url == store.project, open: { open(hero.url) }) {
+                        menu(for: hero)
+                    }
+                }
+                let others = projects.filter { $0.url != featured?.url }
+                if !others.isEmpty {
+                    shelf("Recent", target: .all, aspect: 16 / 9, width: 280, items: Array(others.prefix(12)))
+                }
+                ForEach([Filter.landscape, .portrait, .square]) { f in
+                    let items = projects.filter(f.includes)
+                    // A format shelf only says something when the projects come in more than one shape.
+                    if !items.isEmpty, items.count < projects.count {
+                        shelf(f.title, target: f, aspect: f.cardAspect, width: f == .portrait ? 160 : f == .square ? 210 : 280,
+                              items: Array(items.prefix(16)))
+                    }
+                }
+            }
+            .padding(.bottom, 40)
+        }
+        .ignoresSafeArea(edges: .top)
+        .toolbarBackground(.hidden, for: .windowToolbar)
+    }
+
+    private func shelf(_ title: String, target: Filter, aspect: CGFloat, width: CGFloat,
+                       items: [ProjectSummary]) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Button { filter = target } label: {
+                HStack(spacing: 5) {
+                    Text(title).font(.title2.weight(.bold))
+                    Image(systemName: "chevron.right").font(.title3.weight(.semibold)).foregroundStyle(.secondary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 40)
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(alignment: .top, spacing: 20) {
+                    ForEach(items) { p in card(p, aspect: aspect).frame(width: width) }
+                }
+                .padding(.horizontal, 40)
+                .padding(.vertical, 8)
+            }
+            .scrollClipDisabled()
+        }
+    }
+
+    private func gridPage(title: String, items: [ProjectSummary]) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title).font(.largeTitle.weight(.bold))
+                    Text(items.count == 1 ? "1 project" : "\(items.count) projects")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+                if items.isEmpty {
+                    ContentUnavailableView(query.isEmpty ? "No projects here" : "No results",
+                                           systemImage: query.isEmpty ? "film.stack" : "magnifyingglass")
+                        .padding(.top, 60)
+                } else {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 240, maximum: 340), spacing: 22, alignment: .top)],
+                              spacing: 26) {
+                        ForEach(items) { p in card(p, aspect: 16 / 9) }
+                    }
+                }
+            }
+            .padding(.horizontal, 40)
+            .padding(.vertical, 28)
+        }
+    }
+
+    private func card(_ p: ProjectSummary, aspect: CGFloat) -> some View {
+        ProjectCard(project: p, isOpen: p.url == store.project, isSelected: p.url == selection, aspect: aspect)
+            .onTapGesture(count: 2) { open(p.url) }
+            .onTapGesture { selection = p.url }
+            .contextMenu { menu(for: p) }
+    }
+
+    /// No projects yet: one banner that says what a project is and starts one.
+    private var welcome: some View {
+        ZStack(alignment: .bottomLeading) {
+            ZStack {
+                Color.black
+                RadialGradient(colors: [Color.indigo.opacity(0.9), .clear], center: UnitPoint(x: 0.8, y: 0.15),
+                               startRadius: 0, endRadius: 700)
+                RadialGradient(colors: [Color.pink.opacity(0.55), .clear], center: UnitPoint(x: 0.25, y: 0.95),
+                               startRadius: 0, endRadius: 600)
+            }
+            .modifier(ExtendsUnderSidebar())
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Welcome to Vey Motion").font(.system(size: 46, weight: .bold))
+                Text("A project keeps a video's scene and all its files together in one folder. Start with the sample to see what a finished piece is made of, then describe your own video in the chat.")
+                    .font(.title3).foregroundStyle(.white.opacity(0.75))
+                    .frame(maxWidth: 560, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 12) {
+                    Button {
+                        store.createProject(name: "Sample", in: ProjectStore.projectsDirectory, start: .sample)
+                        leaveIfOpened()
+                    } label: { Label("Open the Sample Project", systemImage: "play.fill") }
+                        .buttonStyle(HeroButtonStyle(prominent: true))
+                        .keyboardShortcut(.defaultAction)
+                    Button { creating = true } label: { Label("New Project", systemImage: "plus") }
+                        .buttonStyle(HeroButtonStyle(prominent: false))
+                }
+                .padding(.top, 8)
+            }
+            .foregroundStyle(.white)
+            .padding(48)
+        }
+        .ignoresSafeArea()
+        .toolbarBackground(.hidden, for: .windowToolbar)
+        .environment(\.colorScheme, .dark)
     }
 
     @ViewBuilder
@@ -248,64 +408,267 @@ struct ProjectsScreen: View {
     }
 }
 
+/// The large banner at the top of Home: the project's frame edge to edge, darkened toward its title and buttons.
+private struct ProjectHero<Actions: View>: View {
+    let project: ProjectSummary
+    let isOpen: Bool
+    let open: () -> Void
+    @ViewBuilder let actions: () -> Actions
+
+    private var isWide: Bool { Double(project.width) >= Double(project.height) * 1.3 }
+
+    var body: some View {
+        ZStack(alignment: .bottomLeading) {
+            ZStack {
+                Color.black
+                artwork
+                LinearGradient(stops: [.init(color: .black.opacity(0.9), location: 0),
+                                       .init(color: .black.opacity(0.35), location: 0.45),
+                                       .init(color: .clear, location: 0.8)],
+                               startPoint: .bottom, endPoint: .top)
+                LinearGradient(colors: [.black.opacity(0.55), .clear], startPoint: .leading, endPoint: .center)
+            }
+            .modifier(ExtendsUnderSidebar())
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text(isOpen ? "EDITING NOW" : "CONTINUE WHERE YOU LEFT OFF")
+                    .font(.caption.weight(.semibold)).tracking(1.2)
+                    .foregroundStyle(.white.opacity(0.65))
+                Text(project.name)
+                    .font(.system(size: 44, weight: .bold))
+                    .lineLimit(2)
+                    .frame(maxWidth: 640, alignment: .leading)
+                HStack(spacing: 6) {
+                    Text("\(project.width)×\(project.height)")
+                    Text("·")
+                    Text(String(format: "%.1f s", project.duration))
+                    Text("·")
+                    Text(project.layerCount == 1 ? "1 layer" : "\(project.layerCount) layers")
+                    Text("·")
+                    Text("edited \(project.modified, format: .relative(presentation: .named))")
+                }
+                .font(.callout)
+                .foregroundStyle(.white.opacity(0.75))
+                HStack(spacing: 12) {
+                    Button(action: open) {
+                        Label(isOpen ? "Back to Editing" : "Open", systemImage: "play.fill")
+                    }
+                    .buttonStyle(HeroButtonStyle(prominent: true))
+                    .keyboardShortcut(.defaultAction)
+                    Menu { actions() } label: {
+                        Image(systemName: "ellipsis")
+                            .font(.system(size: 15, weight: .bold))
+                            .frame(width: 40, height: 40)
+                            .background(Circle().fill(.white.opacity(0.18)))
+                            .contentShape(Circle())
+                    }
+                    .menuStyle(.button)
+                    .buttonStyle(.plain)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                }
+                .padding(.top, 10)
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 40)
+            .padding(.bottom, 40)
+        }
+        .containerRelativeFrame(.vertical) { h, _ in min(max(h * 0.66, 340), 660) }
+        .clipped()
+        .environment(\.colorScheme, .dark)
+        .onTapGesture(count: 2, perform: open)
+        .contextMenu { actions() }
+    }
+
+    @ViewBuilder
+    private var artwork: some View {
+        if isWide {
+            Color.clear.overlay { ProjectThumb(project: project, size: .large, mode: .fill) }.clipped()
+        } else {
+            // A tall or square frame would be mostly cropped: show it whole on the right, over a blur of itself.
+            Color.clear
+                .overlay { ProjectThumb(project: project, size: .large, mode: .fill).blur(radius: 50).opacity(0.7) }
+                .overlay(alignment: .trailing) {
+                    ProjectThumb(project: project, size: .large, mode: .fit)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .shadow(color: .black.opacity(0.5), radius: 24, y: 10)
+                        .padding(.vertical, 60)
+                        .padding(.trailing, 80)
+                }
+                .clipped()
+        }
+    }
+}
+
+private struct HeroButtonStyle: ButtonStyle {
+    var prominent: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 15, weight: .semibold))
+            .padding(.horizontal, 22)
+            .frame(height: 40)
+            .foregroundStyle(prominent ? Color.black : Color.white)
+            .background(Capsule().fill(prominent ? Color.white : Color.white.opacity(0.18)))
+            .contentShape(Capsule())
+            .opacity(configuration.isPressed ? 0.75 : 1)
+    }
+}
+
+/// The account at the foot of the sidebar: the plan, opening the Account panel.
+private struct PlanRow: View {
+    @Bindable var license = LicenseStore.shared
+    @State private var showPanel = false
+
+    var body: some View {
+        Button { showPanel.toggle() } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "person.crop.circle.fill")
+                    .font(.system(size: 30))
+                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(license.info?.name ?? license.info?.email ?? "Vey Motion")
+                        .font(.callout.weight(.medium)).lineLimit(1)
+                    HStack(spacing: 4) {
+                        if license.isPro { ProBadge() } else { Text("Free plan · Upgrade") }
+                    }
+                    .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(8)
+            .contentShape(RoundedRectangle(cornerRadius: 10))
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: $showPanel, arrowEdge: .top) {
+            AccountPanel().padding(16).frame(width: 400)
+        }
+    }
+}
+
 private struct ProjectCard: View {
     let project: ProjectSummary
     let isOpen: Bool
     let isSelected: Bool
-    @State private var thumb: NSImage?
+    var aspect: CGFloat = 16 / 9
+    @State private var hovering = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            // Every card uses the same 16:9 frame so grid rows stay even; the scene is fitted
-            // inside it (portrait scenes get side bars instead of a tall card).
-            Color.secondary.opacity(0.12)
-                .aspectRatio(16 / 9, contentMode: .fit)
+        VStack(alignment: .leading, spacing: 8) {
+            // Every card in a row has the same frame so rows stay even; the scene is fitted inside it, over a blur
+            // of itself where the shapes differ.
+            Color.black
+                .aspectRatio(aspect, contentMode: .fit)
                 .frame(maxWidth: .infinity)
+                .overlay { ProjectThumb(project: project, size: .small, mode: .fill).blur(radius: 18).opacity(0.6) }
+                .overlay { ProjectThumb(project: project, size: .small, mode: .fit) }
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .overlay {
-                    if let thumb {
-                        Image(nsImage: thumb).resizable().aspectRatio(contentMode: .fit)
-                    } else {
-                        Image(systemName: "film").font(.title).foregroundStyle(.tertiary)
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(isSelected ? Color.accentColor : Color.white.opacity(0.08),
+                                      lineWidth: isSelected ? 3 : 1)
+                }
+                .overlay(alignment: .topTrailing) {
+                    if isOpen {
+                        Text("Editing").font(.caption2.weight(.semibold))
+                            .padding(.horizontal, 7).padding(.vertical, 3)
+                            .background(Capsule().fill(Color.accentColor))
+                            .foregroundStyle(.white)
+                            .padding(8)
                     }
                 }
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .overlay(RoundedRectangle(cornerRadius: 8)
-                .stroke(isSelected ? Color.accentColor : Color.secondary.opacity(0.25), lineWidth: isSelected ? 3 : 1))
-            .overlay(alignment: .topTrailing) {
-                if isOpen {
-                    Text("Open").font(.caption2.weight(.semibold))
-                        .padding(.horizontal, 6).padding(.vertical, 2)
-                        .background(Capsule().fill(Color.accentColor))
-                        .foregroundStyle(.white)
-                        .padding(6)
+                .shadow(color: .black.opacity(hovering ? 0.32 : 0.14), radius: hovering ? 14 : 5, y: hovering ? 8 : 2)
+                .scaleEffect(hovering ? 1.03 : 1)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(project.name).font(.headline).lineLimit(1).truncationMode(.middle)
+                HStack(spacing: 4) {
+                    Text(project.modified, format: .relative(presentation: .named))
+                    Text("·")
+                    Text(String(format: "%.1fs", project.duration))
                 }
+                .font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
-            Text(project.name).font(.headline).lineLimit(1).truncationMode(.middle)
-            HStack(spacing: 4) {
-                Text(project.modified, format: .relative(presentation: .named))
-                Text("·")
-                Text(String(format: "%.1fs · %d layers", project.duration, project.layerCount))
-            }
-            .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            .padding(.horizontal, 2)
         }
         .contentShape(Rectangle())
         .help(project.url.path)
-        .onAppear(perform: loadThumb)
-        .onChange(of: project.modified) { loadThumb() }
+        .onHover { h in withAnimation(.easeOut(duration: 0.16)) { hovering = h } }
+    }
+}
+
+/// A project's middle frame, from `ProjectThumbnails`.
+private struct ProjectThumb: View {
+    let project: ProjectSummary
+    var size: ProjectThumbnails.Size
+    var mode: ContentMode
+
+    var body: some View {
+        if let image = ProjectThumbnails.shared.image(for: project, size: size) {
+            Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: mode)
+        } else {
+            Image(systemName: "film").font(.title).foregroundStyle(.white.opacity(0.3))
+        }
+    }
+}
+
+/// Rendered project frames, one per project, save and size; rendered off the main thread on first use.
+@MainActor @Observable
+private final class ProjectThumbnails {
+    enum Size: Double { case small = 480, large = 1600 }
+
+    static let shared = ProjectThumbnails()
+    private var images: [String: NSImage] = [:]
+    @ObservationIgnored private var requested = Set<String>()
+
+    private func key(_ p: ProjectSummary, _ size: Size) -> String {
+        "\(p.id)|\(p.modified.timeIntervalSinceReferenceDate)|\(Int(size.rawValue))"
     }
 
-    private func loadThumb() {
-        let url = project.url
-        // GCD's global queues give worker threads a small stack, which deeply nested groups can overflow
-        // while decoding/resolving the scene (see MotionScene.resolveLinks). Use a thread with a full stack.
-        let thread = Thread {
-            let cg = ProjectStore.thumbnail(url)
-            DispatchQueue.main.async {
-                thumb = cg.map { NSImage(cgImage: $0, size: NSSize(width: $0.width, height: $0.height)) }
+    /// The image if it is ready (a large request falls back on the small one meanwhile); starts rendering it if not.
+    func image(for p: ProjectSummary, size: Size) -> NSImage? {
+        let k = key(p, size)
+        if let image = images[k] { return image }
+        if !requested.contains(k) {
+            requested.insert(k)
+            let url = p.url, maxWidth = size.rawValue
+            // GCD's global queues give worker threads a small stack, which deeply nested groups can overflow
+            // while decoding/resolving the scene (see MotionScene.resolveLinks). Use a thread with a full stack.
+            let thread = Thread {
+                let cg = ProjectStore.thumbnail(url, maxWidth: maxWidth)
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        if let cg {
+                            ProjectThumbnails.shared.images[k] = NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
+                        }
+                    }
+                }
             }
+            thread.stackSize = 8 * 1024 * 1024
+            thread.qualityOfService = .userInitiated
+            thread.start()
         }
-        thread.stackSize = 8 * 1024 * 1024
-        thread.qualityOfService = .userInitiated
-        thread.start()
+        return size == .large ? image(for: p, size: .small) : nil
+    }
+}
+
+/// On macOS 26 the content behind the floating sidebar is a mirrored blur of this view, as in Apple's own apps.
+private struct ExtendsUnderSidebar: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(macOS 26.0, *) {
+            content.backgroundExtensionEffect()
+        } else {
+            content
+        }
+    }
+}
+
+/// The Projects screen shows no window title: the sidebar says where you are.
+private struct HiddenWindowTitle: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(macOS 15.0, *) {
+            content.toolbar(removing: .title)
+        } else {
+            content
+        }
     }
 }
