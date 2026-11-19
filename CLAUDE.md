@@ -256,8 +256,11 @@ Easy Ease F9 / ⇧F9 / ⌘⇧F9).
   camera zoom 1 → 1.04 when the scene has none; re-applying replaces both groups by id. `Docs.instructions` opens with
   a LOOK & DESIGN section (depth, light, secondary motion, type hierarchy, palette, self-check list) that the agent
   prompt points at, and `Sample.swift` is written to follow it, so keep the three in step.
-  Quality is enforced in code, not only in the prompt (`DesignCheck.swift`): `designIssues(renderer:)` is a
-  deterministic lint (flat background, pure white on black, system font, flat type sizes, unlit layers, ≥ 2 s
+  Quality is checked in code, not only in the prompt (`DesignCheck.swift`): `designIssues(renderer:)` is a
+  deterministic lint with two kinds of findings: problems (`warning`: what breaks any style — edge, goo-text,
+  short-long-shadow, scaled-stroke, reading-time, text-overlap, low-contrast, busy-behind-text, misaligned,
+  platform-ui) and style notes (`hint`: defaults of a polished generic look that a piece may break on purpose; listed
+  by check_design, never sent back to be fixed, left out of `design=` and set_scene's report). The rules: (flat background, pure white on black, system font, flat type sizes, unlit layers, ≥ 2 s
   stretches with no motion, text within 80 px of the edge, linear entrances, "only text and boxes" hint; and, reaching
   into nested groups: text in a `goo` group, long shadows ending inside the frame, ≥ 3 bare straight-edged polygons,
   overshoot easing on ≥ 40% of ≥ 12 animated layers, ≥ 1 s with under 1% of the frame covered by a subject,
@@ -269,7 +272,7 @@ Easy Ease F9 / ⇧F9 / ⌘⇧F9).
   `ChatStore` puts `design=` (the lint summary) and `style=` (the project's `ChatStyle`: look + font pairing,
   chosen in the composer's Style popover, saved in `.chat.json`) on every context line (lint with `pixels: false`:
   no renders on the main thread), and after a turn that changed the scene `startReview` runs off the main thread:
-  the full lint, whose warnings go back to the agent once per user message (`agent.designCheck`), then, when the lint
+  the full lint, whose problems (warnings) go back to the agent once per user message (`agent.designCheck`), then, when the lint
   has nothing left to send, the critic, also once (`agent.critic`; both switches are in the same popover).
   `DesignCraft.swift` is the lint's second half (`craftIssues`): sameness (`same-entrance`: one entrance signature on
   ≥ 80% of ≥ 12 entering layers; `no-stagger`: ≥ 5 layers making the same move with the same start and end;

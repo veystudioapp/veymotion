@@ -190,7 +190,7 @@ extension MotionScene {
         if entrances.count >= 12 {
             let groups = Dictionary(grouping: entrances, by: \.signature)
             if let top = groups.max(by: { $0.value.count < $1.value.count }), Double(top.value.count) >= Double(entrances.count) * 0.8 {
-                out.append(DesignIssue(severity: .warning, code: "same-entrance",
+                out.append(DesignIssue(severity: .hint, code: "same-entrance",
                                        message: "\(top.value.count) of \(entrances.count) layers enter the same way (\(top.key)), so the piece reads as one preset applied to everything",
                                        fix: "give each role its own entrance: the hero a reveal of its own (per letter, through a matte, drawn on with trim), supporting text a short quiet slide, decoration a slow drift; change direction and length between sections",
                                        layers: top.value.map(\.id)))
@@ -216,7 +216,7 @@ extension MotionScene {
         if !together.isEmpty {
             together.sort { $0[0].time < $1[0].time }
             let times = together.prefix(4).map { "\($0.count) at \(clock($0[0].time))" }.joined(separator: ", ")
-            out.append(DesignIssue(severity: .warning, code: "no-stagger",
+            out.append(DesignIssue(severity: .hint, code: "no-stagger",
                                    message: "Layers make the same move at the same instant (\(times)), so nothing leads the eye",
                                    fix: "start them 0.06–0.12 s apart in reading order (most important first), or move a unit as one group and stagger only its parts",
                                    layers: together.flatMap { $0.map(\.id) }))
@@ -234,7 +234,7 @@ extension MotionScene {
             return Self.fontFamilyKey(name)
         })
         if families.count > 3 {
-            out.append(DesignIssue(severity: .warning, code: "too-many-fonts",
+            out.append(DesignIssue(severity: .hint, code: "too-many-fonts",
                                    message: "\(families.count) font families in one piece",
                                    fix: "keep two: one for titles, one for everything else; get contrast from size and weight instead",
                                    layers: []))
@@ -258,7 +258,7 @@ extension MotionScene {
             }
             if kinds.count > 1, let f = kinds.first, let l = kinds.last, f + 360 - l <= 25 { kinds.removeLast() }
             if kinds.count >= 6 {
-                out.append(DesignIssue(severity: .warning, code: "too-many-hues",
+                out.append(DesignIssue(severity: .hint, code: "too-many-hues",
                                        message: "\(kinds.count) unrelated hues on text and shapes",
                                        fix: "one accent hue + one supporting hue + neutrals; make the other colors tints or shades of those two",
                                        layers: hues.map(\.id)))

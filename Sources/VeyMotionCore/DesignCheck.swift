@@ -2,16 +2,19 @@ import CoreGraphics
 import Foundation
 
 // A deterministic design lint for the agent (check_design, the chat's auto-check after each turn) and the app.
-// It cannot judge taste, only the things that reliably make a piece look like a draft: a flat background, nothing
-// lighting the subject, no type hierarchy, the system font, frozen stretches, text on the edge, linear entrances,
-// text melted by goo, long shadows that stop mid-frame, illustrations made of bare polygons, a bounce on everything
-// and stretches with no subject; `DesignCraft.swift` adds sameness (one entrance for everything, no stagger, too
-// many fonts and hues), reading time and what it measures in small renders (contrast, busy pictures, overlapping
-// or almost-aligned text, phone UI zones). What it cannot see (does a drawing look right?) goes to `reviewNote`: one frame
-// per section for the agent to look at.
+// It has two kinds of findings. Problems (warnings) are what breaks a piece whatever its style: text on the edge,
+// melted by goo, gone before it can be read, lost against what is behind it, overlapping or almost aligned, under a
+// phone app's buttons; long shadows that stop mid-frame, outlines thickened by scale. Style notes (hints) are the
+// defaults of a polished generic look: depth behind a flat background, light on the subject, a chosen font, a type
+// hierarchy, ambient motion, eased and staggered entrances, curves instead of bare polygons, few fonts and hues.
+// A piece may break any of them on purpose (a flat Swiss poster, a still frame, one type size), so they are listed
+// for the agent to weigh, never sent back to be fixed. `DesignCraft.swift` holds the sameness, reading-time and
+// picture rules. What it cannot see (does a drawing look right?) goes to `reviewNote`: one frame per section for the
+// agent to look at.
 // Everything is computed from the scene, so the same report comes out of the CLI, the MCP server and the app.
 
 public struct DesignIssue: Codable, Equatable, Sendable {
+    /// `hint` = a style note (a default a piece may break on purpose); `warning`/`error` = a problem to fix.
     public enum Severity: String, Codable, Sendable, Comparable {
         case hint, warning, error
         public static func < (a: Severity, b: Severity) -> Bool { a.rank < b.rank }
@@ -118,18 +121,18 @@ extension MotionScene {
 
         // 1. Background
         if !hasBackgroundDepth {
-            out.append(DesignIssue(severity: .error, code: "flat-background",
+            out.append(DesignIssue(severity: .hint, code: "flat-background",
                                    message: "The background is one flat color",
-                                   fix: "apply_look (cinematic/clean/neon/retro/sunset/studio), or a full-frame gradient rect + two blurred blobs + vignette/grain", layers: []))
+                                   fix: "fine if flatness is the design (posters, Swiss, flat illustration); else give it depth that fits the piece: a texture, a photo, a pattern, a gradient, light, or apply_look for a ready-made one", layers: []))
             // 2. Pure contrast only matters without a backdrop in between.
             let pure = texts.filter { t in
                 guard case let .constant(c) = t.color else { return false }
                 return (c.luminance > 0.98 && background.luminance < 0.03) || (c.luminance < 0.02 && background.luminance > 0.97)
             }
             if !pure.isEmpty {
-                out.append(DesignIssue(severity: .warning, code: "pure-contrast",
+                out.append(DesignIssue(severity: .hint, code: "pure-contrast",
                                        message: "Pure white text on pure black (or the reverse)",
-                                       fix: "near-white #F2F3F7 on #0B0C10 / near-black #15171C on #F5F6F8, and a backdrop with depth",
+                                       fix: "fine for a stark graphic style; for a softer read use a near-white on a near-black (or the reverse)",
                                        layers: pure.map(\.id)))
             }
         }
@@ -137,9 +140,9 @@ extension MotionScene {
         // 3. Fonts
         let systemFont = texts.filter { ($0.fontName ?? "").isEmpty }
         if !systemFont.isEmpty {
-            out.append(DesignIssue(severity: .warning, code: "system-font",
+            out.append(DesignIssue(severity: .hint, code: "system-font",
                                    message: "Text uses the system font",
-                                   fix: "pick 1–2 families for the mood (list_fonts, or search_stock kind font + import_stock) and set fontName",
+                                   fix: "if the system font is not a deliberate choice, pick families for the mood (list_fonts, or search_stock kind font + import_stock) and set fontName",
                                    layers: systemFont.map(\.id)))
         }
 
@@ -147,9 +150,9 @@ extension MotionScene {
         if texts.count >= 3 {
             let sizes = texts.map { $0.fontSize * $0.value(.scale, at: mid($0)) }
             if let lo = sizes.min(), let hi = sizes.max(), hi <= lo * 1.25 {
-                out.append(DesignIssue(severity: .warning, code: "flat-type",
+                out.append(DesignIssue(severity: .hint, code: "flat-type",
                                        message: "All text is about the same size, so nothing reads first",
-                                       fix: "hero 120–180 px, heading 64–96, body 32–44, eyebrow 22–28 uppercase with letterSpacing; soften secondary text's color",
+                                       fix: "if one size is not the idea, let the most important words read first through size, weight or color contrast",
                                        layers: texts.map(\.id)))
             }
         }
@@ -168,9 +171,9 @@ extension MotionScene {
             return true
         }
         if unlit.count >= 2, Double(unlit.count) >= Double(subjects.count) * 0.6 {
-            out.append(DesignIssue(severity: .warning, code: "unlit",
+            out.append(DesignIssue(severity: .hint, code: "unlit",
                                    message: "Most layers sit flat on the background (no shadow, glow or gradient)",
-                                   fix: "dark looks: glow 0.5–1.5; light looks: shadowOpacity 0.3–0.5, shadowY 10–20, shadowBlur 30–50; gradients on big shapes",
+                                   fix: "fine for flat design; for a lit look give the subject a shadow, glow, gradient or outline",
                                    layers: unlit.map(\.id)))
         }
 
@@ -217,9 +220,9 @@ extension MotionScene {
                 cursor = max(cursor, iv.1)
             }
             if !gaps.isEmpty {
-                out.append(DesignIssue(severity: .warning, code: "static",
+                out.append(DesignIssue(severity: .hint, code: "static",
                                        message: "Nothing moves during \(gaps.prefix(4).joined(separator: ", "))",
-                                       fix: "ambient motion (look blobs, wiggle/loop on a decorative shape, particles) or a camera drift 1 → 1.04", layers: []))
+                                       fix: "fine if the stillness is a held beat; else keep something alive (a slow drift, a loop, a camera move, texture)", layers: []))
             }
         }
 
@@ -262,7 +265,7 @@ extension MotionScene {
         if !linear.isEmpty {
             out.append(DesignIssue(severity: .hint, code: "linear-entrance",
                                    message: "Entrances with linear easing",
-                                   fix: "easeOutExpo / easeOutBack / spring for entrances, easeIn for exits, stagger 0.08–0.15 s", layers: linear))
+                                   fix: "fine for a mechanical feel; for a natural one ease entrances out and exits in", layers: linear))
         }
 
         // 9. Only text and boxes: suggest two techniques that fit the content.
@@ -372,9 +375,9 @@ extension MotionScene {
             return max(box.width, box.height) * k >= 60
         }.map(\.layer.id)
         if polygons.count >= 3 {
-            out.append(DesignIssue(severity: .warning, code: "crude-shapes",
+            out.append(DesignIssue(severity: .hint, code: "crude-shapes",
                                    message: "\(polygons.count) illustration parts are bare straight-edged polygons (a triangle for a tree, a kite for a plane): they read as placeholders",
-                                   fix: "use a real illustration (search_stock kind icon → import_stock → import_vector, then animate its parts), or redraw with curves (C/Q/A in d) and soften corners with a stroke in the fill color (strokeWidth 8–16, round joins)",
+                                   fix: "fine if hard geometry is the style and the parts read as what they are; else draw the object with curves (C/Q/A in d), or import_vector an illustration whose style fits",
                                    layers: polygons))
         }
 
@@ -398,7 +401,7 @@ extension MotionScene {
             if overshoots { bouncing.append(d.layer.id) }
         }
         if animated >= 12, Double(bouncing.count) >= Double(animated) * 0.4 {
-            out.append(DesignIssue(severity: .warning, code: "overshoot-everywhere",
+            out.append(DesignIssue(severity: .hint, code: "overshoot-everywhere",
                                    message: "\(bouncing.count) of \(animated) animated layers overshoot (back/elastic/bounce/spring), so every move feels the same",
                                    fix: "keep the bounce for one or two hero elements per section; give the rest easeOutExpo / easeOutCubic / easeInOutCubic, and motionBlur on fast moves",
                                    layers: bouncing))
@@ -463,9 +466,9 @@ extension MotionScene {
                 time += 0.5
             }
             if !empty.isEmpty {
-                out.append(DesignIssue(severity: .warning, code: "empty-frame",
+                out.append(DesignIssue(severity: .hint, code: "empty-frame",
                                        message: "Nothing but the background (or a hairline) on screen during \(empty.prefix(4).joined(separator: ", "))",
-                                       fix: "bring the next subject in earlier, hold the previous one longer, or give the section a real subject that fills ⅓ of the frame", layers: []))
+                                       fix: "fine for a deliberate pause or small type in space; else bring the next subject in earlier or hold the previous one longer", layers: []))
             }
         }
 
@@ -535,12 +538,18 @@ extension MotionScene {
             """
     }
 
-    /// One text block for the agent.
+    /// One text block for the agent: problems to fix first, then style notes to weigh.
     public static func designReport(_ issues: [DesignIssue]) -> String {
-        guard !issues.isEmpty else { return "Design check passed: nothing flat, static, unlit, unreadable or on the edge." }
-        let errors = issues.filter { $0.severity == .error }.count, warnings = issues.filter { $0.severity == .warning }.count
-        let head = "Design check: \(issues.count) finding\(issues.count == 1 ? "" : "s") (\(errors) error, \(warnings) warning, \(issues.count - errors - warnings) hint)"
-        return ([head] + issues.map { "- " + $0.line }).joined(separator: "\n")
+        let problems = issues.filter { $0.severity >= .warning }, notes = issues.filter { $0.severity == .hint }
+        var lines = [problems.isEmpty
+            ? "Design check: no problems (nothing unreadable, clipped, overlapping or broken)."
+            : "Design check: \(problems.count) problem\(problems.count == 1 ? "" : "s") to fix"]
+        lines += problems.map { "- " + $0.line }
+        if !notes.isEmpty {
+            lines.append("Style notes (defaults of a polished generic look, not errors: follow one only if it serves the direction you chose for this piece):")
+            lines += notes.map { "- " + $0.line }
+        }
+        return lines.joined(separator: "\n")
     }
 
     /// A few words for the context line: "ok" or "3 findings: flat-background, system-font, …".

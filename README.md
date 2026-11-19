@@ -285,10 +285,10 @@ vmotion render scene.json out.mp4
   `add_template` (lower third, call-out, subscribe, end card, title card, quote), `apply_look` (cinematic, clean,
   neon, retro, sunset, studio: gradient backdrop, drifting lights, dust, vignette, grain and a slow camera push in one
   call; also Add → Look in the app; `set_scene` adds one only when asked with `look`), `check_design`
-  (lints for what makes a draft: flat background, system font, unlit layers, static stretches, text on the edge; and
-  for what makes a piece look machine-made: one entrance on everything, no stagger, too many fonts or hues, text
-  shown too briefly, weak contrast against the pixels behind it, overlapping or almost-aligned text, text under a
-  phone app's buttons; the in-app chat runs it after every change and hands the findings back to the assistant, then
+  (problems that break any style: text on the edge, shown too briefly, weak contrast against the pixels behind it,
+  overlapping or almost-aligned text, text under a phone app's buttons; plus style notes the assistant may ignore on
+  purpose: flat background, system font, unlit layers, still stretches, one entrance on everything, too many fonts or
+  hues; the in-app chat runs it after every change and hands the problems back to the assistant, then
   a separate Claude Code review of rendered frames scores the piece and sends back what a viewer would notice;
   `vmotion review scene.json` does both from the terminal), `duplicate_layer`,
   `shift_time` (makes room in the timeline: everything after a point moves, later keyframes included),
