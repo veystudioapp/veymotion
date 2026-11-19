@@ -34,6 +34,7 @@ struct ContentView: View {
             }
         }
         .sheet(isPresented: Bindable(store).showNewProject) { NewProjectSheet() }
+        .sheet(isPresented: Bindable(LicenseStore.shared).showingUpgrade) { UpgradeSheet() }
     }
 
     /// Layers/Inspector on the left and the chat on the right are both plain full-height columns, flush with the

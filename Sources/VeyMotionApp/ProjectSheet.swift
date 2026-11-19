@@ -523,7 +523,7 @@ private struct PlanRow: View {
     @State private var showPanel = false
 
     var body: some View {
-        Button { showPanel.toggle() } label: {
+        Button { if license.info == nil { license.presentUpgrade() } else { showPanel.toggle() } } label: {
             HStack(spacing: 10) {
                 Image(systemName: "person.crop.circle.fill")
                     .font(.system(size: 30))

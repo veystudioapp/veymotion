@@ -17,6 +17,17 @@ final class LicenseStore {
     private(set) var portalURL: URL?
     /// Why buying/activating cannot work right now (server unreachable or licensing not set up), if known.
     private(set) var setupProblem: String?
+    /// The upgrade modal (`UpgradeSheet`, shown by `ContentView`), and the locked feature that opened it, if any.
+    var showingUpgrade = false
+    private(set) var upgradeFeature: ProFeature?
+
+    /// Opens the upgrade modal, naming `feature` when a locked one sent the user there.
+    func presentUpgrade(for feature: ProFeature? = nil) {
+        upgradeFeature = feature
+        error = nil
+        if checkoutURL == nil { loadLinks() }
+        showingUpgrade = true
+    }
 
     private init() {
         NotificationCenter.default.addObserver(forName: License.didChange, object: nil, queue: .main) { [weak self] _ in
@@ -202,15 +213,16 @@ struct AccountPanel: View {
     ]
 }
 
-/// Toolbar button that opens the Account panel in a popover: "Upgrade to Pro" on the Free plan (enter a key or buy
-/// Pro), a PRO tag once activated (the panel then shows the license, so a successful activation is visible in place).
+/// Toolbar button: "Upgrade" on the Free plan (opens the upgrade modal), a PRO tag once activated (opens the Account
+/// panel in a popover, which shows the license).
 @MainActor
 struct UpgradeToolbarButton: View {
     @Bindable var store = LicenseStore.shared
     @State private var showPanel = false
 
     var body: some View {
-        Button { showPanel.toggle() } label: {
+        // Free: the upgrade modal. With a license (active or paused): the Account panel, to manage it.
+        Button { if store.info == nil { store.presentUpgrade() } else { showPanel.toggle() } } label: {
             if store.isPro {
                 ProBadge()
             } else {
@@ -253,7 +265,7 @@ struct ProLockedView: View {
                 ProBadge()
             }
             Text("Available with VeyMotion Pro.").font(.callout).foregroundStyle(.secondary)
-            SettingsLink { Text("Upgrade…") }
+            Button("Upgrade…") { LicenseStore.shared.presentUpgrade(for: feature) }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
