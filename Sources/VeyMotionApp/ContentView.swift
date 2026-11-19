@@ -39,11 +39,12 @@ struct ContentView: View {
                 set: { v in showSidebar = v != .detailOnly })
     }
 
-    /// Same frame as the Projects screen: Layers/Inspector as the (on macOS 26 floating, glass) sidebar, the canvas
-    /// with transport and timeline as the detail, and the chat as the inspector column on the right.
+    /// Same frame as the Projects screen: Layers/Inspector as the sidebar, the canvas with transport and timeline as
+    /// the detail, and the chat as the inspector column on the right. Both side columns are opaque (`opaqueColumn`).
     private var editor: some View {
         NavigationSplitView(columnVisibility: sidebarVisibility) {
             EditPanel()
+                .opaqueColumn()
                 .navigationSplitViewColumnWidth(min: Self.editPanelMinWidth, ideal: 320, max: 480)
         } detail: {
             VStack(spacing: 0) {
@@ -59,10 +60,8 @@ struct ContentView: View {
             // Declared on the detail so they sit over the canvas; the chat's own items sit over the chat.
             .toolbar { editorToolbar }
             .inspector(isPresented: $showChat) {
-                // Opaque, up under the toolbar too: on macOS 26 the inspector column is otherwise glass, which over a
-                // dark desktop turns the chat a mid gray (#c0) under a lighter toolbar strip.
                 ChatPanel()
-                    .background(Color(nsColor: .windowBackgroundColor), ignoresSafeAreaEdges: .all)
+                    .opaqueColumn()
                     .toolbar { ChatToolbar() }
                     .inspectorColumnWidth(min: 290, ideal: 340, max: 560)
             }
@@ -108,6 +107,14 @@ struct ContentView: View {
             }
             .help("Show or hide the chat (⌘L)")
         }
+    }
+}
+
+extension View {
+    /// The window's own light background, up under the toolbar too. On macOS 26 sidebar and inspector columns are
+    /// otherwise glass, which over a dark desktop reads as a mid gray (#c0) under a lighter toolbar strip.
+    func opaqueColumn() -> some View {
+        background(Color(nsColor: .windowBackgroundColor), ignoresSafeAreaEdges: .all)
     }
 }
 

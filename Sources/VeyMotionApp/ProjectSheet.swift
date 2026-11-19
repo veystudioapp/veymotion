@@ -242,8 +242,10 @@ struct ProjectsScreen: View {
                 }
             }
         }
-        .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 320)
+        .scrollContentBackground(.hidden)
         .safeAreaInset(edge: .bottom) { PlanRow().padding(10) }
+        .opaqueColumn()
+        .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 320)
     }
 
     // MARK: Detail
@@ -651,7 +653,7 @@ private final class ProjectThumbnails {
     }
 }
 
-/// On macOS 26 the content behind the floating sidebar is a mirrored blur of this view, as in Apple's own apps.
+/// On macOS 26 the content behind the sidebar is a mirrored blur of this view (shows only where the sidebar lets it).
 private struct ExtendsUnderSidebar: ViewModifier {
     func body(content: Content) -> some View {
         if #available(macOS 26.0, *) {
