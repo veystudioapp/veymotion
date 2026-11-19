@@ -59,7 +59,10 @@ struct ContentView: View {
             // Declared on the detail so they sit over the canvas; the chat's own items sit over the chat.
             .toolbar { editorToolbar }
             .inspector(isPresented: $showChat) {
+                // Opaque, up under the toolbar too: on macOS 26 the inspector column is otherwise glass, which over a
+                // dark desktop turns the chat a mid gray (#c0) under a lighter toolbar strip.
                 ChatPanel()
+                    .background(Color(nsColor: .windowBackgroundColor), ignoresSafeAreaEdges: .all)
                     .toolbar { ChatToolbar() }
                     .inspectorColumnWidth(min: 290, ideal: 340, max: 560)
             }
