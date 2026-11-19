@@ -61,22 +61,27 @@ enum Docs {
          your own field (gradient, texture, photo, blurred shapes, particles, vignette, grain); shadows on light
          grounds, glow on dark ones.
        - Sound: music ducked under voice (see AUDIO). No sound effects unless asked (see SOUND EFFECTS).
-    Illustrations: an object the viewer must recognize (a tree, a hand, a phone, a plane, a person, an animal) is never
-       a triangle, a box or a stack of ellipses: that is a placeholder. Get a real drawing first: search_stock kind
-       "icon" with palette=true in the query (e.g. "christmas tree palette=true": only multi-color illustration
-       sets; without it the results are mostly one-color line icons) → import_stock → import_vector, which gives you one path
-       layer per part to animate (pop the parts in, swing a limb with bones, trim the outlines on). Draw a shape
-       yourself only when it is simple by nature (a card, a ring, a chart, an abstract pattern) or after the search
-       found nothing, and then with curves (C/Q/A in d), a consistent stroke, and corners softened by a stroke in the
-       fill color (strokeWidth 8–16; path joins are round). Keep one drawing style per piece (all flat-color, or all
-       line art), parts that touch where they join, and the subject at about a third of the frame.
+    Illustrations: an object the viewer must recognize (a tree, a hand, a phone, a plane, a person, an animal) has to
+       read as what it is, drawn in the piece's style; a lone triangle, box or stack of ellipses standing in for it is
+       a placeholder. Choose the way by the direction:
+       - Draw it yourself when the style is your own (geometric, line art, cut paper, hand-drawn, a mark built for
+         the idea): path layers with curves (C/Q/A in d), simplified on purpose rather than crude, a consistent
+         stroke, and, for a soft style, corners softened by a stroke in the fill color (strokeWidth 8–16; path joins
+         are round); drawing layers for frame-by-frame line work. Use enough parts to read and to animate.
+       - Start from a drawing when the object is complex (a person, an animal, a vehicle) or the direction is
+         illustrated: search_stock kind "icon" (palette=true in the query for multi-color illustration sets, e.g.
+         "christmas tree palette=true"; without it the results are mostly one-color line icons) → import_stock →
+         import_vector, which gives you one path layer per part. Then make it belong to the piece (recolor it to the
+         palette, redraw or add parts) and animate the parts (pop them in, swing a limb with bones, trim the
+         outlines on). Photos, cut-outs and Lottie animations are other options.
+       Keep one drawing style per piece and parts that touch where they join.
     Before you say you are done, run check_design (set_scene runs it too). Fix its PROBLEMS; its STYLE NOTES are
     generic defaults, so follow only those that serve your direction. Then look at EVERY section at full size:
     check_design ends with the list of times; render_frame each one (one call per time, default scale) and Read it.
     A contact sheet (render_frames) is for pacing only: at that size a broken drawing, melted text or a detached limb
     is invisible. Judge each frame against your direction, fix what fails, and render the fixed time again:
        - Does it look intended and finished in its own style, or like a draft or a placeholder?
-       - Does every object look like what it is, with parts that join? → a real illustration (see Illustrations).
+       - Does every object look like what it is, with parts that join? → redraw it, or start from an illustration (see Illustrations).
        - Is every word readable: contrast with what is behind it, no busy detail crossing the letters (dim the
          picture or add a plate), not melted in a goo group, not overlapping other text, not clipped, clear of the
          edge, and on vertical video clear of the bottom 14% and the right 12% of the lower half (app buttons)?
@@ -721,8 +726,8 @@ enum Docs {
     - render_frames {times:[…]} shows up to 24 frames in one contact sheet: check pacing of a whole piece in one look
       (not detail: use render_frame for that).
     - import_vector turns an SVG (asset or file) into a group of path layers, one per shape: animate the parts of an
-      illustration or character separately (set_parent them to a body part, or rig them with bones). It is the
-      default way to put a recognizable object on screen (see Illustrations in LOOK & DESIGN).
+      illustration or character separately (set_parent them to a body part, or rig them with bones). It is one
+      way to put a recognizable object on screen; drawing it yourself is the other (see Illustrations in LOOK & DESIGN).
     - apply_preset is a quick way to add common entrances/exits/emphasis; pass `ids` + `stagger` to cascade one preset
       over several layers (e.g. list items 0.12s apart). Combine with easings like easeOutBack / easeOutExpo for polish,
       and use loop/wiggle for ambient motion (floating shapes, subtle drift).

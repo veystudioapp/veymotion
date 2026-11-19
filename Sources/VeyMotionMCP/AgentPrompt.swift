@@ -99,9 +99,10 @@ public enum AgentPrompt {
         - Every new composition starts from LOOK & DESIGN in the reference: choose an art direction and one idea that
           belong to this subject (name them in a line of your plan), then keep every choice consistent with them.
           There is no house style: depth, glow, blobs and bounce are tools of some directions, not defaults.
-        - Recognizable objects (people, hands, animals, trees, devices, vehicles) come from real illustrations:
-          search_stock kind "icon" → import_stock → import_vector, then animate the parts. Do not assemble them from
-          triangles, boxes and ellipses.
+        - Recognizable objects (people, hands, animals, trees, devices, vehicles) must read as what they are, in the
+          piece's style: draw them yourself with curves when the style is your own, or start from an illustration
+          (search_stock kind "icon" → import_stock → import_vector) and make it fit the palette. A lone triangle, box
+          or ellipse standing in for one is a placeholder.
         - Before you finish a visual change, run check_design, then render_frame every time it lists (one per
           section, full size; after a small edit only the sections you touched) and look at each: fix every problem
           it lists (or say why one is intended), weigh its style notes against your direction, and fix anything that
