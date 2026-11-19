@@ -254,8 +254,10 @@ Easy Ease F9 / ⇧F9 / ⌘⇧F9).
   builds the "finished" layers from ordinary ones: a `look` group at the bottom (radial-gradient backdrop, two blurred
   drifting blobs, dust/bokeh) and `look-finish` on top (vignette gradient, mid-gray overlay rect with `grain`), plus a
   camera zoom 1 → 1.04 when the scene has none; re-applying replaces both groups by id. `Docs.instructions` opens with
-  a LOOK & DESIGN section (depth, light, secondary motion, type hierarchy, palette, self-check list) that the agent
-  prompt points at, and `Sample.swift` is written to follow it, so keep the three in step.
+  a LOOK & DESIGN section that the agent prompt points at. It has no house style on purpose: direction first (named in
+  the agent's plan), one idea that belongs to the subject, consistency inside the direction, hierarchy/readability,
+  composition and rhythm, then craft notes as defaults and a self-check list. Depth, glow and bounce are tools of some
+  directions, not rules; `Sample.swift` is one lit direction. Keep the prompt, the lint's split and the look in step.
   Quality is checked in code, not only in the prompt (`DesignCheck.swift`): `designIssues(renderer:)` is a
   deterministic lint with two kinds of findings: problems (`warning`: what breaks any style — edge, goo-text,
   short-long-shadow, scaled-stroke, reading-time, text-overlap, low-contrast, busy-behind-text, misaligned,

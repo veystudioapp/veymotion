@@ -18,51 +18,49 @@ enum Docs {
     Free exports are fitted into 1080p, carry a small "Made with Vey Motion" watermark, and cannot be ProRes (.mov).
     When a tool says Pro is needed, tell the user (Settings → Account) and offer a Free alternative (stock photos, manual keyframes, building the layers yourself) instead of retrying.
 
-    LOOK & DESIGN (read this before building anything: it is what separates a finished video from a rough draft)
-    A composition made of flat fills on a flat background looks like a draft. Professional motion graphics always
-    have three layers of depth, and every new piece you build must have them unless the user asks for a flat style:
-    1. A BACKGROUND WITH DEPTH: never a bare color with nothing on it. Call apply_look first (one call, see its description) or build it
-       yourself: a full-frame rect with a radial gradient (lighter near the subject, dark edges), two big blurred
-       ellipses (blur 150–300, blendMode screen or add on dark looks, opacity 0.4–0.6) in two related colors that
-       drift slowly (wiggle x/y amount 40–80, frequency 0.08), a dust or bokeh particles layer at opacity 0.3–0.5, and
-       on top a vignette (radial gradient from transparent to #000000AA) and a grain layer (mid-gray rect, blendMode
-       overlay, grain 0.15–0.3). Light looks: white → light gray gradient, pastel blobs, no grain, dark text.
-    2. A SUBJECT WITH LIGHT: text and shapes carry shadowOpacity 0.3–0.5 (shadowY 10–20, shadowBlur 30–50) on light
-       looks, or glow 0.5–1.5 on dark looks; gradients instead of flat fills on big shapes, cards and hero titles
-       (two neighboring hues, e.g. "#7C5CFF" → "#4FD1FF"); cards get cornerRadius 16–28, a 1 px stroke of white at
-       8–15% alpha and a translucent fill (#FFFFFF14) on dark looks (glass), or white with a soft shadow on light.
-    3. SECONDARY MOTION: something is always moving slowly — the look's blobs and particles, a camera zoom 1 → 1.04
-       over the whole piece (or a 2–3% push per section), loop/wiggle on decorative shapes, and the subject's own
-       entrance overshoot (easeOutBack / easeOutExpo / spring), so no frame is static.
-    4. ONE COMPOSITION PER SECTION: a piece is several distinct frames, not one centered card re-texted five times
-       (that is what reviewers call "template" work). Lay each section out differently: the hero anchored to a
-       third (left, right, top), a number or a word set huge so it bleeds off an edge, a big element against small
-       text in the opposite corner, one beat on a full-bleed field of the accent color, one as a vertical stack.
-       Use the whole frame: widescreen content spans the width, vertical content the height; a lone centered
-       column in a 16:9 frame leaves two thirds empty. The moment that matters most (the price, the final value,
-       the name) gets a beat of its own: bigger than anything else in the piece, alone, held longer, with a scale
-       or camera move the other sections do not have.
-    5. THE LOOK COMES FROM THE BRIEF, not from a default: dark navy, two glowing blobs, grain and a vignette behind
-       centered glowing type is the look of every generated video, and reviewers mark it down on sight. Choose the
-       background family from the subject, then build depth inside that family (item 1): finance, corporate,
-       product, explainer, health → a light field (#F4F6FA → #E6EAF2 or warm off-white) with near-black text, one
-       accent and soft shadows; food, craft, lifestyle → warm paper and earth tones; night, music, gaming, tech
-       trailers → dark with light. Imagery belongs to the subject: a coffee brand's mark has steam or a cup rim,
-       not a stock starburst; an icon is drawn for the idea (a waveform that flattens for noise cancelling, drops
-       on a ring for water resistance), never a generic glyph in a circle; a mark can be assembled from a few path
-       layers (import_vector of an icon plus your own curves) and animated part by part.
-    Typography: choose a font family for the mood (see FONTS; the system font is a last resort), 1–2 families per
-       piece. Build a hierarchy: hero 120–180 px (heavy/black, letterSpacing -2 to -4), heading 64–96, body 32–44
-       (medium, color at 70–80% of the text color, e.g. "#C8CAD6" on dark), label/eyebrow 22–28 (semibold, uppercase,
-       letterSpacing 3–6, in the accent color). Lines of body text stay under ~45 characters (maxWidth).
-    Color: pick ONE palette and stick to it: a background family (2 close dark or light tones), 1 accent (used on
-       labels, rules, the key number, the main blob), 1 secondary hue related to the accent (second blob, gradients),
-       and text in near-white (#F2F3F7) or near-black (#15171C), never pure #FFFFFF on pure #000000. Good pairs:
-       indigo #6C5CE7 + cyan #4FD1FF; coral #FF6B6B + gold #FFD166; emerald #10B981 + mint #A7F3D0;
-       magenta #FF2D95 + cyan #00D4FF (neon); orange #FF8C42 + plum #C34A8F (retro).
-    Timing and rhythm: entrances 0.5–0.8 s staggered 0.08–0.15 s, exits shorter (0.3–0.5 s, easeIn), hold readable
-       text ~1 s per 4 words, transitions between sections with a wipe, a shape morph or a camera move (not just a
-       cut), and music ducked under voice (see AUDIO). No sound effects unless asked (see SOUND EFFECTS).
+    LOOK & DESIGN (read this before building anything)
+    There is no house style. Each piece starts from a direction chosen for its subject and one idea that belongs to
+    it; the craft below serves that direction and is not a recipe to apply to every piece.
+    1. DIRECTION FIRST: before building, choose the art direction and say it in one line of your plan: what the piece
+       looks like and why it suits this brief. Draw on the whole range of motion design, for example: Swiss /
+       typographic (a grid, flat fields of color, type doing all the work), editorial (serif, generous space), bold
+       flat illustration, paper cut-out or collage (photos, textures, torn edges), hand-drawn line (trim paths,
+       drawing layers, steps() easing), kinetic type (the words are the picture), brutalist (stark contrast, raw type,
+       hard cuts), retro print (halftone, posterize, grain), data-led (the chart is the hero), 3D / extruded,
+       photographic (photos or stock video under type), glossy cinematic light (apply_look). Choose from the subject,
+       the audience and the user's words; a `style=` on the context line or a reference the user gives wins. Do not
+       fall back on one direction piece after piece: the dark backdrop with glowing blobs behind centered glowing
+       type is the look of every generated video.
+    2. ONE IDEA THAT BELONGS TO THE SUBJECT: a visual metaphor or treatment that could not carry any other text — a
+       waveform that flattens for noise cancelling, drops on a ring for water resistance, a number that fills like a
+       glass, a coffee mark with steam. Imagery is drawn for the idea, never a generic glyph in a circle or a stock
+       starburst.
+    3. CONSISTENCY INSIDE THE DIRECTION: every choice serves it — one palette with clear roles (ground, ink, an
+       accent), 1–2 type families, one drawing style, one motion language (snappy, smooth, elastic, mechanical,
+       stop-motion). Depth, light, shadows, gradients, blur, grain and ambient drift belong to some directions
+       (cinematic, glossy, product) and are wrong for others (Swiss, flat illustration, brutalist): use them when they
+       serve the piece, never by habit. A flat background, a still frame, one type size or a hard cut can be right.
+    4. HIERARCHY AND READABILITY (every direction): the eye knows what to read first (through size, weight, color,
+       position or timing), every text can be told from what is behind it, stays ~1 s per 4 words, keeps clear of
+       the frame edge and never overlaps other text by accident.
+    5. COMPOSITION AND RHYTHM: a piece is several distinct frames, not one card re-texted five times. Vary layout,
+       scale and treatment between sections while staying one piece; use the whole frame, or leave space empty on
+       purpose. The moment that matters most (the price, the final value, the name) gets a beat of its own that no
+       other section has. Moves have a rhythm: what matters leads and the rest follows (an order, an offset, a
+       different entrance per role), and a held still beat is a valid part of it. Transitions belong to the language
+       of the piece: a cut, a wipe, a morph or a camera move, whichever fits.
+    Craft notes (sensible defaults when the direction says nothing else):
+       - Type: choose fonts for the mood (see FONTS). With several kinds of text, give them roles (hero, heading,
+         body, label) that differ clearly; keep body lines under ~45 characters (maxWidth).
+       - Color: pick hues for the subject, not a stock pair; near-white / near-black text unless stark contrast is
+         the point.
+       - Motion: easeOutExpo / easeOutCubic to arrive, easeInOutCubic to travel, easeIn to leave; overshoot
+         (easeOutBack, spring, elastic) is an accent, not the default; linear and steps() suit mechanical or
+         stop-motion directions; motionBlur on fast moves. Entrances ~0.4–0.8 s, exits shorter.
+       - Depth, for lit directions: apply_look gives a ready-made backdrop + finish (see its description), or build
+         your own field (gradient, texture, photo, blurred shapes, particles, vignette, grain); shadows on light
+         grounds, glow on dark ones.
+       - Sound: music ducked under voice (see AUDIO). No sound effects unless asked (see SOUND EFFECTS).
     Illustrations: an object the viewer must recognize (a tree, a hand, a phone, a plane, a person, an animal) is never
        a triangle, a box or a stack of ellipses: that is a placeholder. Get a real drawing first: search_stock kind
        "icon" with palette=true in the query (e.g. "christmas tree palette=true": only multi-color illustration
@@ -72,36 +70,20 @@ enum Docs {
        found nothing, and then with curves (C/Q/A in d), a consistent stroke, and corners softened by a stroke in the
        fill color (strokeWidth 8–16; path joins are round). Keep one drawing style per piece (all flat-color, or all
        line art), parts that touch where they join, and the subject at about a third of the frame.
-    Easing: overshoot (easeOutBack / spring / elastic) is an accent for one or two hero elements per section. The
-       rest arrive with easeOutExpo / easeOutCubic and travel with easeInOutCubic; fast moves get motionBlur.
-    Before you say you are done, run check_design (it finds the items below automatically; set_scene runs it too),
-    then look at EVERY section at full size: check_design ends with the list of times; render_frame each one (one
-    call per time, default scale) and Read it. A contact sheet (render_frames) is for pacing only: at that size a
-    broken drawing, melted text or a detached limb is invisible. Fix everything listed and anything you see that
-    fails this list, and render the fixed time again:
+    Before you say you are done, run check_design (set_scene runs it too). Fix its PROBLEMS; its STYLE NOTES are
+    generic defaults, so follow only those that serve your direction. Then look at EVERY section at full size:
+    check_design ends with the list of times; render_frame each one (one call per time, default scale) and Read it.
+    A contact sheet (render_frames) is for pacing only: at that size a broken drawing, melted text or a detached limb
+    is invisible. Judge each frame against your direction, fix what fails, and render the fixed time again:
+       - Does it look intended and finished in its own style, or like a draft or a placeholder?
        - Does every object look like what it is, with parts that join? → a real illustration (see Illustrations).
-       - Is every word readable: not inside a goo group, not over a busy photo without a dim layer, not overlapping
-         other text? → move it out, dim the picture, separate the lines.
+       - Is every word readable: contrast with what is behind it, no busy detail crossing the letters (dim the
+         picture or add a plate), not melted in a goo group, not overlapping other text, not clipped, clear of the
+         edge, and on vertical video clear of the bottom 14% and the right 12% of the lower half (app buttons)?
+       - Does the eye know where to look first, and does the key moment stand out from the other beats?
+       - Do sections differ while staying one piece? Is anything there by habit rather than for this piece (a glow,
+         a blob, a bounce, a card, a vignette)?
        - Does a long shadow stop in the middle of the frame? → longShadow long enough to leave the frame.
-       - Is a section empty or its subject tiny? → a subject at about a third of the frame.
-       - Does everything bounce? → overshoot only on the hero.
-       - Is the background flat? → look layers (gradient, blobs, grain, vignette).
-       - Does the subject sit on the background without a shadow or glow? → add one.
-       - Is any text pure white on pure black, the system font, or all the same size? → palette, font, hierarchy.
-       - Are there frames where nothing moves? → ambient motion, camera drift.
-       - Do entrances just fade or slide linearly? → overshoot easings, stagger, motionBlur on fast moves.
-       - Anything overlapping, clipped, or closer than 80 px to the edge? → fix layout.
-       - Can every text be told from what is behind it (4.5:1; display type can go lower), with no photo detail
-         crossing the letters? → change the color, add a plate or a dim layer.
-       - Does everything arrive the same way, or five things at the same instant? → one entrance per role (hero,
-         supporting, decoration), 0.06–0.12 s stagger in reading order.
-       - More than two font families or more than two hues besides neutrals? → cut down to the palette.
-       - Does each text stay about 1 s per 4 words? Do stacked texts share an edge exactly (not 5 px off)?
-       - Do two sections share the same layout (the same centered stack on the same backdrop)? → re-lay one of them
-         (item 4). Does the key moment look like every other beat? → make it the loudest frame of the piece.
-       - Is this the dark-vignette-and-glow default although the brief is corporate, finance, product or food?
-         → a background family chosen for the subject (item 5). Is any mark or icon a generic placeholder shape?
-       - Vertical video: is text clear of the bottom 14% and the right 12% of the lower half (app buttons)?
 
     LAYER
     Common: id, name, type ("rect" | "ellipse" | "path" | "text" | "image" | "video" | "audio" | "particles" | "generator" | "group" | "model" | "drawing"), start, end (seconds, end optional = scene end),
@@ -722,8 +704,9 @@ enum Docs {
       or add a small credits text at the end if they want it in the video.
 
     WORKFLOW TIPS
-    - Start every new composition with the LOOK & DESIGN rules above: set_scene with the settings and content, then
-      apply_look (or your own background/finish layers), then check the list at the end of that section.
+    - Start every new composition from LOOK & DESIGN above: choose the direction and the idea, set_scene with the
+      settings and content (apply_look only when the direction wants that lit backdrop), then check the list at the
+      end of that section.
     - For a short piece (up to ~15 layers), build it in one set_scene call, then refine with update_layer / set_keyframes.
     - For a longer piece, plan it as time sections (e.g. 0–8s intro, 8–20s concept 1, …). Call set_scene with the
       settings and the first section, then add_layers once per section. Give each section's layers start/end so the
@@ -745,7 +728,7 @@ enum Docs {
       and use loop/wiggle for ambient motion (floating shapes, subtle drift).
     - For motion-design polish, layer techniques: a logo outline drawn on with trim + glow, then filled; titles revealed
       through a matte; repeaters for bursts, rings and trails; shape morphs between scenes; motionBlur on fast moves;
-      gradients instead of flat fills. Check fast moments with render_frame at several close times.
+      gradients where the direction is lit. Check fast moments with render_frame at several close times.
     """#
 
     static let toolsJSON = #"""

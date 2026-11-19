@@ -531,10 +531,10 @@ extension MotionScene {
         let times = reviewTimes().map { String(format: "%g", $0) }.joined(separator: ", ")
         return """
             Close look (the lint cannot see pictures): render_frame at full size, one call per time, and Read each PNG: \(times).
-            In every frame check: does each object look like what it is, or like a placeholder made of boxes and triangles? \
-            Do parts join (limbs meet the body, shadows touch their object)? Is every word readable (not melted, not over a busy \
-            picture, not overlapping other text)? Is the subject big enough (about ⅓ of the frame) and is the frame not empty? \
-            Fix what fails, then render that time again.
+            In every frame check: does it look intended and finished in the direction you chose? Does each object look like \
+            what it is, or like a placeholder made of boxes and triangles? Do parts join (limbs meet the body, shadows touch \
+            their object)? Is every word readable (not melted, not over a busy picture, not overlapping other text)? Is empty \
+            space or a small subject there on purpose? Fix what fails, then render that time again.
             """
     }
 
