@@ -29,7 +29,13 @@ public final class MCPServer {
     }
 
     /// Handles one JSON-RPC message. Returns nil for notifications.
+    /// Every transport (control socket, HTTP, stdio, the CLI) calls this from a background thread, whose stack is
+    /// too small for the lint's renders: the call runs on a thread with a large one.
     public func handle(_ message: [String: Any]) -> [String: Any]? {
+        LargeStack.run { respond(message) }
+    }
+
+    private func respond(_ message: [String: Any]) -> [String: Any]? {
         let id = message["id"]
         guard let method = message["method"] as? String else {
             return id == nil ? nil : Self.error(id, code: -32600, "Invalid request")

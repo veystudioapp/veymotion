@@ -935,7 +935,7 @@ final class ChatStore {
         s.setActivity("Checking the design…")
         let model = s.agentProvider == .claude ? self.model : nil
         let brief = start.prompt
-        DispatchQueue.global(qos: .userInitiated).async {
+        DispatchQueue.global(qos: .userInitiated).async { LargeStack.run {
             let issues = now.designIssues(renderer: FrameRenderer()).filter { $0.severity >= .warning }
             if lint, !issues.isEmpty {
                 DispatchQueue.main.async { self.lintFinished(s, run, issues, cost: cost, ms: ms) }
@@ -955,7 +955,7 @@ final class ChatStore {
                                         isCancelled: { run.isCancelled })
             }
             DispatchQueue.main.async { self.critiqueFinished(s, run, result, cost: cost, ms: ms) }
-        }
+        } }
         return true
     }
 

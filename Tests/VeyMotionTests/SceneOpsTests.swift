@@ -106,6 +106,14 @@ import Testing
         #expect(flagged("reading-time", [band, line]) == ["line"])
     }
 
+    @Test func largeStackGivesBackgroundWorkRoom() async {
+        // GCD threads have 512 KB; the lint's renders overflowed that (SIGBUS) in debug builds.
+        let size = await withCheckedContinuation { c in
+            DispatchQueue.global().async { c.resume(returning: LargeStack.run { pthread_get_stacksize_np(pthread_self()) }) }
+        }
+        #expect(size >= LargeStack.size)
+    }
+
     @Test func keyframesInterpolateAndHoldOutside() {
         let v = Animated<Double>.keyframes([MotionKeyframe(t: 1, v: 0, easing: .linear), MotionKeyframe(t: 3, v: 10, easing: .linear)])
         #expect(v.value(at: 0) == 0)
