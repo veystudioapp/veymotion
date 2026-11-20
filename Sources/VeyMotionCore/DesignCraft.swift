@@ -75,6 +75,16 @@ private struct FramePixels {
         let mean = sum / n
         return (lum / n, max(0, squares / n - mean * mean).squareRoot())
     }
+
+    /// Share of pixels (0…1) whose color differs from `other`'s by more than `tolerance` (of 255) in some channel.
+    func changed(from other: FramePixels, tolerance: Int = 24) -> Double {
+        guard width == other.width, height == other.height, width * height > 0 else { return 1 }
+        var n = 0
+        for i in stride(from: 0, to: data.count, by: 4) {
+            for c in 0..<4 where abs(Int(data[i + c]) - Int(other.data[i + c])) > tolerance { n += 1; break }
+        }
+        return Double(n) / Double(width * height)
+    }
 }
 
 extension MotionScene {
@@ -447,5 +457,31 @@ extension MotionScene {
                                    layers: covered))
         }
         return out
+    }
+
+    /// 25. A scene marked `loop` flows from its last frame into its first: the step across the seam may be no bigger
+    /// than the steps between the frames around it. Renders five small frames.
+    func loopIssues(renderer: FrameRenderer?, pixels: Bool) -> [DesignIssue] {
+        guard loop, pixels, let renderer, frameCount >= 4 else { return [] }
+        let fps = Double(self.fps), n = frameCount
+        let scale = min(1, 320 / Double(width))
+        func frame(_ i: Int) -> FramePixels? {
+            renderer.makeImage(self, at: Double(i) / fps, scale: scale).flatMap(FramePixels.init)
+        }
+        guard let a = frame(n - 3), let b = frame(n - 2), let last = frame(n - 1), let first = frame(0), let second = frame(1)
+        else { return [] }
+        let seam = last.changed(from: first)
+        let around = max(a.changed(from: b), b.changed(from: last), first.changed(from: second))
+        guard seam > max(0.01, around * 3) else { return [] }
+        let tLast = Double(n - 1) / fps
+        let ends = layers.filter { $0.type.isVisual }.filter {
+            $0.isVisible(at: 0, sceneDuration: duration) != $0.isVisible(at: tLast, sceneDuration: duration)
+        }.map(\.id)
+        let pct = { (x: Double) in String(format: "%.0f%%", x * 100) }
+        return [DesignIssue(severity: .warning, code: "loop-seam",
+                            message: "The scene is marked loop, but its last frame (\(String(format: "%.2f", tLast))s) jumps to the first: \(pct(seam)) of the picture changes across the seam, \(pct(around)) between the frames around it"
+                                + (ends.isEmpty ? "" : "; on screen at only one end: \(ends.prefix(6).joined(separator: ", "))"),
+                            fix: "end every layer on screen in the state it has at 0 s (same layers, place, scale, opacity, color, ground), e.g. let the last hand-off turn back into the opening form; render_frame both ends to compare; or set the scene's loop to false if it is not meant to repeat",
+                            layers: ends)]
     }
 }

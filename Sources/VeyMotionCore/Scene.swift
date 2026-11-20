@@ -1216,6 +1216,8 @@ public struct MotionScene: Codable, Equatable, Sendable {
     public var lights: [Light]
     /// Cut-out rig (see `Rig.swift`): bones layers can hang on, posed by angle keyframes or `solveIK`.
     public var bones: [Bone]
+    /// The piece is meant to repeat seamlessly: its last frame flows into its first (the lint checks the seam).
+    public var loop: Bool = false
     /// Draw order: first is bottom-most.
     /// Every change re-links `audioReact` to its audio layer and `links` to their source tracks, so
     /// `MotionLayer.value` can follow them on its own.
@@ -1302,7 +1304,7 @@ public struct MotionScene: Codable, Equatable, Sendable {
         }
     }
 
-    enum CodingKeys: String, CodingKey { case width, height, fps, duration, background, camera, lights, layers, bones }
+    enum CodingKeys: String, CodingKey { case width, height, fps, duration, background, camera, lights, layers, bones, loop }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -1316,6 +1318,7 @@ public struct MotionScene: Codable, Equatable, Sendable {
         camera = try c.decodeIfPresent(Camera.self, forKey: .camera)?.resolved(in: self)
         lights = try c.decodeIfPresent([Light].self, forKey: .lights) ?? []
         bones = try c.decodeIfPresent([Bone].self, forKey: .bones) ?? []
+        loop = try c.decodeIfPresent(Bool.self, forKey: .loop) ?? false
         try validate()
         normalizeIds()
         resolveLinks()
@@ -1331,6 +1334,7 @@ public struct MotionScene: Codable, Equatable, Sendable {
         try c.encodeIfPresent(camera, forKey: .camera)
         if !lights.isEmpty { try c.encode(lights, forKey: .lights) }
         if !bones.isEmpty { try c.encode(bones, forKey: .bones) }
+        if loop { try c.encode(loop, forKey: .loop) }
         try c.encode(layers, forKey: .layers)
     }
 

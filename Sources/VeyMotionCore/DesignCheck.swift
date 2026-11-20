@@ -517,6 +517,7 @@ extension MotionScene {
                                    layers: thickened))
         }
         out += craftIssues(renderer: renderer, pixels: pixels)
+        out += loopIssues(renderer: renderer, pixels: pixels)
         return out.sorted { $0.severity > $1.severity }
     }
 

@@ -106,6 +106,24 @@ import Testing
         #expect(flagged("reading-time", [band, line]) == ["line"])
     }
 
+    @Test func loopSeamIsCheckedOnlyForLoops() throws {
+        var dot = MotionLayer.rect("dot", x: 100, y: 180, w: 60, h: 60, fill: "#F0F0F0")
+        dot.x = .keyframes([MotionKeyframe(t: 0, v: 100), MotionKeyframe(t: 2, v: 540, easing: .easeInOut)])
+        var scene = MotionScene.test(duration: 2, layers: [dot])
+        func seam() -> Bool {
+            LargeStack.run { scene.designIssues(renderer: FrameRenderer()).contains { $0.code == "loop-seam" } }
+        }
+        #expect(!seam())                    // not marked loop: an ending elsewhere is fine
+        scene.loop = true
+        #expect(seam())                     // marked loop: the dot jumps back at the seam
+        dot.x = .keyframes([MotionKeyframe(t: 0, v: 100), MotionKeyframe(t: 1, v: 540, easing: .easeInOut),
+                            MotionKeyframe(t: 2, v: 100, easing: .easeInOut)])
+        scene.layers = [dot]
+        #expect(!seam())                    // it comes back to where it started
+        let json = try SceneJSON.encode(scene)
+        #expect(try SceneJSON.decode(MotionScene.self, from: json).loop)
+    }
+
     @Test func largeStackGivesBackgroundWorkRoom() async {
         // GCD threads have 512 KB; the lint's renders overflowed that (SIGBUS) in debug builds.
         let size = await withCheckedContinuation { c in

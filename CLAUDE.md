@@ -261,7 +261,8 @@ Easy Ease F9 / ⇧F9 / ⌘⇧F9).
   Quality is checked in code, not only in the prompt (`DesignCheck.swift`): `designIssues(renderer:)` is a
   deterministic lint with two kinds of findings: problems (`warning`: what breaks any style — edge, goo-text,
   short-long-shadow, scaled-stroke, reading-time, text-overlap, low-contrast, busy-behind-text, misaligned,
-  platform-ui) and style notes (`hint`: defaults of a polished generic look that a piece may break on purpose; listed
+  platform-ui, loop-seam: a scene marked `loop` whose last frame jumps to its first, measured against the frame steps
+  around the seam in five 320 px renders) and style notes (`hint`: defaults of a polished generic look that a piece may break on purpose; listed
   by check_design, never sent back to be fixed, left out of `design=` and set_scene's report). The rules: (flat background, pure white on black, system font, flat type sizes, unlit layers, ≥ 2 s
   stretches with no motion, text within 80 px of the edge, linear entrances, "only text and boxes" hint; and, reaching
   into nested groups: text in a `goo` group, long shadows ending inside the frame, ≥ 3 bare straight-edged polygons,

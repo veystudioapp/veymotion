@@ -8,6 +8,8 @@ enum Docs {
     { "width":1920, "height":1080, "fps":30, "duration":6, "background":"#0E0E12", "layers":[ ... ] }
     - Coordinates: scene pixels, origin top-left, y grows downward. A layer's x/y is its CENTER.
     - layers[0] is drawn first (bottom); the last layer is on top.
+    - "loop": true marks a piece meant to repeat seamlessly (social loops, backgrounds, showreels): its last frame must
+      flow into its first, and check_design reports a seam that jumps.
     - For social video, size the scene for the platform: TikTok / YouTube Shorts / Reels 1080×1920 (9:16, Shorts and
       Reels up to 3 min), YouTube 1920×1080, Facebook feed 1080×1350 (4:5), X 1920×1080 (up to 2:20), square 1080×1080.
       Keep text and faces out of the bottom ~20% and right edge of 9:16 videos (platform buttons and captions cover them).
@@ -93,7 +95,8 @@ enum Docs {
          · a recolor: duplicate_layer the element, give the copy the new color and a matte rect that grows across
            it (width or x keyed), so the color sweeps through instead of fading.
          Moves overlap: the next form starts moving before the last one settles. Type joins the chain too
-         (text_to_path letters fly in from the shapes or collapse back into the dot).
+         (text_to_path letters fly in from the shapes or collapse back into the dot). For a loop, the last hand-off
+         turns back into the opening form and the scene gets "loop": true.
        - Sound: music ducked under voice (see AUDIO). No sound effects unless asked (see SOUND EFFECTS).
     Illustrations: an object the viewer must recognize (a tree, a hand, a phone, a plane, a person, an animal) has to
        read as what it is, drawn in the piece's style; a lone triangle, box or stack of ellipses standing in for it is
@@ -791,12 +794,12 @@ enum Docs {
       },
       {
         "name": "check_design",
-        "description": "Lints the scene. PROBLEMS break a piece whatever its style, so fix them (or tell the user why one is intended): text within 80 px of the edge (40 px for small labels) or clipped, melted by a goo group, shown under 0.2 s per word (display type cropped well past the edge on purpose and one word repeated as a band are left alone), with too little contrast against the pixels behind it or over a busy picture (measured in small renders), texts overlapping, stacked texts 3–8 px off each other's edge, text under the app buttons of a vertical video, long shadows that stop inside the frame, outlines thickened by scale. STYLE NOTES are the defaults of a polished generic look (a flat background, no shadow/glow/gradient, the system font, one type size, still stretches, linear or identical entrances, no stagger, bare polygons, overshoot on most layers, many fonts or hues, nearly empty frames): weigh them against the direction you chose and ignore those it breaks on purpose. Ends with one time per section: render_frame each of them at full size and look, because the lint cannot see whether a drawing looks right. Run it before you say you are done.",
+        "description": "Lints the scene. PROBLEMS break a piece whatever its style, so fix them (or tell the user why one is intended): text within 80 px of the edge (40 px for small labels) or clipped, melted by a goo group, shown under 0.2 s per word (display type cropped well past the edge on purpose and one word repeated as a band are left alone), with too little contrast against the pixels behind it or over a busy picture (measured in small renders), texts overlapping, stacked texts 3–8 px off each other's edge, text under the app buttons of a vertical video, long shadows that stop inside the frame, outlines thickened by scale, a scene marked loop whose last frame jumps to its first. STYLE NOTES are the defaults of a polished generic look (a flat background, no shadow/glow/gradient, the system font, one type size, still stretches, linear or identical entrances, no stagger, bare polygons, overshoot on most layers, many fonts or hues, nearly empty frames): weigh them against the direction you chose and ignore those it breaks on purpose. Ends with one time per section: render_frame each of them at full size and look, because the lint cannot see whether a drawing looks right. Run it before you say you are done.",
         "inputSchema": { "type": "object", "properties": {} }
       },
       {
         "name": "update_scene",
-        "description": "Change scene settings (width, height, fps, duration, background, camera, lights) without touching layers.",
+        "description": "Change scene settings (width, height, fps, duration, background, camera, lights, loop) without touching layers.",
         "inputSchema": {
           "type": "object",
           "properties": { "changes": { "type": "object", "description": "e.g. {\"duration\": 8, \"background\": \"#000000\"}" } },
