@@ -204,25 +204,6 @@ struct NewProjectSheet: View {
     }
 }
 
-/// A selectable card or chip: accent outline and tint when selected.
-private struct ChoiceTileStyle: ButtonStyle {
-    var selected: Bool
-    var capsule = false
-
-    func makeBody(configuration: Configuration) -> some View {
-        let shape = RoundedRectangle(cornerRadius: capsule ? 100 : 10, style: .continuous)
-        configuration.label
-            .padding(.horizontal, capsule ? 12 : 0).padding(.vertical, capsule ? 5 : 0)
-            .frame(maxWidth: capsule ? nil : .infinity)
-            .contentShape(shape)
-            .background(shape.fill(selected ? Color.accentColor.opacity(0.12)
-                                            : Color.primary.opacity(configuration.isPressed ? 0.08 : 0.04)))
-            .overlay(shape.strokeBorder(selected ? Color.accentColor : Color.primary.opacity(0.1),
-                                        lineWidth: selected ? 1.5 : 1))
-            .foregroundStyle(selected && capsule ? Color.accentColor : .primary)
-    }
-}
-
 /// The Projects screen: fills the window at launch and with File ▸ Projects… (⇧⌘P). A sidebar (Home, All Projects,
 /// formats, search, the plan) and, on Home, the project being edited (or the latest one) as a large banner over
 /// shelves of the others. Leaving it (opening a project) shows the editor.

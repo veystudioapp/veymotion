@@ -564,3 +564,22 @@ struct AgentStatusButton: View {
         .font(.callout)
     }
 }
+
+/// A selectable card or chip: accent outline and tint when selected.
+struct ChoiceTileStyle: ButtonStyle {
+    var selected: Bool
+    var capsule = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        let shape = RoundedRectangle(cornerRadius: capsule ? 100 : 10, style: .continuous)
+        configuration.label
+            .padding(.horizontal, capsule ? 12 : 0).padding(.vertical, capsule ? 5 : 0)
+            .frame(maxWidth: capsule ? nil : .infinity)
+            .contentShape(shape)
+            .background(shape.fill(selected ? Color.accentColor.opacity(0.12)
+                                            : Color.primary.opacity(configuration.isPressed ? 0.08 : 0.04)))
+            .overlay(shape.strokeBorder(selected ? Color.accentColor : Color.primary.opacity(0.1),
+                                        lineWidth: selected ? 1.5 : 1))
+            .foregroundStyle(selected && capsule ? Color.accentColor : .primary)
+    }
+}

@@ -23,10 +23,15 @@ final class LicenseStore {
 
     /// Opens the upgrade modal, naming `feature` when a locked one sent the user there.
     func presentUpgrade(for feature: ProFeature? = nil) {
+        prepareUpgrade(for: feature)
+        showingUpgrade = true
+    }
+
+    /// Readies `UpgradeSheet` for a sheet that shows it itself (a sheet cannot open `ContentView`'s over it).
+    func prepareUpgrade(for feature: ProFeature?) {
         upgradeFeature = feature
         error = nil
         if checkoutURL == nil { loadLinks() }
-        showingUpgrade = true
     }
 
     private init() {
