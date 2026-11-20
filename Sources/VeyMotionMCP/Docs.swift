@@ -28,7 +28,7 @@ enum Docs {
        drawing layers, steps() easing), kinetic type (the words are the picture), brutalist (stark contrast, raw type,
        hard cuts), retro print (halftone, posterize, grain), data-led (the chart is the hero), 3D / extruded,
        photographic (photos or stock video under type), glossy cinematic light (apply_look). Choose from the subject,
-       the audience and the user's words; a `style=` on the context line or a reference the user gives wins. Do not
+       the audience and the user's words; a reference the user gives wins. Do not
        fall back on one direction piece after piece: the dark backdrop with glowing blobs behind centered glowing
        type is the look of every generated video.
     2. ONE IDEA THAT BELONGS TO THE SUBJECT: a visual metaphor or treatment that could not carry any other text — a

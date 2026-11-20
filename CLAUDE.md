@@ -271,11 +271,10 @@ Easy Ease F9 / ⇧F9 / ⌘⇧F9).
   to `render_frame` at full size, since the lint cannot see drawings); `set_scene` runs it and keeps the scene as given by default; only with `look` "auto" does `applyAutoLook`
   add a look to a scene whose background is flat (`hasBackgroundDepth`), picking the kind from the background's
   luminance (a flat background can be the design, so nothing adds one unasked). In the app,
-  `ChatStore` puts `design=` (the lint summary) and `style=` (the project's `ChatStyle`: look + font pairing,
-  chosen in the composer's Style popover, saved in `.chat.json`) on every context line (lint with `pixels: false`:
+  `ChatStore` puts `design=` (the lint summary) on every context line (lint with `pixels: false`:
   no renders on the main thread), and after a turn that changed the scene `startReview` runs off the main thread:
   the full lint, whose problems (warnings) go back to the agent once per user message (`agent.designCheck`), then, when the lint
-  has nothing left to send, the critic, also once (`agent.critic`; both switches are in the same popover).
+  has nothing left to send, the critic, also once (`agent.critic`; both switches are in Settings → Assistant).
   `DesignCraft.swift` is the lint's second half (`craftIssues`): sameness (`same-entrance`: one entrance signature on
   ≥ 80% of ≥ 12 entering layers; `no-stagger`: ≥ 5 layers making the same move with the same start and end;
   `too-many-fonts`, `too-many-hues`), `reading-time`, and what it measures where the texts are: each text is judged

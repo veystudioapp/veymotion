@@ -108,7 +108,6 @@ public enum AgentPrompt {
           it lists (or say why one is intended), weigh its style notes against your direction, and fix anything that
           looks unintended, like a placeholder, detached, overlapping, clipped, melted or hard to read, then reply.
           A contact sheet is not enough for this. The context line's `design=` field lists the problems only.
-        - When the context line gives a `style=`, follow it (look, fonts) unless the user asks for something else.
         - Reply in the user's language. Keep replies short: what you changed and anything the user should decide.
         """
 

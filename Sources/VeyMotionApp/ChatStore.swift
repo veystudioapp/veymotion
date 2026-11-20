@@ -111,8 +111,6 @@ final class ChatStore {
         var scrollToken = 0
         /// Snapshots taken after each prompt that changed the scene, oldest first.
         fileprivate(set) var versions: [Version] = []
-        /// The project's standing brief (look + fonts).
-        var style = ChatStyle()
 
         /// The project it belongs to (nil = loose scene).
         @ObservationIgnored fileprivate var project: URL?
@@ -215,55 +213,16 @@ final class ChatStore {
     }
 
     static let maxVersions = 100
-    /// The project's standing brief: a look and a font pairing the agent follows without being told each time.
-    struct ChatStyle: Codable, Equatable {
-        /// `LookKind` raw value, nil = let the agent (or set_scene's auto look) choose.
-        var look: String?
-        /// A `fontPairings` title, nil = let the agent choose.
-        var fonts: String?
 
-        var isEmpty: Bool { look == nil && fonts == nil }
-        var lookKind: LookKind? { look.flatMap(LookKind.init(rawValue:)) }
-    }
-
-    /// Title font + text font, with the mood they suit.
-    struct FontPairing: Identifiable {
-        var title: String
-        var body: String
-        var mood: String
-        var id: String { "\(title) + \(body)" }
-    }
-
-    static let fontPairings: [FontPairing] = [
-        FontPairing(title: "Be Vietnam Pro", body: "Inter", mood: "Modern, Vietnamese-ready"),
-        FontPairing(title: "Playfair Display", body: "Inter", mood: "Elegant, editorial"),
-        FontPairing(title: "Space Grotesk", body: "IBM Plex Sans", mood: "Tech, product"),
-        FontPairing(title: "Montserrat", body: "Open Sans", mood: "Corporate, clean"),
-        FontPairing(title: "Bebas Neue", body: "Roboto", mood: "Bold, poster, sport"),
-        FontPairing(title: "Lora", body: "Source Sans 3", mood: "Warm, storytelling"),
-    ]
-
-    /// The shown conversation's brief, saved with it.
-    var style: ChatStyle {
-        get { current.style }
-        set {
-            guard newValue != current.style else { return }
-            current.style = newValue
-            saveConversation(current)
-        }
-    }
+    static let designCheckKey = "agent.designCheck", criticKey = "agent.critic"
 
     /// After a turn that changed the scene, the design lint runs and (once per message) the findings are sent
-    /// back to the agent to fix.
-    var designCheckEnabled: Bool = UserDefaults.standard.object(forKey: "agent.designCheck") as? Bool ?? true {
-        didSet { UserDefaults.standard.set(designCheckEnabled, forKey: "agent.designCheck") }
-    }
+    /// back to the agent to fix. Switched in Settings → Assistant.
+    var designCheckEnabled: Bool { UserDefaults.standard.object(forKey: Self.designCheckKey) as? Bool ?? true }
 
     /// After the lint, a separate Claude Code turn looks at rendered frames (it has not seen the agent's work) and
     /// its major findings go back to the agent, once per message. Uses the user's Claude Code, whichever CLI chats.
-    var criticEnabled: Bool = UserDefaults.standard.object(forKey: "agent.critic") as? Bool ?? true {
-        didSet { UserDefaults.standard.set(criticEnabled, forKey: "agent.critic") }
-    }
+    var criticEnabled: Bool { UserDefaults.standard.object(forKey: Self.criticKey) as? Bool ?? true }
 
     /// The review after a turn, in flight; cancelled when the user stops or starts over.
     fileprivate final class ReviewRun: @unchecked Sendable {
@@ -871,7 +830,6 @@ final class ChatStore {
         var codexSessionId: String?
         var codexForkSession: Bool?
         var items: [SavedItem]
-        var style: ChatStyle?
     }
 
     private struct SavedItem: Codable {
@@ -887,7 +845,7 @@ final class ChatStore {
         guard let project = s.project else { return }
         let url = ProjectStore.chatURL(project)
         let sessions = s.currentSessions
-        guard !s.items.isEmpty || !sessions.isEmpty || !s.style.isEmpty else {
+        guard !s.items.isEmpty || !sessions.isEmpty else {
             try? FileManager.default.removeItem(at: url)
             return
         }
@@ -906,8 +864,7 @@ final class ChatStore {
         let chat = SavedChat(project: project.path, sessionId: sessions[.claude],
                              forkSession: s.forkSessions.contains(.claude) ? true : nil,
                              codexSessionId: sessions[.codex],
-                             codexForkSession: s.forkSessions.contains(.codex) ? true : nil, items: saved,
-                             style: s.style.isEmpty ? nil : s.style)
+                             codexForkSession: s.forkSessions.contains(.codex) ? true : nil, items: saved)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let data = try? encoder.encode(chat) else { return }
@@ -940,18 +897,7 @@ final class ChatStore {
         s.items = items
         s.sessionIds = sessions
         s.forkSessions = forks
-        s.style = chat.style ?? ChatStyle()
         return s
-    }
-
-    /// The standing brief for the context line, or nil when nothing is set.
-    private var styleLine: String? {
-        var parts: [String] = []
-        if let k = style.lookKind { parts.append("look \(k.rawValue) (apply_look \(k.rawValue) on a new scene; \(k.isLight ? "dark text" : "light text"))") }
-        if let id = style.fonts, let p = Self.fontPairings.first(where: { $0.id == id }) {
-            parts.append("fonts \"\(p.title)\" for titles + \"\(p.body)\" for the rest (import from Google Fonts with search_stock kind font + import_stock when not installed)")
-        }
-        return parts.isEmpty ? nil : parts.joined(separator: "; ")
     }
 
     /// Prefixed to every message so "this"/"here"/"now" resolve against the editor state.
@@ -967,9 +913,8 @@ final class ChatStore {
             project = "; project=\(p.lastPathComponent) (assets go in its folders: \(folders.joined(separator: ", ")))"
         }
         let design = s.layers.isEmpty ? "empty scene" : MotionScene.designSummary(s.designIssues(renderer: FrameRenderer(), pixels: false))
-        let style = styleLine.map { "; style=\($0)" } ?? ""
-        return String(format: "[VeyMotion context: playhead=%.2fs; selected=%@; scene=%dx%d %dfps %.2fs; layers (bottom→top)=%@%@; design=%@%@]",
-                      scene.time, selected, s.width, s.height, s.fps, s.duration, ids.joined(separator: ", "), project, design, style)
+        return String(format: "[VeyMotion context: playhead=%.2fs; selected=%@; scene=%dx%d %dfps %.2fs; layers (bottom→top)=%@%@; design=%@]",
+                      scene.time, selected, s.width, s.height, s.fps, s.duration, ids.joined(separator: ", "), project, design)
     }
 
     /// After a turn that changed the scene, off the main thread (the lint renders small frames to measure contrast,

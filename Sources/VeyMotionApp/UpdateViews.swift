@@ -103,11 +103,42 @@ struct SettingsView: View {
             Form { AccountPanel() }
                 .padding(20)
                 .tabItem { Label("Account", systemImage: "person.crop.circle") }
+            Form { AssistantSettings() }
+                .padding(20)
+                .tabItem { Label("Assistant", systemImage: "sparkles") }
             Form { UpdatePanel() }
                 .padding(20)
                 .tabItem { Label("Updates", systemImage: "arrow.triangle.2.circlepath") }
         }
         .frame(width: 460)
+    }
+}
+
+/// The reviews that run after an assistant turn changed the scene (read by `ChatStore.startReview`).
+private struct AssistantSettings: View {
+    @AppStorage(ChatStore.designCheckKey) private var designCheck = true
+    @AppStorage(ChatStore.criticKey) private var critic = true
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Toggle(isOn: $designCheck) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Check design after each change")
+                    Text("Weak contrast, text off the edge, one entrance for everything, static stretches… are sent back to the assistant to fix, once per message.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Toggle(isOn: $critic) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Second look at the frames")
+                    Text("A separate Claude Code review of rendered frames scores the piece and sends back what a viewer would notice, once per message.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .toggleStyle(.checkbox)
     }
 }
 
