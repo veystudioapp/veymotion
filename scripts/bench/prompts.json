@@ -58,5 +58,10 @@
     "id": "app-promo",
     "width": 1920, "height": 1080, "duration": 15,
     "prompt": "A 15-second promo for a to-do app called \"Doneo\": a phone-shaped card with a task list where three tasks get checked off one by one with a satisfying tick, a headline \"Việc xong, đầu nhẹ\", and a call to action \"Tải Doneo miễn phí\" at the end. Fresh, light, product-style motion."
+  },
+  {
+    "id": "showreel-loop",
+    "width": 1920, "height": 1080, "duration": 12,
+    "prompt": "A 12-second seamless looping showreel for a small motion design studio called \"Nét\". One continuous shot, no cuts: everything grows out of a single dot, turns into a few different forms (shapes, a bit of 3D, a small chart), becomes the word \"NÉT\", and goes back into the dot so the loop point is invisible. Add a soundtrack that fits the cut."
   }
 ]
