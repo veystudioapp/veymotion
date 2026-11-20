@@ -84,6 +84,28 @@ import Testing
         #expect(!scene.designIssues(pixels: false).contains { $0.code == "scaled-stroke" })
     }
 
+    @Test func lintLeavesDeliberateEdgeTypeAlone() {
+        func flagged(_ code: String, _ layers: [MotionLayer]) -> Set<String> {
+            let scene = MotionScene.test(width: 1920, height: 1080, layers: layers)
+            return Set(scene.designIssues(pixels: false).filter { $0.code == code }.flatMap(\.layers))
+        }
+        // A corner label may sit at 40 px; body text at the same place may not.
+        let edge = flagged("edge", [.text("hud", "VEY—MOTION", x: 116, y: 72, size: 16),
+                                    .text("body", "VEY—MOTION", x: 300, y: 72, size: 40)])
+        #expect(edge == ["body"])
+        // Display type a third outside the frame is a crop; a line a little too long is a slip.
+        let crop = flagged("edge", [.text("big", "MOVE", x: 200, y: 540, size: 600),
+                                    .text("long", "This sentence is a little too long for the frame", x: 960, y: 540, size: 80)])
+        #expect(crop == ["long"])
+        // A repeated-word band runs off both edges and past in a moment: a texture, not reading.
+        var band = MotionLayer.text("band", String(repeating: "MOTION — ", count: 5), x: 960, y: 540, size: 150)
+        band.end = 0.5
+        var line = MotionLayer.text("line", "Five words gone too fast", x: 960, y: 300, size: 40)
+        line.end = 0.5
+        #expect(flagged("edge", [band]).isEmpty)
+        #expect(flagged("reading-time", [band, line]) == ["line"])
+    }
+
     @Test func keyframesInterpolateAndHoldOutside() {
         let v = Animated<Double>.keyframes([MotionKeyframe(t: 1, v: 0, easing: .linear), MotionKeyframe(t: 3, v: 10, easing: .linear)])
         #expect(v.value(at: 0) == 0)

@@ -40,6 +40,15 @@ extension RGBA {
     var saturation: Double { max(r, g, b) - min(r, g, b) }
 }
 
+extension MotionLayer {
+    /// One word repeated ("MOTION — MOTION — MOTION — …"): a marquee band or type used as a texture, not text to
+    /// read, so the edge and reading-time rules leave it alone.
+    var isPatternText: Bool {
+        let words = text.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+        return words.count >= 4 && Set(words).count * 2 <= words.count
+    }
+}
+
 extension MotionScene {
     /// Something covers most of the frame with more than a flat color: a look group, a gradient, an image or
     /// video, a very blurred shape, a full-frame generator or particles.
@@ -226,10 +235,12 @@ extension MotionScene {
             }
         }
 
-        // 7. Text on the edge
-        let margin = 80.0
+        // 7. Text on the edge. Small labels (corner HUD, frame numbers) may sit at 40 px; display type cropped by the
+        // frame on purpose (a quarter of it or more outside) and repeated-word bands are a choice, not a slip.
+        let margin = 80.0, labelMargin = 40.0
+        let unit = min(w, h) / 1080
         var edge: [String] = []
-        for t in texts {
+        for t in texts where !t.isPatternText {
             let time = mid(t)
             var box: CGRect
             if let renderer {
@@ -242,15 +253,21 @@ extension MotionScene {
                 let lw = min(t.maxWidth ?? .infinity, chars * t.fontSize * 0.55)
                 box = CGRect(x: -lw / 2, y: -t.fontSize * 0.6 * Double(lines.count), width: lw, height: t.fontSize * 1.2 * Double(lines.count))
             }
-            let world = box.applying(worldTransform(of: t, at: time))
-            if world.minX < margin || world.maxX > w - margin || world.minY < margin || world.maxY > h - margin {
+            let transform = worldTransform(of: t, at: time)
+            let world = box.applying(transform)
+            let size = t.fontSize * (transform.c * transform.c + transform.d * transform.d).squareRoot()
+            let inside = world.intersection(CGRect(x: 0, y: 0, width: w, height: h))
+            let outside = world.isEmpty ? 0 : 1 - (inside.isNull ? 0 : inside.width * inside.height) / (world.width * world.height)
+            if size >= h * 0.12, outside >= 0.25 { continue }
+            let m = size <= 24 * unit ? labelMargin : margin
+            if world.minX < m || world.maxX > w - m || world.minY < m || world.maxY > h - m {
                 edge.append(t.id)
             }
         }
         if !edge.isEmpty {
             out.append(DesignIssue(severity: .warning, code: "edge",
-                                   message: "Text closer than 80 px to the frame edge (or clipped)",
-                                   fix: "move it inside the safe margin, shrink fontSize or set maxWidth", layers: edge))
+                                   message: "Text closer than 80 px to the frame edge, 40 px for small labels (or clipped)",
+                                   fix: "move it inside the safe margin, shrink fontSize or set maxWidth; display type cropped on purpose should go well past the edge (a quarter of it or more) so the crop reads as intended", layers: edge))
         }
 
         // 8. Linear entrances

@@ -267,7 +267,7 @@ extension MotionScene {
 
         // 19. Reading time: about 4 words a second.
         var rushed: [String] = []
-        for p in texts {
+        for p in texts where !p.layer.isPatternText {
             let words = p.layer.text.split(whereSeparator: { $0 == " " || $0.isNewline }).count
             guard words >= 3, let (a, b) = span(of: p), b - a < Double(words) * 0.2 else { continue }
             rushed.append(p.layer.id)
