@@ -583,3 +583,28 @@ struct ChoiceTileStyle: ButtonStyle {
             .foregroundStyle(selected && capsule ? Color.accentColor : .primary)
     }
 }
+
+/// Icon centered on the title's capitals: `.titleAndIcon` (baseline) and plain centering (which counts the
+/// descenders) both leave the title looking low next to a tall symbol (sparkles, share).
+struct CenteredLabelStyle: LabelStyle {
+    var spacing: CGFloat = 6
+    var fontSize = NSFont.systemFontSize
+
+    func makeBody(configuration: Configuration) -> some View {
+        let capHeight = NSFont.systemFont(ofSize: fontSize).capHeight
+        HStack(alignment: .capCenter, spacing: spacing) {
+            configuration.icon
+            configuration.title
+                .alignmentGuide(.capCenter) { d in d[.firstTextBaseline] - capHeight / 2 }
+        }
+    }
+}
+
+extension VerticalAlignment {
+    private enum CapCenter: AlignmentID {
+        static func defaultValue(in d: ViewDimensions) -> CGFloat { d[VerticalAlignment.center] }
+    }
+
+    /// The middle of a text's capitals; other views use their center.
+    static let capCenter = VerticalAlignment(CapCenter.self)
+}

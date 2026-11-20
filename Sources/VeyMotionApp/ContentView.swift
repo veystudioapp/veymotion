@@ -119,7 +119,7 @@ struct ContentView: View {
         groupGap
         ToolbarItem(placement: .primaryAction) {
             Button { store.exportVideo() } label: {
-                Label("Export", systemImage: "square.and.arrow.up").labelStyle(.titleAndIcon)
+                Label("Export", systemImage: "square.and.arrow.up").labelStyle(CenteredLabelStyle())
             }
             .buttonStyle(.borderedProminent)
             .help("Export the video (⌘E)")

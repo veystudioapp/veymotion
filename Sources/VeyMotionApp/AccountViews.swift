@@ -233,7 +233,7 @@ struct UpgradeToolbarButton: View {
             } else {
                 // Short and unfilled: Export is the toolbar's one filled button.
                 Label("Upgrade", systemImage: "sparkles")
-                    .labelStyle(.titleAndIcon)
+                    .labelStyle(CenteredLabelStyle())
                     .foregroundStyle(Color.accentColor)
             }
         }
