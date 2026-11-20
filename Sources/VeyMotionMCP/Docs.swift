@@ -48,7 +48,9 @@ enum Docs {
        purpose. The moment that matters most (the price, the final value, the name) gets a beat of its own that no
        other section has. Moves have a rhythm: what matters leads and the rest follows (an order, an offset, a
        different entrance per role), and a held still beat is a valid part of it. Transitions belong to the language
-       of the piece: a cut, a wipe, a morph or a camera move, whichever fits.
+       of the piece: a cut, a wipe, a morph or a camera move, whichever fits. Energetic pieces (promos, reels,
+       launches, social) change the frame every 1.5–3 s: each section its own idea, layout and often its own ground
+       color; a hard cut to a new ground is a transition in itself.
     Craft notes (sensible defaults when the direction says nothing else):
        - Type: choose fonts for the mood (see FONTS). With several kinds of text, give them roles (hero, heading,
          body, label) that differ clearly; keep body lines under ~45 characters (maxWidth).
@@ -60,6 +62,18 @@ enum Docs {
        - Depth, for lit directions: apply_look gives a ready-made backdrop + finish (see its description), or build
          your own field (gradient, texture, photo, blurred shapes, particles, vignette, grain); shadows on light
          grounds, glow on dark ones.
+       - Designed detail, for flat directions (Swiss, kinetic type, editorial, brutalist): a flat piece looks made
+         rather than empty through a system around the content. Small mono or caps labels in the corners (the
+         title, the section as "(0{n}/05)" with a counter held at each cut, a frame or time counter), hairline rules
+         and + marks, a 2 px progress line growing over the whole piece; one color keyframe with easing "hold" at
+         each cut flips them with the ground. Labels under ~24 px may sit 40 px from the edge. To hang a label on a
+         left or right edge: maxWidth + align, with x = the edge ± maxWidth/2.
+       - Type as picture: display type bigger than the frame and cropped by it (a quarter or more outside), whipped
+         in and out with motionBlur and skewX; one word repeated in rows ("MOTION — MOTION — …", wider than the
+         frame, x linear, rows in opposite directions, every other row outlined). Repetition: a field of dots is a
+         group with repeater {count: rows, y: step, delay: 0.035} around one dot with repeater {count: cols, x:
+         step, delay: 0.025}; key the dot's scale once and the delays turn it into a diagonal wave. The lint knows
+         these are deliberate.
        - Sound: music ducked under voice (see AUDIO). No sound effects unless asked (see SOUND EFFECTS).
     Illustrations: an object the viewer must recognize (a tree, a hand, a phone, a plane, a person, an animal) has to
        read as what it is, drawn in the piece's style; a lone triangle, box or stack of ellipses standing in for it is
