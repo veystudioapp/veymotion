@@ -735,21 +735,31 @@ private final class ProjectThumbnails {
 /// On macOS 26 the content behind the sidebar is a mirrored blur of this view (shows only where the sidebar lets it).
 private struct ExtendsUnderSidebar: ViewModifier {
     func body(content: Content) -> some View {
+        // The API needs the macOS 26 SDK (SwiftUI 7); older SDKs (Command Line Tools 14.4) build without it.
+        #if canImport(SwiftUI, _version: 7.0)
         if #available(macOS 26.0, *) {
             content.backgroundExtensionEffect()
         } else {
             content
         }
+        #else
+        content
+        #endif
     }
 }
 
 /// The Projects screen shows no window title: the sidebar says where you are.
 private struct HiddenWindowTitle: ViewModifier {
     func body(content: Content) -> some View {
+        // Needs the macOS 15 SDK (SwiftUI 6).
+        #if canImport(SwiftUI, _version: 6.0)
         if #available(macOS 15.0, *) {
             content.toolbar(removing: .title)
         } else {
             content
         }
+        #else
+        content
+        #endif
     }
 }

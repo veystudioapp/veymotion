@@ -136,10 +136,17 @@ struct ContentView: View {
     /// Splits toolbar groups into separate capsules on macOS 26 (earlier systems draw no capsules).
     @ToolbarContentBuilder
     private var groupGap: some ToolbarContent {
+        // Needs the macOS 26 SDK (SwiftUI 7); older SDKs (Command Line Tools 14.4) build without it.
+        #if canImport(SwiftUI, _version: 7.0)
         if #available(macOS 26.0, *) {
             ToolbarSpacer(.fixed, placement: .primaryAction)
         }
+        #else
+        // A builder cannot be empty: an item that is never shown.
+        if Self.noGap { ToolbarItem(placement: .primaryAction) { EmptyView() } }
+        #endif
     }
+    private static let noGap = false
 }
 
 extension View {

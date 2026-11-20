@@ -5,6 +5,7 @@ import VeyMotionCore
 /// The upgrade modal for the Free plan: what Pro adds, one button to buy it, and a key field for those who already
 /// have one. Opened through `LicenseStore.presentUpgrade(for:)` (toolbar, Projects sidebar, locked features) and
 /// shown by `ContentView`. Once a key activates it turns into a thank-you.
+@MainActor
 struct UpgradeSheet: View {
     @Bindable var store = LicenseStore.shared
     @Environment(\.dismiss) private var dismiss

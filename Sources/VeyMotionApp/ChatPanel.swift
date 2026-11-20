@@ -15,11 +15,16 @@ struct ChatToolbar: ToolbarContent {
 /// the messages at the toolbar instead.
 private struct HardTopEdge: ViewModifier {
     func body(content: Content) -> some View {
+        // Needs the macOS 26 SDK (SwiftUI 7); older SDKs (Command Line Tools 14.4) build without it.
+        #if canImport(SwiftUI, _version: 7.0)
         if #available(macOS 26.0, *) {
             content.scrollEdgeEffectStyle(.hard, for: .top)
         } else {
             content
         }
+        #else
+        content
+        #endif
     }
 }
 
