@@ -113,4 +113,30 @@ import Testing
         #expect(inner.opacity.value(at: 0) == 0)
         #expect(scene.allLayers.map(\.id).contains("inner"))
     }
+
+    @Test func filePathsFollowAProjectRenameInsideGroups() throws {
+        var pic = MotionLayer(id: "pic", name: "pic", type: .image, x: 0, y: 0)
+        pic.path = "/p/Old/assets/images/a.png"
+        pic.lut = "/p/Old/assets/luts/warm.cube"
+        var group = MotionLayer(id: "g", name: "g", type: .group, x: 320, y: 180)
+        group.children = [pic]
+        var top = MotionLayer(id: "top", name: "top", type: .image, x: 0, y: 0)
+        top.path = "/p/Old/assets/images/b.png"
+        var scene = MotionScene.test(layers: [top, group])
+
+        let stored = scene.relativizingPaths(to: URL(fileURLWithPath: "/p/Old"))
+        #expect(stored.findLayer("pic")?.path == "assets/images/a.png")
+        #expect(stored.findLayer("pic")?.lut == "assets/luts/warm.cube")
+
+        var loaded = stored
+        loaded.resolvePaths(relativeTo: URL(fileURLWithPath: "/p/New"))
+        #expect(loaded.findLayer("pic")?.path == "/p/New/assets/images/a.png")
+        #expect(loaded.findLayer("top")?.path == "/p/New/assets/images/b.png")
+
+        #expect(Set(scene.replaceFolder("/p/Old", with: "/p/New")) == ["top", "pic"])
+        #expect(scene.findLayer("pic")?.path == "/p/New/assets/images/a.png")
+        #expect(scene.findLayer("pic")?.lut == "/p/New/assets/luts/warm.cube")
+        #expect(scene.layers(usingPath: "/p/New/assets/images/a.png") == ["pic"])
+        #expect(scene.replacePath("/p/New/assets/images/a.png", with: "/p/New/assets/images/c.png") == ["pic"])
+    }
 }

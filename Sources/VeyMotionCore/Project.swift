@@ -167,9 +167,9 @@ extension ProjectStore {
 extension MotionScene {
     /// Makes relative layer paths absolute against `base` (the folder of the scene file).
     public mutating func resolvePaths(relativeTo base: URL) {
-        for i in layers.indices {
-            guard let p = layers[i].path, !p.isEmpty, !p.hasPrefix("/"), !p.hasPrefix("~") else { continue }
-            layers[i].path = base.appendingPathComponent(p).standardizedFileURL.path
+        mapFilePaths { p in
+            guard !p.isEmpty, !p.hasPrefix("/"), !p.hasPrefix("~") else { return nil }
+            return base.appendingPathComponent(p).standardizedFileURL.path
         }
     }
 
@@ -177,10 +177,9 @@ extension MotionScene {
     public func relativizingPaths(to base: URL) -> MotionScene {
         let root = base.standardizedFileURL.path + "/"
         var s = self
-        for i in s.layers.indices {
-            guard let p = s.layers[i].path else { continue }
+        s.mapFilePaths { p in
             let full = AssetStore.expand(p).standardizedFileURL.path
-            if full.hasPrefix(root) { s.layers[i].path = String(full.dropFirst(root.count)) }
+            return full.hasPrefix(root) ? String(full.dropFirst(root.count)) : nil
         }
         return s
     }

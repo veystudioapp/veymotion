@@ -494,26 +494,23 @@ extension MotionScene {
     /// Ids of layers whose file is `path`.
     public func layers(usingPath path: String) -> [String] {
         let target = AssetStore.expand(path).standardizedFileURL.path
-        return layers.filter { l in
-            guard let p = l.path else { return false }
-            return AssetStore.expand(p).standardizedFileURL.path == target
+        return allLayers.filter { l in
+            l.filePaths.contains { AssetStore.expand($0).standardizedFileURL.path == target }
         }.map(\.id)
     }
 
     /// Points every layer that uses `old` at `new` (after a file rename). Returns the changed layer ids.
     @discardableResult
     public mutating func replacePath(_ old: String, with new: String) -> [String] {
-        let ids = Set(layers(usingPath: old))
-        for i in layers.indices where ids.contains(layers[i].id) { layers[i].path = new }
-        return layers.filter { ids.contains($0.id) }.map(\.id)
+        let target = AssetStore.expand(old).standardizedFileURL.path
+        return mapFilePaths { AssetStore.expand($0).standardizedFileURL.path == target ? new : nil }
     }
 
     /// Ids of layers whose file is inside the folder at `path` (at any depth).
     public func layers(inFolder path: String) -> [String] {
         let root = AssetStore.expand(path).standardizedFileURL.path + "/"
-        return layers.filter { l in
-            guard let p = l.path else { return false }
-            return AssetStore.expand(p).standardizedFileURL.path.hasPrefix(root)
+        return allLayers.filter { l in
+            l.filePaths.contains { AssetStore.expand($0).standardizedFileURL.path.hasPrefix(root) }
         }.map(\.id)
     }
 
@@ -523,16 +520,36 @@ extension MotionScene {
     public mutating func replaceFolder(_ old: String, with new: String) -> [String] {
         let oldRoot = AssetStore.expand(old).standardizedFileURL.path + "/"
         let newRoot = AssetStore.expand(new).standardizedFileURL.path + "/"
-        var ids: [String] = []
-        for i in layers.indices {
-            guard let p = layers[i].path else { continue }
+        return mapFilePaths { p in
             let full = AssetStore.expand(p).standardizedFileURL.path
-            guard full.hasPrefix(oldRoot) else { continue }
-            layers[i].path = newRoot + full.dropFirst(oldRoot.count)
-            ids.append(layers[i].id)
+            return full.hasPrefix(oldRoot) ? newRoot + full.dropFirst(oldRoot.count) : nil
         }
+    }
+
+    /// Rewrites every file path (`path`, `lut`) of every layer in the tree, groups' children included; `transform`
+    /// returns nil to keep a path. Returns the ids of the layers that changed.
+    @discardableResult
+    mutating func mapFilePaths(_ transform: (String) -> String?) -> [String] {
+        var ids: [String] = []
+        Self.mapFilePaths(in: &layers, transform, ids: &ids)
         return ids
     }
+
+    private static func mapFilePaths(in list: inout [MotionLayer], _ transform: (String) -> String?,
+                                     ids: inout [String]) {
+        for i in list.indices {
+            var changed = false
+            if let p = list[i].path, let n = transform(p) { list[i].path = n; changed = true }
+            if let p = list[i].lut, let n = transform(p) { list[i].lut = n; changed = true }
+            if changed { ids.append(list[i].id) }
+            if list[i].type == .group { mapFilePaths(in: &list[i].children, transform, ids: &ids) }
+        }
+    }
+}
+
+extension MotionLayer {
+    /// The files this layer reads (media `path`, grading `lut`).
+    var filePaths: [String] { [path, lut].compactMap { $0 } }
 }
 
 // MARK: - Credits
