@@ -452,6 +452,50 @@ public final class MCPServer {
             }
             return text(lines.joined(separator: "\n"))
 
+        case "generate_music":
+            let scene = host.currentScene()
+            var style = MusicStyle.minimal
+            if let name = a["style"] as? String {
+                guard let st = MusicStyle(rawValue: name.lowercased()) else {
+                    throw ToolError("style must be one of: \(MusicStyle.allCases.map(\.rawValue).joined(separator: ", "))")
+                }
+                style = st
+            }
+            let start = max(0, number(a["start"]) ?? 0)
+            let duration = number(a["duration"]) ?? (scene.duration - start)
+            guard duration >= 1 else { throw ToolError("the music needs at least 1 s (duration, or a start earlier than the scene end)") }
+            let accents = (a["accents"] as? [Any] ?? []).compactMap(number).map { $0 - start }.filter { $0 >= 0 && $0 <= duration }
+            let settings = MusicSettings(style: style, bpm: number(a["bpm"]) ?? 110, duration: min(duration, 300),
+                                         key: a["key"] as? String ?? "A minor", accents: accents,
+                                         loop: a["loop"] as? Bool ?? scene.loop, variant: Int(number(a["variant"]) ?? 0))
+            let result = try MusicSynth.generate(settings, folder: a["folder"] as? String)
+            func secs(_ ts: [Double]) -> String {
+                ts.prefix(48).map { String(format: "%.2f", start + $0) }.joined(separator: ", ") + (ts.count > 48 ? ", …" : "")
+            }
+            var lines = [String(format: "Generated %@ music, %@, %.1f bpm (beat %.3f s, bar %.3f s), %.2f s%@: %@",
+                                style.rawValue, settings.key, result.bpm, result.beat, result.beat * 4, result.duration,
+                                settings.loop ? ", seamless loop" : "", result.url.path)]
+            if a["add"] as? Bool ?? true {
+                var layer = MotionLayer(id: a["id"] as? String ?? "music", name: "Music", type: .audio)
+                layer.role = .music
+                layer.path = result.url.path
+                layer.sourceDuration = result.duration
+                layer.start = start
+                layer.volume = .constant(max(0, number(a["volume"]) ?? 0.6))
+                var newId = ""
+                try host.mutate("Generate Music") { newId = $0.addLayer(layer) }
+                lines.append(String(format: "Added music layer '%@': %.2fs → %.2fs.", newId, start, start + result.duration))
+            } else {
+                lines.append("Not added: add_audio {\"path\": …, \"role\": \"music\", \"start\": \(start)} places it.")
+            }
+            lines.append("Bar lines (scene seconds): " + secs(result.bars))
+            if !result.accents.isEmpty {
+                lines.append("Accents landed at: " + secs(result.accents) + " (the drums drop out on the beat before each one)")
+            }
+            if let e = result.ending { lines.append(String(format: "Ending hit at %.2f s; it rings out to the end.", start + e)) }
+            lines.append("Land hand-offs, cuts and entrances on bar lines and the key moments on the accents; move the visuals rather than the music.")
+            return text(lines.joined(separator: "\n"))
+
         case "get_audio_info":
             let path = try string(a, "path")
             return text(String(format: "%.3f seconds", try AudioFileInfo.duration(of: path)))

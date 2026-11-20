@@ -632,6 +632,12 @@ enum Docs {
       (batches with `from` for long lists; keep each line about as short as the original so it fits one line).
       Check the result with render_frame. Recognition makes mistakes: fix obvious ones while translating.
     - Music: add_audio with role "music", duckTo ≈ 0.25 and a fadeOut of 1–2s at the end.
+    - Music made to the cut: generate_music writes a bed whose bars, accents and ending are known exactly. Decide the
+      tempo with the timing (a hand-off on every bar or every other bar), pass the key moments as accents, and land
+      cuts, hand-offs and entrances on the bar lines it returns (no analyze_audio needed; for minimal/ambient above ~120
+      bpm it would count every other beat). Prefer it to stock music for short pieces (≤ 60 s)
+      built on a rhythm (continuous pieces, kinetic type, product and UI promos) and for loops; use stock music when the
+      piece wants a song, real instruments or a mood the synth does not have.
     - Cut to the music: call analyze_audio once the music layer is in (it returns scene times). Start entrances and
       scene changes on downbeats, land keyframes and apply_preset starts on beats (e.g. a list item per beat), and
       put the biggest moment on the loudest part or a strong onset. For continuous motion with the music use
@@ -1174,6 +1180,27 @@ enum Docs {
             "folder": { "type": "string", "description": "Asset folder for the file (default sfx/ in projects)." }
           },
           "required": ["kind"]
+        }
+      },
+      {
+        "name": "generate_music",
+        "description": "Synthesize a music bed made to the cut (no download, no license) and add it as a music audio layer: drums, bass, pad and a short motif on a tempo grid, with accents (a crash and sub boom on the hit, the drums dropping out on the beat before and a riser over the bar before) at the moments you give, and an ending hit on the last bar line, or a seamless loop. Returns the beat length, every bar line and where each accent and the ending landed, in scene seconds: put hand-offs, cuts and entrances on bar lines and the key moments on the accents. Styles: minimal (explainers, product, UI), driving (promos, launches, reels), ambient (calm, premium, emotional). Same settings give the same file.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "style": { "type": "string", "enum": ["minimal", "driving", "ambient"], "default": "minimal" },
+            "bpm": { "type": "number", "description": "Tempo 40–200 (default 110). Pick it from the pace: a hand-off every bar = 240/bpm s (120 bpm → 2 s, 96 → 2.5 s). With loop it is adjusted so the duration holds whole bars." },
+            "key": { "type": "string", "description": "e.g. \"A minor\" (default), \"C major\", \"F#m\", \"Eb\" (a bare note is major). Minor for tension or night, major for bright and friendly." },
+            "accents": { "type": "array", "items": { "type": "number" }, "description": "Scene times of the moments to hit (the key reveal, the logo, a big hand-off); each moves to the nearest 8th note. Keep them few (1–4)." },
+            "loop": { "type": "boolean", "description": "End flows into the start (default: the scene's loop flag)." },
+            "start": { "type": "number", "description": "Scene time the music starts (default 0)." },
+            "duration": { "type": "number", "description": "Seconds (default: from start to the scene end)." },
+            "variant": { "type": "integer", "description": "Another motif and chord progression." },
+            "volume": { "type": "number", "description": "Layer volume (default 0.6; ~0.35 under a voice-over, or set duckTo with update_layer)." },
+            "add": { "type": "boolean", "description": "Add an audio layer (default true). false = only create the file." },
+            "id": { "type": "string" },
+            "folder": { "type": "string", "description": "Asset folder for the file (default music/ in projects)." }
+          }
         }
       },
       {

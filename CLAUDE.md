@@ -313,6 +313,10 @@ Easy Ease F9 / ⇧F9 / ⌘⇧F9).
   `maxDuration: 0`. `SoundSynth` renders `SynthKind`s deterministically (seeded by kind + variant) to a 16-bit WAV
   named by a settings hash and reports exact hit times. Files are written to a `.part` and moved, never `.atomic`
   (that stages in the system temp folder, which sandboxed processes cannot use).
+  `MusicSynth.swift` (`generate_music`) is the same idea for a music bed: drums/bass/pad/mallet motif on a 16th grid
+  (styles minimal | driving | ambient, key, chord progression by `variant`), accents snapped to 8ths (crash + boom,
+  drums out on the beat before, riser over the bar before), an ending hit on the last bar line, or `loop` (bpm
+  adjusted to whole bars, tails wrapped to the start). Bar lines/accents come back exactly, so agents need no analysis.
 - Version and updates: `AppVersion.marketing` (Core) is the only place the version is written; `bundle.sh` and
   `release.sh` read it with sed. `Updater` (app) polls `AppRelease.latest()` (`/api/app/latest`, served from GitHub
   Releases by `server/server/utils/releases.ts`), stages the zip under Application Support/VeyMotion/updates

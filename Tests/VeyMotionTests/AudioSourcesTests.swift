@@ -144,5 +144,29 @@ import Testing
         #expect(search["tempo"]?["enum"] as? [String] == MusicTempo.allCases.map(\.rawValue))
         #expect(search["source"]?["enum"] as? [String] == MusicSource.allCases.map(\.rawValue))
         #expect(search["instrumental"] != nil && search["minDuration"] != nil)
+        #expect(try properties("generate_music")["style"]?["enum"] as? [String] == MusicStyle.allCases.map(\.rawValue))
+    }
+
+    @Test func musicSitsOnItsGrid() {
+        let s = MusicSettings(style: .driving, bpm: 120, duration: 10, key: "F#m", accents: [4.04], variant: 1)
+        let a = MusicSynth.render(s)
+        #expect(a.left == MusicSynth.render(s).left)                  // same settings, same file
+        #expect(a.result.bars == [0, 2, 4, 6, 8])
+        #expect(a.result.accents == [4])                              // moved to the nearest 8th
+        #expect(a.result.ending == 8)
+        #expect(abs(a.result.duration - 10) < 0.001)
+        let rate = SoundSynth.sampleRate
+        func level(_ from: Double, _ to: Double) -> Float {
+            let part = a.left[Int(from * rate)..<Int(to * rate)]
+            return part.map(abs).reduce(0, +) / Float(part.count)
+        }
+        print("music levels: gap \(level(3.55, 3.98)) hit \(level(4, 4.4)) groove \(level(2.5, 2.9))")
+        #expect(level(4, 4.4) > level(3.55, 3.98))                    // the drums drop out before the hit
+
+        // A loop keeps whole bars: 8 s at ~100 bpm becomes 3 bars at 90 bpm, with no ending.
+        let loop = MusicSynth.render(MusicSettings(bpm: 100, duration: 8, loop: true)).result
+        #expect(abs(loop.bpm - 90) < 1e-9)
+        #expect(loop.ending == nil && loop.bars.count == 3)
+        #expect(MusicSynth.parseKey("Bb minor") == (10, true) && MusicSynth.parseKey("C") == (0, false))
     }
 }
