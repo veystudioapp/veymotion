@@ -683,17 +683,13 @@ struct TransportBar: View {
                     .padding(.top, 6)
             }
             // As the canvas column narrows: the format goes first, then the duration and the Timeline switch's title.
-            GeometryReader { geo in
-                let w = geo.size.width
-                // The volume slider opens to the right of Play and must not run into the right-hand controls.
-                controls(showsFormat: w >= 700, compact: w < 520, slider: w >= 700 ? w >= 900 : w >= 600)
-            }
-            .frame(height: 44)
+            GeometryReader { geo in controls(showsFormat: geo.size.width >= 700, compact: geo.size.width < 520) }
+                .frame(height: 44)
         }
         .background(Color(nsColor: .windowBackgroundColor))
     }
 
-    private func controls(showsFormat: Bool, compact: Bool, slider: Bool) -> some View {
+    private func controls(showsFormat: Bool, compact: Bool) -> some View {
         let s = store.scene
         return ZStack {
             HStack(spacing: 6) {
@@ -743,8 +739,8 @@ struct TransportBar: View {
                         .contentShape(Circle())
                 }
                 .help("Play / pause (Space)")
-                // As wide as Go to start, so Play stays on the bar's center line; the slider overflows to the right.
-                PreviewVolume(showsSlider: slider).frame(width: 28, height: 28, alignment: .leading)
+                // As wide as Go to start, so Play stays on the bar's center line.
+                PreviewVolume()
             }
         }
         .buttonStyle(.borderless)
@@ -760,37 +756,42 @@ struct TransportBar: View {
     }
 }
 
-/// Preview volume: the speaker mutes, hovering it shows a slider. Monitoring only, never in the scene or exports.
+/// Preview volume: the speaker opens a slider with a mute switch. Monitoring only, never in the scene or exports.
 private struct PreviewVolume: View {
-    let showsSlider: Bool
     @Environment(SceneStore.self) private var store
     @AppStorage(AudioPreview.volumeKey) private var volume = 1.0
     @AppStorage(AudioPreview.mutedKey) private var muted = false
-    @State private var hovering = false
+    @State private var open = false
+
+    private var level: Double { muted ? 0 : volume }
 
     private var symbol: String {
-        if muted || volume == 0 { return "speaker.slash.fill" }
-        return volume < 0.34 ? "speaker.wave.1.fill" : volume < 0.67 ? "speaker.wave.2.fill" : "speaker.wave.3.fill"
+        if level == 0 { return "speaker.slash.fill" }
+        return level < 0.34 ? "speaker.wave.1.fill" : level < 0.67 ? "speaker.wave.2.fill" : "speaker.wave.3.fill"
     }
 
     var body: some View {
-        HStack(spacing: 2) {
-            Button { muted.toggle() } label: {
-                Image(systemName: symbol)
-                    .foregroundStyle(muted ? Color.secondary : Color.primary)
-                    .frame(width: 28, height: 28).contentShape(Rectangle())
-            }
-            .help(muted ? "Unmute the preview" : "Mute the preview (export is not affected)")
-            if showsSlider && hovering {
-                Slider(value: Binding(get: { muted ? 0 : volume }, set: { volume = $0; muted = false }), in: 0...1)
-                    .controlSize(.mini)
-                    .frame(width: 80)
-                    .help("Preview volume \(Int((muted ? 0 : volume) * 100))%")
-                    .transition(.opacity)
-            }
+        Button { open.toggle() } label: {
+            Image(systemName: symbol)
+                .foregroundStyle(muted ? Color.secondary : Color.primary)
+                .frame(width: 28, height: 28).contentShape(Rectangle())
         }
-        .fixedSize()
-        .onHover { h in withAnimation(.easeOut(duration: 0.15)) { hovering = h } }
+        .help("Preview volume \(Int(level * 100))% (export is not affected)")
+        .popover(isPresented: $open, arrowEdge: .top) {
+            HStack(spacing: 10) {
+                Button { muted.toggle() } label: {
+                    Image(systemName: symbol).frame(width: 22)
+                }
+                .buttonStyle(.borderless)
+                .help(muted ? "Unmute" : "Mute")
+                Slider(value: Binding(get: { level }, set: { volume = $0; muted = false }), in: 0...1)
+                    .frame(width: 140)
+                Text("\(Int(level * 100))%")
+                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    .frame(width: 34, alignment: .trailing)
+            }
+            .padding(12)
+        }
         .onChange(of: volume) { store.audio.refreshVolume() }
         .onChange(of: muted) { store.audio.refreshVolume() }
     }
