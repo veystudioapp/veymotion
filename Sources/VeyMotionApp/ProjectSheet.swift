@@ -6,14 +6,15 @@ import VeyMotionCore
 struct ProjectSize: Hashable, Identifiable {
     let id: String
     let title: String
+    let detail: String
     let width: Int, height: Int
 
     static let all: [ProjectSize] = [
-        ProjectSize(id: "landscape", title: "YouTube · 16:9", width: 1920, height: 1080),
-        ProjectSize(id: "portrait", title: "TikTok · Shorts · Reels · 9:16", width: 1080, height: 1920),
-        ProjectSize(id: "square", title: "Square · 1:1", width: 1080, height: 1080),
-        ProjectSize(id: "feed", title: "Facebook feed · 4:5", width: 1080, height: 1350),
-        ProjectSize(id: "uhd", title: "4K · 16:9", width: 3840, height: 2160),
+        ProjectSize(id: "landscape", title: "16:9", detail: "YouTube", width: 1920, height: 1080),
+        ProjectSize(id: "portrait", title: "9:16", detail: "TikTok · Reels", width: 1080, height: 1920),
+        ProjectSize(id: "square", title: "1:1", detail: "Square", width: 1080, height: 1080),
+        ProjectSize(id: "feed", title: "4:5", detail: "Feed", width: 1080, height: 1350),
+        ProjectSize(id: "uhd", title: "4K", detail: "16:9 UHD", width: 3840, height: 2160),
     ]
 }
 
@@ -25,12 +26,28 @@ struct NewProjectSheet: View {
         var id: String { rawValue }
         var title: String {
             switch self {
-            case .blank: return "Empty scene"
-            case .sample: return "Sample scene"
+            case .blank: return "Empty"
+            case .sample: return "Sample"
             case .current: return "Current scene"
             }
         }
+        var symbol: String {
+            switch self {
+            case .blank: return "rectangle.dashed"
+            case .sample: return "sparkles"
+            case .current: return "square.and.arrow.down.on.square"
+            }
+        }
+        var detail: String {
+            switch self {
+            case .blank: return "A blank canvas"
+            case .sample: return "A demo to remix"
+            case .current: return "Keep what you made"
+            }
+        }
     }
+
+    private static let lengths: [Double] = [6, 10, 15, 30, 60]
 
     @Environment(SceneStore.self) private var store
     @Environment(\.dismiss) private var dismiss
@@ -45,53 +62,82 @@ struct NewProjectSheet: View {
     private var size: ProjectSize { ProjectSize.all.first { $0.id == sizeId } ?? ProjectSize.all[0] }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("New Project").font(.headline)
-            Form {
-                TextField("Name", text: $name)
-                LabeledContent("Location") {
-                    HStack {
-                        Text((location as NSString).abbreviatingWithTildeInPath)
-                            .lineLimit(1).truncationMode(.middle)
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        Button("Choose…", action: chooseLocation)
-                    }
+        VStack(alignment: .leading, spacing: 20) {
+            Text("New Project").font(.title2.weight(.semibold))
+
+            VStack(alignment: .leading, spacing: 8) {
+                TextField("Project name", text: $name)
+                    .textFieldStyle(.plain)
+                    .font(.title3)
+                    .padding(.horizontal, 12).padding(.vertical, 9)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .textBackgroundColor)))
+                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.separator))
+                HStack(spacing: 5) {
+                    Image(systemName: "folder")
+                    Text((location as NSString).abbreviatingWithTildeInPath)
+                        .lineLimit(1).truncationMode(.middle)
+                    Button("Change…", action: chooseLocation).buttonStyle(.link)
                 }
-                Picker("Start with", selection: $start) {
-                    ForEach(Start.allCases) { s in Text(s.title).tag(s) }
-                }
-                .pickerStyle(.segmented)
-                switch start {
-                case .blank:
-                    Picker("Size", selection: $sizeId) {
-                        ForEach(ProjectSize.all) { s in Text("\(s.title)  \(s.width)×\(s.height)").tag(s.id) }
-                    }
-                    LabeledContent("Length") {
-                        HStack {
-                            TextField("seconds", value: $duration, format: .number.precision(.fractionLength(0...1)))
-                                .frame(width: 60)
-                            Text("seconds").foregroundStyle(.secondary)
-                            Spacer()
+                .font(.callout).foregroundStyle(.secondary)
+                .help("A folder with scene.json and assets/. New files — yours and Claude's — are filed by type.")
+            }
+
+            section("Start with") {
+                HStack(spacing: 10) {
+                    ForEach(Start.allCases) { s in
+                        Button { start = s } label: {
+                            VStack(spacing: 6) {
+                                Image(systemName: s.symbol).font(.title2).frame(height: 28)
+                                    .foregroundStyle(start == s ? Color.accentColor : .secondary)
+                                VStack(spacing: 1) {
+                                    Text(s.title).fontWeight(.medium)
+                                    Text(s.detail).font(.caption).foregroundStyle(.secondary)
+                                }
+                                .lineLimit(1)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12).padding(.horizontal, 6)
                         }
+                        .buttonStyle(ChoiceTileStyle(selected: start == s))
                     }
-                case .sample:
-                    Text("A short demo (a title, a chart, a finished look) to play with, re-style or ask Claude to change.")
-                        .font(.caption).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                case .current:
-                    Text("Moves the scene you are editing into the project and copies the files it uses into the project's assets.")
-                        .font(.caption).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            Text("Creates a folder with scene.json and assets/ (images, icons, music, sfx, voice). New files — yours and Claude's — are filed by type automatically.")
-                .font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+
+            switch start {
+            case .blank:
+                section("Format") {
+                    HStack(spacing: 8) {
+                        ForEach(ProjectSize.all) { s in
+                            Button { sizeId = s.id } label: { formatTile(s) }
+                                .buttonStyle(ChoiceTileStyle(selected: sizeId == s.id))
+                                .help("\(s.width) × \(s.height)")
+                        }
+                    }
+                }
+                section("Length") {
+                    HStack(spacing: 6) {
+                        ForEach(Self.lengths, id: \.self) { v in
+                            Button("\(Int(v)) s") { duration = v }
+                                .buttonStyle(ChoiceTileStyle(selected: duration == v, capsule: true))
+                        }
+                        Spacer(minLength: 12)
+                        TextField("", value: $duration, format: .number.precision(.fractionLength(0...1)))
+                            .labelsHidden()
+                            .multilineTextAlignment(.trailing)
+                            .frame(width: 56)
+                        Text("seconds").foregroundStyle(.secondary)
+                    }
+                }
+            case .sample:
+                note("A short demo (a title, a chart, a finished look) to play with, re-style or ask Claude to change.")
+            case .current:
+                note("Moves the scene you are editing into the project and copies the files it uses into the project's assets.")
+            }
+
             HStack {
                 Spacer()
-                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("Create") {
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction).controlSize(.large)
+                Button("Create Project") {
                     let before = store.project
                     let how: SceneStore.ProjectStart
                     switch start {
@@ -104,14 +150,47 @@ struct NewProjectSheet: View {
                     if store.project != before, store.project != nil { onCreated?() }
                 }
                 .keyboardShortcut(.defaultAction)
+                .controlSize(.large)
                 .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
             }
         }
-        .padding(20)
-        .frame(width: 480)
+        .padding(24)
+        .frame(width: 560)
         .onAppear {
             if store.project == nil && store.fileURL == nil && store.isDirty { start = .current }
         }
+    }
+
+    private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+            content()
+        }
+    }
+
+    private func note(_ text: String) -> some View {
+        Text(text)
+            .font(.callout).foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12)
+            .background(RoundedRectangle(cornerRadius: 8).fill(.quaternary.opacity(0.5)))
+    }
+
+    private func formatTile(_ s: ProjectSize) -> some View {
+        let box = 34.0, longest = Double(max(s.width, s.height))
+        return VStack(spacing: 6) {
+            RoundedRectangle(cornerRadius: 3)
+                .strokeBorder(sizeId == s.id ? Color.accentColor : .secondary, lineWidth: 1.5)
+                .frame(width: box * Double(s.width) / longest, height: box * Double(s.height) / longest)
+                .frame(width: box, height: box)
+            VStack(spacing: 1) {
+                Text(s.title).fontWeight(.medium)
+                Text(s.detail).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 10).padding(.horizontal, 4)
     }
 
     private func chooseLocation() {
@@ -122,6 +201,25 @@ struct NewProjectSheet: View {
         panel.directoryURL = URL(fileURLWithPath: location)
         panel.prompt = "Choose"
         if panel.runModal() == .OK, let url = panel.url { location = url.path }
+    }
+}
+
+/// A selectable card or chip: accent outline and tint when selected.
+private struct ChoiceTileStyle: ButtonStyle {
+    var selected: Bool
+    var capsule = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        let shape = RoundedRectangle(cornerRadius: capsule ? 100 : 10, style: .continuous)
+        configuration.label
+            .padding(.horizontal, capsule ? 12 : 0).padding(.vertical, capsule ? 5 : 0)
+            .frame(maxWidth: capsule ? nil : .infinity)
+            .contentShape(shape)
+            .background(shape.fill(selected ? Color.accentColor.opacity(0.12)
+                                            : Color.primary.opacity(configuration.isPressed ? 0.08 : 0.04)))
+            .overlay(shape.strokeBorder(selected ? Color.accentColor : Color.primary.opacity(0.1),
+                                        lineWidth: selected ? 1.5 : 1))
+            .foregroundStyle(selected && capsule ? Color.accentColor : .primary)
     }
 }
 
