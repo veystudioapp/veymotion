@@ -35,6 +35,15 @@ final class AudioPreview {
         if isSetUp { player.stop() }
     }
 
+    static let volumeKey = "preview.volume", mutedKey = "preview.muted"
+
+    /// Monitoring level from the transport bar's volume control; the mix and exports are untouched.
+    func refreshVolume() {
+        let d = UserDefaults.standard
+        let volume = d.object(forKey: Self.volumeKey) as? Double ?? 1
+        player.volume = d.bool(forKey: Self.mutedKey) ? 0 : Float(volume)
+    }
+
     private func start(_ mix: AVAudioPCMBuffer, at t: Double) {
         do {
             if !isSetUp {
@@ -47,6 +56,7 @@ final class AudioPreview {
             return
         }
         player.stop()
+        refreshVolume()
         let frame = Int((t * AudioMixer.sampleRate).rounded())
         guard let slice = AudioMixer.slice(mix, fromFrame: frame) else { return }
         player.scheduleBuffer(slice, at: nil, options: [])
