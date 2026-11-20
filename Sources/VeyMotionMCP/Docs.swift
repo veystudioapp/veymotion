@@ -50,7 +50,9 @@ enum Docs {
        different entrance per role), and a held still beat is a valid part of it. Transitions belong to the language
        of the piece: a cut, a wipe, a morph or a camera move, whichever fits. Energetic pieces (promos, reels,
        launches, social) change the frame every 1.5–3 s: each section its own idea, layout and often its own ground
-       color; a hard cut to a new ground is a transition in itself.
+       color; a hard cut to a new ground is a transition in itself. The other grammar is ONE CONTINUOUS SHOT: no
+       cuts, each section grows out of the last form of the one before (see Continuous pieces below). Choose one of
+       the two in the plan.
     Craft notes (sensible defaults when the direction says nothing else):
        - Type: choose fonts for the mood (see FONTS). With several kinds of text, give them roles (hero, heading,
          body, label) that differ clearly; keep body lines under ~45 characters (maxWidth).
@@ -74,6 +76,24 @@ enum Docs {
          group with repeater {count: rows, y: step, delay: 0.035} around one dot with repeater {count: cols, x:
          step, delay: 0.025}; key the dot's scale once and the delays turn it into a diagonal wave. The lint knows
          these are deliberate.
+       - Continuous pieces (one shot: showreels, a process or an idea that builds, loops): one ground and one palette
+         for the whole piece, and the story is a chain of forms that belongs to the subject (a dot stretches into a
+         line, the line opens into a plane, the plane splits into tiles, the tiles rise into columns that become a
+         bar chart, its bars shrink to the points of a line graph…). Write the chain with its times in the plan, a
+         hand-off every 1.5–3 s. On the hand-off frame the old form and the new one are the same picture:
+         · same layer: key it into the next form (d morphs circle(r) → rect(w,h,0); scaleY to ~0.02, then scaleX
+           out, squashes a dot into a line and opens it into a plane; a rect's width/height/cornerRadius);
+         · one into many: lay the parts exactly over the old shape on that frame (same box, same color, touching),
+           end the old layer and start the parts at that same time with no fade (a fade shows the swap), then move
+           them apart with a stagger; many into one is the same backwards;
+         · a different object: transition type match (it starts where the old one is);
+         · flat into 3D: give the layers threeD: true from the start (at z 0 with the default camera they look
+           exactly flat), then key rotationX/Y, z or the camera's orbit from the hand-off; a model box or path
+           extrusion keyed from scaleZ 0.01 grows into a volume;
+         · a recolor: duplicate_layer the element, give the copy the new color and a matte rect that grows across
+           it (width or x keyed), so the color sweeps through instead of fading.
+         Moves overlap: the next form starts moving before the last one settles. Type joins the chain too
+         (text_to_path letters fly in from the shapes or collapse back into the dot).
        - Sound: music ducked under voice (see AUDIO). No sound effects unless asked (see SOUND EFFECTS).
     Illustrations: an object the viewer must recognize (a tree, a hand, a phone, a plane, a person, an animal) has to
        read as what it is, drawn in the piece's style; a lone triangle, box or stack of ellipses standing in for it is
