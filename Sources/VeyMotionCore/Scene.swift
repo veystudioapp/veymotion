@@ -1343,7 +1343,7 @@ public struct MotionScene: Codable, Equatable, Sendable {
             throw SceneError.invalid("width/height must be between 16 and 7680")
         }
         guard (1...120).contains(fps) else { throw SceneError.invalid("fps must be between 1 and 120") }
-        guard duration > 0, duration <= 600 else { throw SceneError.invalid("duration must be in (0, 600] seconds") }
+        guard duration > 0, duration.isFinite else { throw SceneError.invalid("duration must be a positive number of seconds") }
     }
 
     /// Gives every layer (groups' children included) a unique, non-empty id.
