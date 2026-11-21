@@ -1027,7 +1027,7 @@ final class ChatStore {
         }
     }
 
-    /// The end of a turn with nothing more to send: keep the version, say what went wrong, show time and cost.
+    /// The end of a turn with nothing more to send: keep the version, say what went wrong, show the time taken.
     private func finishTurn(_ s: Session, isError: Bool, result: String?, cost: Double?, ms: Int?) {
         let p = s.agentProvider
         recordVersion(s)
@@ -1037,10 +1037,7 @@ final class ChatStore {
         } else if case .authFailed = agentStates[p] {
             agentStates[p] = .ready // signed in again
         }
-        var parts: [String] = []
-        if let ms { parts.append(String(format: "%.1fs", Double(ms) / 1000)) }
-        if let cost, cost > 0 { parts.append(String(format: "$%.3f", cost)) }
-        if !parts.isEmpty { s.append(.summary(parts.joined(separator: " · "))) }
+        if let ms { s.append(.summary(String(format: "%.1fs", Double(ms) / 1000))) }
         saveConversation(s)
         if s !== current { finishedInBackground(s) }
     }
