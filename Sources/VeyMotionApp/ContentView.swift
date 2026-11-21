@@ -127,7 +127,7 @@ struct ContentView: View {
             Button { store.exportVideo() } label: {
                 Label("Export", systemImage: "square.and.arrow.up").labelStyle(CenteredLabelStyle())
             }
-            .buttonStyle(.borderedProminent)
+            .modifier(ProminentToolbarButton())
             .help("Export the video (⌘E)")
         }
         groupGap
@@ -139,7 +139,8 @@ struct ContentView: View {
         }
     }
 
-    /// Splits toolbar groups into separate capsules on macOS 26 (earlier systems draw no capsules).
+    /// Splits toolbar groups into separate capsules on macOS 26, and keeps the bezels of neighboring groups apart
+    /// in the older toolbar look.
     @ToolbarContentBuilder
     private var groupGap: some ToolbarContent {
         // Needs the macOS 26 SDK (SwiftUI 7); older SDKs (Command Line Tools 14.4) build without it.
@@ -148,11 +149,43 @@ struct ContentView: View {
             ToolbarSpacer(.fixed, placement: .primaryAction)
         }
         #else
-        // A builder cannot be empty: an item that is never shown.
-        if Self.noGap { ToolbarItem(placement: .primaryAction) { EmptyView() } }
+        // Built with an older SDK the app keeps the old toolbar look even on macOS 26, where adjacent items touch.
+        ToolbarItem(placement: .primaryAction) { Color.clear.frame(width: 4, height: 1).accessibilityHidden(true) }
         #endif
     }
-    private static let noGap = false
+}
+
+/// The toolbar's one filled button. Built with an older SDK, toolbars ignore `.borderedProminent` (the app keeps
+/// the old look even on macOS 26), so the label carries its own accent capsule.
+private struct ProminentToolbarButton: ViewModifier {
+    func body(content: Content) -> some View {
+        #if canImport(SwiftUI, _version: 7.0)
+        if #available(macOS 26.0, *) {
+            content.buttonStyle(.borderedProminent)
+        } else {
+            filled(content)
+        }
+        #else
+        filled(content)
+        #endif
+    }
+
+    private func filled(_ content: Content) -> some View {
+        content
+            .buttonStyle(FilledCapsuleStyle())
+    }
+
+    private struct FilledCapsuleStyle: ButtonStyle {
+        func makeBody(configuration: Configuration) -> some View {
+            configuration.label
+                .foregroundStyle(.white)
+                .padding(.horizontal, 10)
+                .frame(height: 24)
+                .background(Capsule().fill(Color.accentColor))
+                .contentShape(Capsule())
+                .opacity(configuration.isPressed ? 0.75 : 1)
+        }
+    }
 }
 
 extension View {

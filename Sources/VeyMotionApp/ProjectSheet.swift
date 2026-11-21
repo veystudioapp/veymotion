@@ -272,14 +272,6 @@ struct ProjectsScreen: View {
             detail
         }
         .searchable(text: $search, placement: .sidebar, prompt: "Search")
-        .toolbar {
-            ToolbarItemGroup(placement: .primaryAction) {
-                Button("Open Other…") { store.openProjectWithPanel(); leaveIfOpened() }
-                Button { creating = true } label: { Label("New Project", systemImage: "plus").labelStyle(.titleAndIcon) }
-                    .buttonStyle(.borderedProminent)
-                    .help("New project (⇧⌘N)")
-            }
-        }
         .navigationTitle("Vey Motion")
         .modifier(HiddenWindowTitle())
         .onAppear(perform: reload)
@@ -322,9 +314,30 @@ struct ProjectsScreen: View {
             }
         }
         .scrollContentBackground(.hidden)
+        .safeAreaInset(edge: .top) { sidebarActions }
         .safeAreaInset(edge: .bottom) { PlanRow().padding(10) }
         .opaqueColumn()
         .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 320)
+    }
+
+    /// Starting points at the head of the sidebar (the toolbar sits over the banner, where buttons get lost).
+    private var sidebarActions: some View {
+        VStack(spacing: 6) {
+            Button { creating = true } label: {
+                Label("New Project", systemImage: "plus").frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .help("New project (⇧⌘N)")
+            Button { store.openProjectWithPanel(); leaveIfOpened() } label: {
+                Label("Open Other…", systemImage: "folder").frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+        }
+        .labelStyle(.titleAndIcon)
+        .controlSize(.large)
+        .padding(.horizontal, 10)
+        .padding(.top, 4)
+        .padding(.bottom, 8)
     }
 
     // MARK: Detail
