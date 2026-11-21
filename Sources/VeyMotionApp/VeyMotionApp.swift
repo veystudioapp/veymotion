@@ -93,6 +93,11 @@ struct VeyMotionApp: App {
                 Button("Zoom In") { CanvasViewport.shared.zoomIn() }.keyboardShortcut("=")
                 Button("Zoom Out") { CanvasViewport.shared.zoomOut() }.keyboardShortcut("-")
                 Button("Zoom to Fit") { CanvasViewport.shared.reset() }.keyboardShortcut("0")
+                Button(PreviewPresentation.shared.isActive ? "Exit Full Screen Preview" : "Full Screen Preview") {
+                    PreviewPresentation.shared.toggle()
+                }
+                .keyboardShortcut("f", modifiers: [.command, .shift])
+                .disabled(store.showProjects)
                 Divider()
             }
             CommandMenu("Layer") {

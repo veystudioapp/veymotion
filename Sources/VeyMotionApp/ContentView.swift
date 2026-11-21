@@ -19,6 +19,7 @@ struct ContentView: View {
     @AppStorage("showTimeline") private var showTimeline = false
 
     @AppStorage("ui.sidebarWidth") private var sidebarWidth: Double = 320
+    private let presentation = PreviewPresentation.shared
 
     private static let editPanelMinWidth: CGFloat = 290
     private static let editPanelMaxWidth: Double = 480
@@ -53,8 +54,12 @@ struct ContentView: View {
                 .transition(.move(edge: .leading))
             }
             VStack(spacing: 0) {
-                CanvasView()
-                    .overlay(alignment: .bottom) { CanvasToast().padding(.bottom, 10) }
+                // The full screen preview window has its own canvas: this one steps aside meanwhile, so frames are
+                // rendered (and cached) once, at one size.
+                Group {
+                    if presentation.isActive { Color.stage } else { CanvasView() }
+                }
+                .overlay(alignment: .bottom) { CanvasToast().padding(.bottom, 10) }
                 TransportBar()
                 if showTimeline {
                     ResizeHandle(height: $timelineHeight, range: 140...700)
@@ -66,6 +71,7 @@ struct ContentView: View {
         // Every way of toggling it (toolbar, ⌃⌘S, the menus, the composer's layer chip) animates the same.
         .animation(.easeInOut(duration: 0.25), value: showSidebar)
         .toolbar { editorToolbar }
+        .onChange(of: store.showProjects) { _, shown in if shown { presentation.exit() } }
         // On the root: a full-height column with its own part of the toolbar, so the editor's items stay over the
         // canvas and only Versions / New conversation sit over the chat.
         .inspector(isPresented: $showChat) {
@@ -328,10 +334,11 @@ final class PreviewRenderer {
 final class CanvasViewport {
     static let shared = CanvasViewport()
     static let maxZoom = 16.0
-    /// Room kept around the fitted frame, each side.
+    /// Room kept around the fitted frame, each side (none in the full screen preview).
     static let margin: CGFloat = 20
 
     private(set) var zoom = 1.0
+    @ObservationIgnored private var margin = CanvasViewport.margin
     private(set) var pan = CGSize.zero
     /// Reported by the canvas: its size, the fitted frame's size (points) and the scene's width (px).
     private(set) var canvas = CGSize.zero
@@ -349,8 +356,8 @@ final class CanvasViewport {
     /// The scale as people read it: 100% = one scene px per point.
     var percent: Int { Int((unit * 100).rounded()) }
 
-    func layout(canvas: CGSize, fit: CGSize, sceneWidth: Double) {
-        self.canvas = canvas; self.fit = fit; self.sceneWidth = sceneWidth
+    func layout(canvas: CGSize, fit: CGSize, sceneWidth: Double, margin: CGFloat) {
+        self.canvas = canvas; self.fit = fit; self.sceneWidth = sceneWidth; self.margin = margin
         clamp()
     }
 
@@ -386,14 +393,16 @@ final class CanvasViewport {
 
     /// The frame never leaves a gap wider than the margin on a side it reaches past.
     private func clamp() {
-        let roomX = max(0, (fit.width * zoom - (canvas.width - 2 * Self.margin)) / 2)
-        let roomY = max(0, (fit.height * zoom - (canvas.height - 2 * Self.margin)) / 2)
+        let roomX = max(0, (fit.width * zoom - (canvas.width - 2 * margin)) / 2)
+        let roomY = max(0, (fit.height * zoom - (canvas.height - 2 * margin)) / 2)
         let clamped = CGSize(width: min(max(pan.width, -roomX), roomX), height: min(max(pan.height, -roomY), roomY))
         if clamped != pan { pan = clamped }
     }
 }
 
 struct CanvasView: View {
+    /// The full screen preview: the picture edge to edge on black, nothing to edit, a click plays or pauses.
+    var presenting = false
     @Environment(SceneStore.self) private var store
     @Environment(\.displayScale) private var displayScale
     @State private var preview = PreviewRenderer()
@@ -425,14 +434,16 @@ struct CanvasView: View {
         var canvas: CGSize
         var fit: CGSize
         var sceneWidth: Int
+        var margin: CGFloat
     }
 
     var body: some View {
         GeometryReader { geo in
             let scene = store.scene
             let aspect = Double(scene.width) / Double(scene.height)
-            let avail = CGSize(width: max(geo.size.width - 2 * CanvasViewport.margin, 10),
-                               height: max(geo.size.height - 2 * CanvasViewport.margin, 10))
+            let margin = presenting ? 0 : CanvasViewport.margin
+            let avail = CGSize(width: max(geo.size.width - 2 * margin, 10),
+                               height: max(geo.size.height - 2 * margin, 10))
             let fit = avail.width / avail.height > aspect
                 ? CGSize(width: avail.height * aspect, height: avail.height)
                 : CGSize(width: avail.width, height: avail.width / aspect)
@@ -461,17 +472,17 @@ struct CanvasView: View {
                         .interpolation(.high)
                         .frame(width: shown.width, height: shown.height)
                         // A hairline just outside the picture, so a dark scene still has an edge on the dark stage.
-                        .overlay(Rectangle().stroke(Color.white.opacity(0.14), lineWidth: 1).padding(-0.5))
-                        .shadow(color: .black.opacity(0.5), radius: 16, y: 6)
+                        .overlay(Rectangle().stroke(Color.white.opacity(presenting ? 0 : 0.14), lineWidth: 1).padding(-0.5))
+                        .shadow(color: .black.opacity(presenting ? 0 : 0.5), radius: 16, y: 6)
                 }
-                if scene.layers.isEmpty, !annotations.isActive {
+                if scene.layers.isEmpty, !annotations.isActive, !presenting {
                     EmptySceneHint(onLight: scene.background.r * 0.2126 + scene.background.g * 0.7152
                         + scene.background.b * 0.0722 > 0.5)
                         .frame(width: shown.width, height: shown.height)
                         .allowsHitTesting(false)
                 }
                 // Not while playing: the preview stays clean and nothing is measured per frame.
-                if !annotations.isActive, !store.isPlaying, let id = store.selection,
+                if !annotations.isActive, !store.isPlaying, !presenting, let id = store.selection,
                    let outline = Self.picker.selectionOutline(of: id, in: scene, at: store.time) {
                     Path(outline)
                         .applying(CGAffineTransform(scaleX: unit, y: unit))
@@ -502,8 +513,8 @@ struct CanvasView: View {
             .onContinuousHover { phase in
                 if case let .active(p) = phase { viewport.mouse = p } else { viewport.mouse = nil }
             }
-            .onChange(of: Layout(canvas: geo.size, fit: fit, sceneWidth: scene.width), initial: true) { _, l in
-                viewport.layout(canvas: l.canvas, fit: l.fit, sceneWidth: Double(l.sceneWidth))
+            .onChange(of: Layout(canvas: geo.size, fit: fit, sceneWidth: scene.width, margin: margin), initial: true) { _, l in
+                viewport.layout(canvas: l.canvas, fit: l.fit, sceneWidth: Double(l.sceneWidth), margin: l.margin)
             }
             // Another document is looked at from the start: fitted.
             .onChange(of: store.documentRevision) { viewport.reset() }
@@ -544,9 +555,10 @@ struct CanvasView: View {
                 FrameCache.shared.isSuspended = exporting
             }
         }
-        .background(Color.stage)
-        .onAppear(perform: installScrollMonitor)
-        .onDisappear(perform: removeScrollMonitor)
+        .background(presenting ? Color.black : Color.stage)
+        // The scroll monitor is the editor canvas's (the preview window's canvas comes and goes alongside it).
+        .onAppear { if !presenting { installScrollMonitor() } }
+        .onDisappear { if !presenting { removeScrollMonitor() } }
         .overlay {
             if dropTargeted {
                 RoundedRectangle(cornerRadius: 8)
@@ -630,6 +642,7 @@ extension CanvasView {
         func scenePoint(_ p: CGPoint) -> CGPoint { CGPoint(x: (p.x - origin.x) / unit, y: (p.y - origin.y) / unit) }
         return DragGesture(minimumDistance: 0)
             .onChanged { g in
+                guard !presenting else { return }
                 if drag == nil {
                     let p = scenePoint(g.startLocation)
                     var target = layer(at: p)
@@ -664,6 +677,10 @@ extension CanvasView {
             }
             .onEnded { g in
                 defer { drag = nil }
+                if presenting {
+                    if hypot(g.translation.width, g.translation.height) < 3 { store.togglePlay() }
+                    return
+                }
                 if drag?.moving == true {
                     store.endInteractive()
                 } else {
@@ -709,6 +726,13 @@ struct TransportBar: View {
                 }
                 Spacer()
                 ZoomMenu().padding(.trailing, 4)
+                Button { PreviewPresentation.shared.enter() } label: {
+                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                        .foregroundStyle(.secondary)
+                        .frame(width: 24, height: 28).contentShape(Rectangle())
+                }
+                .help("Full screen preview (⇧⌘F)")
+                .padding(.trailing, 4)
                 if showsFormat {
                     // The scene's settings are what the Inspector shows with nothing selected.
                     Button {
