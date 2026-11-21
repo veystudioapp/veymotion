@@ -741,6 +741,25 @@ final class SceneStore: SceneHost {
         if !newId.isEmpty { selection = newId }
     }
 
+    /// The selected top-level layer spans `t` with at least a frame on each side, so it can be split there.
+    func canSplitSelected(at t: Double) -> Bool {
+        guard let id = selection, let l = scene.layers.first(where: { $0.id == id }) else { return false }
+        let frame = 1.0 / Double(max(scene.fps, 1))
+        return t >= l.start + frame - 1e-9 && t <= l.effectiveEnd(sceneDuration: scene.duration) - frame + 1e-9
+    }
+
+    /// Cuts the selected layer at the playhead (⌘B) and selects the part after the cut.
+    func splitSelected() {
+        guard let id = selection else { return }
+        var newId = ""
+        do {
+            try apply("Split Layer") { newId = try $0.splitLayer(id, at: time) }
+            if !newId.isEmpty { selection = newId }
+        } catch {
+            message = error.localizedDescription
+        }
+    }
+
     func move(_ id: String, by delta: Int) {
         guard let i = scene.layers.firstIndex(where: { $0.id == id }) else { return }
         try? apply("Reorder Layer") { try $0.moveLayer(id, to: i + delta) }

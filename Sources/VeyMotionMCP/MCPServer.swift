@@ -208,6 +208,13 @@ public final class MCPServer {
             }
             return text("Made \(made.count) cop\(made.count == 1 ? "y" : "ies") of '\(id)': \(made.joined(separator: ", ")) (each one placed right above the previous in the layer order).")
 
+        case "split_layer":
+            let id = try string(a, "id")
+            guard let t = number(a["t"]) else { throw ToolError("`t` is scene seconds") }
+            var made = ""
+            try host.mutate("Split Layer") { made = try $0.splitLayer(id, at: t) }
+            return text(String(format: "Split '%@' at %.2fs: '%@' ends there and '%@' (right above it) runs on.", id, t, id, made))
+
         case "shift_time":
             guard let from = number(a["from"]), let by = number(a["by"]) else { throw ToolError("`from` and `by` are seconds") }
             var touched: [String] = []

@@ -97,6 +97,52 @@ extension MotionScene {
         layers[i].end = (end == nil && layers[i].end == nil) ? nil : e
     }
 
+    /// Switches layers off (not drawn, not heard) or back on.
+    public mutating func setHidden(_ ids: [String], _ hidden: Bool) throws {
+        for id in ids { try withLayer(id) { $0.hidden = hidden } }
+    }
+
+    /// Cuts a top-level layer in two at `t`, like a video editor's split: the layer ends at `t` and a copy right above
+    /// it starts there. Both keep every keyframe (times are absolute), so the animation runs on across the cut; audio
+    /// and video go on in the file (the copy's in-point moves), fades stay on the outer ends, and a localTime group's
+    /// copy keeps its children's clock. Returns the copy's id.
+    @discardableResult
+    public mutating func splitLayer(_ id: String, at t: Double) throws -> String {
+        let i = try layerIndex(id)
+        let minLen = 1.0 / Double(max(fps, 1))
+        var a = layers[i]
+        let end = a.effectiveEnd(sceneDuration: duration)
+        guard t >= a.start + minLen - 1e-9, t <= end - minLen + 1e-9 else {
+            throw SceneError.invalid(String(format: "'%@' runs %.2f–%.2fs: split it at a time inside, at least one frame from its ends",
+                                            id, a.start, end))
+        }
+        var b = a
+        b.id = uniqueId(base: id)
+        if b.type == .group {
+            var seen = Set(allLayers.map(\.id))
+            seen.insert(b.id)
+            Self.normalizeIds(&b.children, seen: &seen)
+        }
+        a.end = t
+        b.start = t // b.end stays: an open end still ends at the scene end, or where the file runs out
+        if a.type == .audio || a.type == .video {
+            if a.type == .audio || a.timeRemap == nil {
+                let rate = a.type == .video ? max(a.speed, 0.01) : 1
+                var inPoint = a.trimIn + (t - a.start) * rate
+                if a.type == .video, a.playback == .loop, let total = a.sourceDuration, total - a.trimIn > 1e-6, inPoint >= total {
+                    inPoint = a.trimIn + (inPoint - a.trimIn).truncatingRemainder(dividingBy: total - a.trimIn)
+                }
+                b.trimIn = inPoint
+            }
+            a.fadeOut = 0
+            b.fadeIn = 0
+        }
+        Self.keepClock(&b, from: a.start)
+        layers[i] = a
+        layers.insert(b, at: i + 1)
+        return b.id
+    }
+
     /// Audio and video trim like a video editor: moving the start also moves the in-point inside the file, so the
     /// content stays where it was; the end can't extend past the end of the file (videos that hold or loop can).
     private mutating func setMediaTiming(_ i: Int, start: Double?, end: Double?, minLen: Double) throws {

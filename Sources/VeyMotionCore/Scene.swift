@@ -299,6 +299,8 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
     public var type: LayerType
     public var start: Double
     public var end: Double?
+    /// Switched off (the timeline's eye / speaker toggle): not drawn and not heard, but kept in the scene.
+    public var hidden: Bool
 
     public var x: AnimValue
     public var y: AnimValue
@@ -466,6 +468,7 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         self.type = type
         start = 0
         end = nil
+        hidden = false
         self.x = .constant(x)
         self.y = .constant(y)
         scale = .constant(1)
@@ -869,7 +872,7 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
     }
 
     public func isVisible(at t: Double, sceneDuration: Double) -> Bool {
-        t >= start && t < effectiveEnd(sceneDuration: sceneDuration) + 1e-9
+        !hidden && t >= start && t < effectiveEnd(sceneDuration: sceneDuration) + 1e-9
     }
 
     public func shapeWidth(at t: Double) -> Double { value(.width, at: t) }
@@ -878,7 +881,7 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
     public func shapeHeight(at t: Double) -> Double { value(.height, at: t) }
 
     enum CodingKeys: String, CodingKey {
-        case id, name, type, start, end, x, y, scale, rotation, opacity, reveal
+        case id, name, type, start, end, hidden, x, y, scale, rotation, opacity, reveal
         case scaleX, scaleY, skewX, skewY, anchorX, anchorY, trim, letterSpacing
         case trimStart, trimOffset, glow, glowRadius, glowColor, matte, repeater, motionBlur, motionBlurPhase, gradient
         case blur, shadowX, shadowY, shadowBlur, shadowOpacity, shadowColor, pathProgress, blendMode
@@ -912,6 +915,7 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         name = try c.decodeIfPresent(String.self, forKey: .name) ?? (id.isEmpty ? type.rawValue.capitalized : id)
         start = try c.decodeIfPresent(Double.self, forKey: .start) ?? start
         end = try c.decodeIfPresent(Double.self, forKey: .end)
+        hidden = try c.decodeIfPresent(Bool.self, forKey: .hidden) ?? false
         x = try c.decodeIfPresent(AnimValue.self, forKey: .x) ?? x
         y = try c.decodeIfPresent(AnimValue.self, forKey: .y) ?? y
         scale = try c.decodeIfPresent(AnimValue.self, forKey: .scale) ?? scale
@@ -1043,6 +1047,7 @@ public struct MotionLayer: Codable, Equatable, Identifiable, Sendable {
         try c.encode(type, forKey: .type)
         try c.encode(start, forKey: .start)
         try c.encodeIfPresent(end, forKey: .end)
+        if hidden { try c.encode(hidden, forKey: .hidden) }
         if type == .audio {
             try c.encodeIfPresent(path, forKey: .path)
             try c.encode(role, forKey: .role)

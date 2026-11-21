@@ -8,6 +8,8 @@ enum Docs {
     { "width":1920, "height":1080, "fps":30, "duration":6, "background":"#0E0E12", "layers":[ ... ] }
     - Coordinates: scene pixels, origin top-left, y grows downward. A layer's x/y is its CENTER.
     - layers[0] is drawn first (bottom); the last layer is on top.
+    - "hidden": true switches a layer off (not drawn, not heard) without deleting it; the user toggles it from the
+      timeline's track header. Leave layers the user hid alone unless asked.
     - "loop": true marks a piece meant to repeat seamlessly (social loops, backgrounds, showreels): its last frame must
       flow into its first, and check_design reports a seam that jumps.
     - For social video, size the scene for the platform: TikTok / YouTube Shorts / Reels 1080×1920 (9:16, Shorts and
@@ -871,6 +873,15 @@ enum Docs {
             "ids": { "type": "array", "items": { "type": "string" }, "description": "Ids for the copies, in order." }
           },
           "required": ["id"]
+        }
+      },
+      {
+        "name": "split_layer",
+        "description": "Cuts a top-level layer in two at time `t` (a video editor's split): the layer ends at t and a copy right above it starts there. Keyframes are kept on both halves, so the motion continues across the cut; audio/video carry on in the file. Use it to change one part of a clip (another effect, a different text, removing the middle with remove_layer).",
+        "inputSchema": {
+          "type": "object",
+          "properties": { "id": { "type": "string" }, "t": { "type": "number", "description": "Scene seconds, inside the layer's span." } },
+          "required": ["id", "t"]
         }
       },
       {

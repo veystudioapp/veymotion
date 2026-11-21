@@ -114,6 +114,7 @@ struct VeyMotionApp: App {
                 }
                 Divider()
                 Button("Duplicate") { store.duplicateSelected() }.keyboardShortcut("d").disabled(store.selection == nil)
+                Button("Split at Playhead") { store.splitSelected() }.keyboardShortcut("b").disabled(store.selection == nil)
                 Button("Group") { store.groupSelected() }.keyboardShortcut("g").disabled(store.selection == nil)
                 Button("Ungroup") { store.ungroupSelected() }.keyboardShortcut("g", modifiers: [.command, .shift])
                     .disabled(store.selection.flatMap { id in store.scene.layers.first { $0.id == id } }?.type != .group)
