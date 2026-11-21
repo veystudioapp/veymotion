@@ -321,7 +321,7 @@ extension MotionLayer {
 
 /// The timeline, laid out like CapCut's: a toolbar (split, delete, duplicate, snapping, zoom), a timecode ruler,
 /// and packed tracks of clips with a small header (hide/mute, lock) instead of one named row per layer. It is
-/// always dark, like the canvas stage above it.
+/// light or dark with the app's appearance.
 @MainActor
 struct TimelinePanel: View {
     @Environment(SceneStore.self) private var store
@@ -333,10 +333,12 @@ struct TimelinePanel: View {
 
     static let toolbarHeight: CGFloat = 34
     static let rulerHeight: CGFloat = 24
-    static let background = Color(white: 0.105)
-    static let headerBackground = Color(white: 0.135)
-    static let rulerBackground = Color(white: 0.125)
-    static let separator = Color.black.opacity(0.45)
+    static let background = Color.adaptive(light: NSColor(white: 0.965, alpha: 1), dark: NSColor(white: 0.105, alpha: 1))
+    static let headerBackground = Color.adaptive(light: NSColor(white: 0.925, alpha: 1), dark: NSColor(white: 0.135, alpha: 1))
+    static let rulerBackground = Color.adaptive(light: NSColor(white: 0.94, alpha: 1), dark: NSColor(white: 0.125, alpha: 1))
+    static let separator = Color.adaptive(light: NSColor(white: 0, alpha: 0.12), dark: NSColor(white: 0, alpha: 0.45))
+    /// Snap guide and keyframes off the clips: yellow on dark, a deeper amber that reads on light.
+    static let marker = Color.adaptive(light: NSColor(srgbRed: 0.88, green: 0.6, blue: 0, alpha: 1), dark: .systemYellow)
 
     private var headerWidth: CGFloat { graphMode ? 200 : 96 }
 
@@ -400,7 +402,6 @@ struct TimelinePanel: View {
             .onDisappear { removeMonitor() }
         }
         .background(Self.background)
-        .environment(\.colorScheme, .dark)
     }
 
     // MARK: Toolbar
@@ -480,7 +481,7 @@ struct TimelinePanel: View {
     }
 
     private var toolbarDivider: some View {
-        Rectangle().fill(Color.white.opacity(0.12)).frame(width: 1, height: 16).padding(.horizontal, 5)
+        Rectangle().fill(Color.primary.opacity(0.15)).frame(width: 1, height: 16).padding(.horizontal, 5)
     }
 
     /// Number keys the ease buttons act on: the selected key, or every number key at that time for a clip diamond.
@@ -535,7 +536,7 @@ struct TimelinePanel: View {
         if let t = tl.snapGuide {
             let x = tl.x(t)
             if x >= 0 && x <= trackW {
-                Rectangle().fill(Color.yellow.opacity(0.9))
+                Rectangle().fill(Self.marker)
                     .frame(width: 1)
                     .frame(maxHeight: .infinity)
                     .padding(.top, Self.toolbarHeight + 1)
@@ -660,7 +661,7 @@ struct TimelinePanel: View {
             switch row {
             case let .track(track):
                 RoundedRectangle(cornerRadius: 3)
-                    .fill(Color.white.opacity(0.025))
+                    .fill(Color.primary.opacity(0.035))
                     .padding(.vertical, 1.5)
                     .allowsHitTesting(false)
                 emptyArea(height: row.height)
@@ -668,7 +669,7 @@ struct TimelinePanel: View {
                     clip(l, track: track, layout: layout, scene: scene, height: row.height)
                 }
             case let .property(l, p):
-                Color.white.opacity(0.012).allowsHitTesting(false)
+                Color.primary.opacity(0.015).allowsHitTesting(false)
                 emptyArea(height: row.height)
                 propertyTrack(l, p, height: row.height)
             }
@@ -1018,9 +1019,9 @@ struct TimelineToolButton: View {
         Button(action: action) {
             Image(systemName: icon)
                 .font(.system(size: 12))
-                .foregroundStyle(on ? Color.accentColor : Color.white.opacity(enabled ? (hovering ? 1 : 0.78) : 0.25))
+                .foregroundStyle(on ? Color.accentColor : Color.primary.opacity(enabled ? (hovering ? 1 : 0.75) : 0.25))
                 .frame(width: 26, height: 24)
-                .background(RoundedRectangle(cornerRadius: 5).fill(Color.white.opacity(enabled && hovering ? 0.1 : on ? 0.06 : 0)))
+                .background(RoundedRectangle(cornerRadius: 5).fill(Color.primary.opacity(enabled && hovering ? 0.08 : on ? 0.06 : 0)))
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -1041,9 +1042,9 @@ struct TrackToggle: View {
         Button(action: action) {
             Image(systemName: icon)
                 .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(on ? Color.white : Color.white.opacity(hovering ? 0.85 : 0.45))
+                .foregroundStyle(Color.primary.opacity(on ? 1 : hovering ? 0.8 : 0.4))
                 .frame(width: 22, height: 20)
-                .background(RoundedRectangle(cornerRadius: 4).fill(Color.white.opacity(on ? 0.14 : hovering ? 0.08 : 0)))
+                .background(RoundedRectangle(cornerRadius: 4).fill(Color.primary.opacity(on ? 0.12 : hovering ? 0.07 : 0)))
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -1070,11 +1071,11 @@ struct TimelinePlayhead: View {
             if x >= -1 && x <= trackW + 1 {
                 ZStack(alignment: .top) {
                     // The line lets clicks through, so keyframes under the playhead stay editable.
-                    Rectangle().fill(Color.white).frame(width: 1.5)
-                        .shadow(color: .black.opacity(0.5), radius: 1)
+                    Rectangle().fill(Color.primary).frame(width: 1.5)
+                        .shadow(color: .black.opacity(0.3), radius: 1)
                         .allowsHitTesting(false)
                     PlayheadHandle()
-                        .fill(Color.white)
+                        .fill(Color.primary)
                         .frame(width: 11, height: 16)
                         .shadow(color: .black.opacity(0.4), radius: 1.5, y: 0.5)
                         .padding(.horizontal, 7)
@@ -1175,7 +1176,7 @@ struct TimelineBar: View {
             .padding(.trailing, 10)
             .padding(.top, 4)
             .frame(width: w, alignment: .leading)
-            shape.strokeBorder(selected ? Color.white : Color.white.opacity(0.1), lineWidth: selected ? 2 : 1)
+            shape.strokeBorder(selected ? Color.primary : Color.white.opacity(0.1), lineWidth: selected ? 2 : 1)
         }
         .clipShape(shape)
     }
@@ -1314,7 +1315,7 @@ final class TimelineThumbs: @unchecked Sendable {
 }
 
 struct TrimHandle: View {
-    /// Selected clip: a white grip bar on the edge, always visible.
+    /// Selected clip: a grip bar on the edge (white on dark, near black on light), always visible.
     var shown = false
     let onDrag: (Double, Bool) -> Void
     @State private var hovering = false
@@ -1322,9 +1323,9 @@ struct TrimHandle: View {
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 2)
-                .fill(shown ? Color.white : Color.white.opacity(hovering ? 0.35 : 0.0001))
+                .fill(shown ? Color.primary : Color.primary.opacity(hovering ? 0.35 : 0.0001))
             if shown {
-                Capsule().fill(Color.black.opacity(0.45)).frame(width: 1.5).padding(.vertical, 10)
+                Capsule().fill(TimelinePanel.background.opacity(0.7)).frame(width: 1.5).padding(.vertical, 10)
             }
         }
             .frame(width: 7)
@@ -1359,7 +1360,7 @@ struct KeyDiamond: View {
         let size: CGFloat = onClip ? (hold ? 7 : 10) : (hold ? 8 : 11)
         let shape = KeyShape(square: hold)
         // Accent with a white edge when on the playhead (or selected), like the filled diamond in the inspector.
-        shape.fill(selected ? Color.accentColor : onClip ? Color.white : Color.yellow)
+        shape.fill(selected ? Color.accentColor : onClip ? Color.white : TimelinePanel.marker)
             .overlay(shape.stroke(Color.white, lineWidth: selected ? 1.5 : 0))
             .frame(width: size, height: size)
             .scaleEffect(selected ? 1.25 : 1)
@@ -1502,10 +1503,10 @@ struct TimeRuler: View {
                 let isMajor = i % divs == 0
                 let h: CGFloat = isMajor ? 7 : 3
                 ctx.fill(Path(CGRect(x: x, y: size.height - h, width: 1, height: h)),
-                         with: .color(.white.opacity(isMajor ? 0.45 : 0.22)))
+                         with: .color(.primary.opacity(isMajor ? 0.45 : 0.22)))
                 if isMajor {
                     ctx.draw(Text(Self.label(t, fps: fps)).font(.system(size: 9).monospacedDigit())
-                                .foregroundStyle(.white.opacity(0.55)),
+                                .foregroundStyle(.secondary),
                              at: CGPoint(x: x + 3, y: 8), anchor: .leading)
                 }
                 i += 1
@@ -1514,7 +1515,7 @@ struct TimeRuler: View {
             let endX = duration * pps - scrollX
             if endX < size.width {
                 ctx.fill(Path(CGRect(x: endX, y: 0, width: size.width - endX, height: size.height)),
-                         with: .color(.black.opacity(0.3)))
+                         with: .color(.primary.opacity(0.08)))
             }
         }
         // RAM preview cache, along the top edge (its own view, so filling doesn't redraw the ticks).
@@ -1546,7 +1547,7 @@ struct HScrollBar: View {
                 let maxScroll = content - tl.trackWidth
                 let thumbX = (w - thumbW) * tl.scrollX / maxScroll
                 Capsule()
-                    .fill(Color.white.opacity(0.3))
+                    .fill(Color.secondary.opacity(0.45))
                     .frame(width: thumbW, height: 6)
                     .offset(x: thumbX, y: 2)
                     .gesture(DragGesture(minimumDistance: 0)
@@ -1576,5 +1577,12 @@ struct PlayheadHandle: Shape {
         p.addQuadCurve(to: CGPoint(x: r.minX + 2, y: r.minY), control: CGPoint(x: r.minX, y: r.minY))
         p.closeSubpath()
         return p
+    }
+}
+
+extension Color {
+    /// A color that follows the view's light or dark appearance.
+    static func adaptive(light: NSColor, dark: NSColor) -> Color {
+        Color(nsColor: NSColor(name: nil) { $0.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? dark : light })
     }
 }
