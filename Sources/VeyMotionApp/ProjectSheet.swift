@@ -610,11 +610,13 @@ private struct HeroButtonStyle: ButtonStyle {
 }
 
 /// The account at the foot of the sidebar: the plan, opening the Account panel.
+/// Reads the store in `body` (main actor) rather than as a stored default: on the macOS 14 SDK `View` is not
+/// main-actor isolated, so a default value or a `@MainActor` struct would not compile from nonisolated callers.
 private struct PlanRow: View {
-    @Bindable var license = LicenseStore.shared
     @State private var showPanel = false
 
     var body: some View {
+        let license = LicenseStore.shared
         Button { if license.info == nil { license.presentUpgrade() } else { showPanel.toggle() } } label: {
             HStack(spacing: 10) {
                 Image(systemName: "person.crop.circle.fill")
