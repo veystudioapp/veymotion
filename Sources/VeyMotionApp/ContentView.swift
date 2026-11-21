@@ -71,13 +71,18 @@ struct ContentView: View {
         // Every way of toggling it (toolbar, ⌃⌘S, the menus, the composer's layer chip) animates the same.
         .animation(.easeInOut(duration: 0.25), value: showSidebar)
         .toolbar { editorToolbar }
+        // The chat column paints the window background up under the toolbar (`opaqueColumn`); the same color over
+        // the canvas keeps the toolbar one strip instead of a gray part butting into a lighter one.
+        .toolbarBackground(Color(nsColor: .windowBackgroundColor), for: .windowToolbar)
+        .toolbarBackground(.visible, for: .windowToolbar)
         .onChange(of: store.showProjects) { _, shown in if shown { presentation.exit() } }
         // On the root: a full-height column with its own part of the toolbar, so the editor's items stay over the
         // canvas and only Versions / New conversation sit over the chat.
         .inspector(isPresented: $showChat) {
             ChatPanel()
                 .opaqueColumn()
-                .toolbar { ChatToolbar() }
+                // Only while shown: built with an older SDK, a hidden inspector leaves its items at the window edge.
+                .toolbar { if showChat { ChatToolbar() } }
                 .inspectorColumnWidth(min: 290, ideal: 340, max: 560)
         }
         .navigationTitle(store.project?.lastPathComponent ?? store.fileURL?.deletingPathExtension().lastPathComponent ?? "Untitled")
