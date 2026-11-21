@@ -19,4 +19,9 @@ ln -s /Applications "$STAGE/Applications"
 rm -f "$DMG"
 hdiutil create -volname "Vey Motion" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
 
+# With a Developer ID (SIGN_IDENTITY, as for bundle.sh) the disk image is signed too, so it can be notarized.
+if [ -n "${SIGN_IDENTITY:-}" ] && [ "$SIGN_IDENTITY" != "-" ]; then
+  codesign --force --timestamp --sign "$SIGN_IDENTITY" "$DMG"
+fi
+
 echo "Built $DMG"

@@ -27,8 +27,16 @@ version is downloaded in the background, verified, and installed when the app qu
 app menu. Only a bundled app in a folder you can write to (e.g. `/Applications`) replaces itself; `swift run` builds and
 copies running from a disk image just offer the download.
 
-To publish a version: bump `AppVersion.marketing`, commit, then `bash scripts/release.sh [notes.md]` (needs `gh`). It
-uploads `VeyMotion-<version>-mac.zip` (what the updater installs) and a DMG to the GitHub release `v<version>`. The
+To publish a version: bump `AppVersion.marketing`, commit, then `git tag v<version> && git push --tags`.
+`.github/workflows/release.yml` runs `scripts/release.sh` on a macOS runner: a universal (arm64 + x86_64) app signed
+with the team's Developer ID and hardened runtime, the app and the DMG notarized and stapled (`scripts/notarize.sh`).
+Running the workflow by hand builds the same files as artifacts without publishing. It signs the way the Vey repo
+does (same team, same certificate): repository secrets `MAC_CSC_LINK` (base64 of the Developer ID Application
+`.p12`), `MAC_CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`, plus the repository
+variable `BASE_API_URL`; a tag fails if any is missing. Builds signed this way only accept updates signed by the
+same team. By hand on a Mac with the certificate in the keychain:
+`SIGN_IDENTITY="Developer ID Application" NOTARY_PROFILE=vey-notary bash scripts/release.sh [notes.md]` (needs `gh`;
+the profile is stored once with `xcrun notarytool store-credentials`). Either way it uploads `VeyMotion-<version>-mac.zip` (what the updater installs) and a DMG to the GitHub release `v<version>`. The
 server reads releases from `NITRO_UPDATES_REPO=owner/name`; for a private repo also set `NITRO_UPDATES_GITHUB_TOKEN`
 (read access), and downloads go through `/api/app/download/:id`.
 

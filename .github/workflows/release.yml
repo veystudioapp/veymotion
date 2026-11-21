@@ -1,0 +1,102 @@
+name: Release
+
+# A release is a tag and nothing more: bump AppVersion.marketing, commit, then
+# `git tag v0.2.0 && git push --tags`. Running it by hand (workflow_dispatch)
+# builds, signs and notarizes the same files and leaves them as run artifacts
+# without publishing, which is how a packaging change is found broken before a
+# tag carries it. Signing follows the Vey repo (same team, same secret names).
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    env:
+      PUBLISHING: ${{ startsWith(github.ref, 'refs/tags/v') && github.repository == 'veystudioapp/veymotion' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The build number is the commit count (scripts/bundle.sh).
+          fetch-depth: 0
+
+      # The Developer ID goes into a keychain of our own (CSC_LINK-style
+      # throwaway keychains failed at set-key-partition-list in Vey's runs).
+      # Without the secret the job builds ad-hoc, so a fork can still run it,
+      # but a tag on this repository fails instead: signed but not notarized,
+      # or not signed at all, is "damaged" to Gatekeeper.
+      - name: Import the Developer ID certificate
+        env:
+          MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          BASE_API_URL: ${{ vars.BASE_API_URL }}
+        run: |
+          if [ "$PUBLISHING" = "true" ]; then
+            for name in MAC_CSC_LINK MAC_CSC_KEY_PASSWORD APPLE_ID \
+              APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+              if [ -z "${!name}" ]; then
+                echo "::error::secret $name is not set on $GITHUB_REPOSITORY — a release would ship unsigned or unnotarized"
+                missing=1
+              fi
+            done
+            # Without it the app has no server: no updates, no Pro, no stock video.
+            if [ -z "$BASE_API_URL" ]; then
+              echo "::error::repository variable BASE_API_URL is not set"
+              missing=1
+            fi
+            [ -z "${missing:-}" ] || exit 1
+          fi
+          if [ -z "$MAC_CSC_LINK" ]; then
+            echo "ALLOW_ADHOC=1" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password=$(openssl rand -hex 24)
+          echo "$MAC_CSC_LINK" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" \
+            -P "$MAC_CSC_KEY_PASSWORD" -f pkcs12 -A -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$password" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain" \
+            $(security list-keychains -d user | tr -d '"')
+          rm "$RUNNER_TEMP/cert.p12"
+          security find-identity -v -p codesigning "$keychain"
+          # The certificate's SHA-1: unambiguous even if the runner has others.
+          identity=$(security find-identity -v -p codesigning "$keychain" \
+            | awk '/Developer ID Application/ { print $2; exit }')
+          [ -n "$identity" ] || { echo "::error::no Developer ID Application identity in MAC_CSC_LINK"; exit 1; }
+          echo "SIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
+
+      - name: Build, sign, notarize and publish
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          BASE_API_URL: ${{ vars.BASE_API_URL }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          swift --version
+          PUBLISH=$([ "$PUBLISHING" = "true" ] && echo 1 || echo 0) bash scripts/release.sh
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: veymotion-mac
+          path: |
+            dist/*.zip
+            dist/*.dmg
+          if-no-files-found: warn
+          retention-days: 14

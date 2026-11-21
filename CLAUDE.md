@@ -9,7 +9,9 @@ VeyMotion is a native macOS (14+) motion-graphics editor in SwiftUI, built with 
 ```bash
 swift build                      # builds all targets, including the vmotion CLI
 swift run VeyMotion              # run the app (run `swift build` first: the in-app chat needs vmotion next to the app binary)
-bash scripts/bundle.sh           # release build -> "dist/Vey Motion.app" (ad-hoc signed) + dist/vmotion
+bash scripts/bundle.sh           # release build -> "dist/Vey Motion.app" + dist/vmotion (ad-hoc signed unless
+                                 # SIGN_IDENTITY; ARCHS="arm64 x86_64" for universal). Releases: push a v<version> tag;
+                                 # .github/workflows/release.yml signs + notarizes (Vey's secrets) via release.sh
 ```
 
 Tests (`swift test`, swift-testing, `Tests/VeyMotionTests`) cover scene Codable round trips, scene ops, canvas picking and moving, the wipe-transition complement, particle determinism, rendering (pixels of blur/opacity/motion blur/group composites) and the MCP tool round trip through `FileSceneHost`; `Pixels` in `Support.swift` reads a rendered frame. Inside the Claude Code sandbox `swift test` cannot run either: compile the test files with `swiftc` against the per-target dylibs (built with `-enable-testing`), `-F …/CommandLineTools/Library/Developer/Frameworks -plugin-path …/usr/lib/swift/host/plugins/testing`, plus a `@main` that awaits `Testing.__swiftPMEntryPoint()`. No linter is configured. To check Core/MCP changes without the GUI, use the CLI against a scene file:
@@ -327,7 +329,8 @@ Easy Ease F9 / ⇧F9 / ⌘⇧F9).
 - Version and updates: `AppVersion.marketing` (Core) is the only place the version is written; `bundle.sh` and
   `release.sh` read it with sed. `Updater` (app) polls `AppRelease.latest()` (`/api/app/latest`, served from GitHub
   Releases by `server/server/utils/releases.ts`), stages the zip under Application Support/VeyMotion/updates
-  (checks bundle id, version, `codesign --verify`, SHA-256 from the asset digest), and `installOnQuit` (called from
+  (checks bundle id, version, `codesign --verify` — pinned to the running app's own Team ID when it has one
+(`ownTeamIdentifier`) — and SHA-256 from the asset digest), and `installOnQuit` (called from
   `applicationWillTerminate`, after `SceneStore.shutdown`) starts a detached `/bin/sh` that waits for the pid, swaps
   the bundle and optionally reopens it. `installBlockedReason` covers `swift run`, App Translocation, disk images and
   unwritable folders.

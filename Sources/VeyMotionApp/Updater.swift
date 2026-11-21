@@ -1,6 +1,7 @@
 import AppKit
 import CryptoKit
 import Observation
+import Security
 import VeyMotionCore
 
 /// Keeps the app up to date from the releases the VeyMotion server lists (`GET /api/app/latest`).
@@ -179,8 +180,31 @@ final class Updater {
             throw UpdateError("The download is version \(version), not \(r.version).")
         }
         try run("/usr/bin/codesign", ["--verify", "--deep", "--strict", app.path], "The update's signature is invalid")
+        // A Developer ID build only accepts an update signed by the same team: anyone can make a valid ad-hoc
+        // signature, and the checksum comes from the same release as the zip. Ad-hoc builds have no team to pin.
+        if let team = ownTeamIdentifier {
+            try run("/usr/bin/codesign",
+                    ["--verify", "--deep", "--strict",
+                     "-R", "=anchor apple generic and certificate leaf[subject.OU] = \"\(team)\"", app.path],
+                    "The update is not signed by the developer of this app")
+        }
         return app
     }
+
+    /// The Team ID this running app is signed with (Developer ID); nil for ad-hoc and unsigned builds.
+    nonisolated static let ownTeamIdentifier: String? = {
+        var code: SecCode?
+        guard SecCodeCopySelf([], &code) == errSecSuccess, let code else { return nil }
+        var staticCode: SecStaticCode?
+        guard SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode else { return nil }
+        var info: CFDictionary?
+        guard SecCodeCopySigningInformation(staticCode, SecCSFlags(rawValue: kSecCSSigningInformation), &info)
+                == errSecSuccess,
+              let dict = info as? [String: Any],
+              let team = dict[kSecCodeInfoTeamIdentifier as String] as? String, !team.isEmpty
+        else { return nil }
+        return team
+    }()
 
     // MARK: - Installing
 
